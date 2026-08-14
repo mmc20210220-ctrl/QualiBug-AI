@@ -485,7 +485,14 @@ def ensure_canonical_behavior_semantics(behavior: dict[str, Any]) -> dict[str, A
             unresolved.add("BEHAVIOR_CONDITION_COMBINATOR_UNRESOLVED")
     if text(clause.get("status")) != "CONFIRMED":
         unresolved.add("BEHAVIOR_OPERATION_CLAUSE_UNRESOLVED")
-    if not outcome_contracts_complete(behavior):
+    # Mandatory structured outcomes are a formal-oracle requirement.  A candidate-only
+    # behavior (decision-matrix row awaiting corroboration) carries raw text effects by
+    # design and must stay CANDIDATE, not be downgraded to INCOMPLETE for a formal gate
+    # it is not yet eligible to enter.
+    if (
+        text(behavior.get("source_kind")) == "ACCEPTED_BUSINESS_FACT"
+        and not outcome_contracts_complete(behavior)
+    ):
         unresolved.add("BEHAVIOR_MANDATORY_OUTCOME_UNRESOLVED")
     behavior["unresolved_semantics"] = sorted(unresolved)
 

@@ -409,7 +409,7 @@ def merge_document_irs(
         "filename_is_business_context": False,
         "adapter_merge_receipt": merge_receipt,
     }
-    return {
+    result = {
         "schema": text(base_ir.get("schema")),
         "format": text(parsing_plan.get("detected_family")) or text(base_ir.get("format")) or "unknown",
         "filename": source.filename,
@@ -426,6 +426,16 @@ def merge_document_irs(
         "adapter_receipts": adapter_receipts,
         "adapter_merge_receipt": merge_receipt,
     }
+    # The primary adapter's structural metadata is part of the Document IR contract.
+    # The merge recomputes block collections, but the exact artifact structure and the
+    # schema projection receipt (used for $ref resolution downstream) must survive.
+    if base_ir.get("artifact_structure"):
+        result["artifact_structure"] = base_ir["artifact_structure"]
+    if base_ir.get("openapi_schema_projection_receipt"):
+        result["openapi_schema_projection_receipt"] = base_ir[
+            "openapi_schema_projection_receipt"
+        ]
+    return result
 
 
 __all__ = ["merge_document_irs"]

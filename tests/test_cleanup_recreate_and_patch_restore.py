@@ -96,6 +96,7 @@ def test_patch_prefers_restore_before_snapshot_over_delete_compensator() -> None
             "template": "schema_constraint",
             "operation_ref": "op-patch",
             "actor_ref": "actor-admin",
+            "source_intent": "price must be non-negative",
         },
         "required_actors": ["actor-admin"],
         "required_operations": ["op-patch"],

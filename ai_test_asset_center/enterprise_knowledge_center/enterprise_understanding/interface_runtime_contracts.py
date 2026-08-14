@@ -366,10 +366,20 @@ def enrich_openapi_runtime_contracts(
 
 
 def install_interface_runtime_contract_parser() -> None:
-    """Install an idempotent additive wrapper on the existing OpenAPI parser."""
-    from .. import _parsing
+    """Install an idempotent additive wrapper on the existing OpenAPI parser.
 
-    current = _parsing._openapi_operations
+    ``_parse_source`` lives in ``_parsing_mechanics`` and resolves
+    ``_openapi_operations`` from that module's globals, so the add-on must patch
+    the mechanics module (``_core``) rather than the ``_parsing`` facade — a
+    facade-only patch is a silent no-op after the mechanics split. Importing
+    ``_parsing`` first keeps its security-stamped facade installed into the
+    mechanics globals so the wrapper enriches operations that already carry
+    security provenance.
+    """
+    from .. import _parsing  # noqa: F401  (installs security facade into mechanics)
+    from .. import _parsing_mechanics as _core
+
+    current = _core._openapi_operations
     if getattr(current, "_qualibug_runtime_contract_metadata", False):
         return
     original = current
@@ -382,7 +392,7 @@ def install_interface_runtime_contract_parser() -> None:
 
     wrapped._qualibug_runtime_contract_metadata = True  # type: ignore[attr-defined]
     wrapped._qualibug_original_openapi_operations = original  # type: ignore[attr-defined]
-    _parsing._openapi_operations = wrapped
+    _core._openapi_operations = wrapped
 
 
 __all__ = [

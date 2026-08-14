@@ -178,7 +178,7 @@ def test_write_operation_is_not_admitted_as_first_latency_increment() -> None:
 
     assert receipt["bound_invariant_count"] == 0
     assert receipt["reason_counts"] == {
-        "FORMAL_PERFORMANCE_WRITE_OPERATION_NOT_ALLOWED": 1
+        "FORMAL_PERFORMANCE_GET_OR_HEAD_REQUIRED": 1
     }
     assert not any(row.get("performance_contract_id") for row in bound["invariants"])
 
@@ -291,10 +291,9 @@ def test_complete_p95_series_is_observed_and_redacted() -> None:
     assert evidence["observed_percentile_ms"] == 200
     assert evidence["observed_error_rate"] == 0
     assert evidence["coverage_complete"] is True
-    assert evidence["single_attempt_samples_only"] is True
-    assert evidence["measurement_semantics"] == (
-        "sequential_read_only_single_attempt_transport_duration_samples"
-    )
+    assert evidence["retried_sample_count"] == 0
+    assert evidence["missing_attempt_count"] == 0
+    assert evidence["measurement_semantics"] == "sequential_get_or_head_single_attempt_samples"
     serialized = json.dumps(receipt, ensure_ascii=False, sort_keys=True)
     assert "must-not-enter-performance-receipt" not in serialized
     assert "Bearer secret" not in serialized
@@ -357,8 +356,8 @@ def test_retried_transport_duration_is_not_trusted_as_service_latency() -> None:
     )
 
     assert receipt["status"] == "INDETERMINATE"
-    assert receipt["reason_code"] == "PERFORMANCE_SAMPLE_DURATION_UNTRUSTWORTHY"
+    assert receipt["reason_code"] == "PERFORMANCE_RETRIED_TRANSPORT_UNTRUSTWORTHY"
     evidence = receipt["evidence"][performance.EVIDENCE_KEY]
-    assert evidence["retry_detected_count"] == 1
-    assert evidence["missing_attempt_evidence_count"] == 0
-    assert evidence["coverage_complete"] is False
+    assert evidence["retried_sample_count"] == 1
+    assert evidence["missing_attempt_count"] == 0
+    assert "coverage_complete" not in evidence

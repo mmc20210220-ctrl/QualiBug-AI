@@ -7,6 +7,7 @@ TOPBAR = ROOT / "frontend" / "src" / "components" / "Topbar.tsx"
 SETTINGS = ROOT / "frontend" / "src" / "pages" / "Settings.tsx"
 MATERIALS = ROOT / "frontend" / "src" / "pages" / "Materials.tsx"
 RUN_CENTER = ROOT / "frontend" / "src" / "pages" / "EnterpriseCampaigns.tsx"
+RUN_PREFLIGHT = ROOT / "frontend" / "src" / "lib" / "run-preflight-presentation.ts"
 FINDINGS = ROOT / "frontend" / "src" / "pages" / "Findings.tsx"
 DASHBOARD = ROOT / "frontend" / "src" / "pages" / "Dashboard.tsx"
 EVIDENCE = ROOT / "frontend" / "src" / "pages" / "EvidenceChain.tsx"
@@ -18,12 +19,13 @@ def test_frontend_navigation_uses_run_center_as_single_formal_execution_entry() 
     sidebar = SIDEBAR.read_text(encoding="utf-8")
     topbar = TOPBAR.read_text(encoding="utf-8")
     run_center = RUN_CENTER.read_text(encoding="utf-8")
+    run_preflight = RUN_PREFLIGHT.read_text(encoding="utf-8")
 
     assert "label: '运行中心'" in sidebar
     assert "navigateToProjectPath('/campaigns', project)" in topbar
     assert "进入运行中心" in topbar
     assert "usePageTitle('运行中心')" in run_center
-    assert "执行标准扫描" in run_center
+    assert "执行标准扫描" in run_preflight
     assert "受控运行结果" in run_center
     assert "emitScanCompleted(project)" in run_center
 
@@ -37,48 +39,62 @@ def test_frontend_settings_and_materials_surface_readiness_and_parse_summary() -
     assert "鉴权材料" in settings
     assert "数据库校验" in settings
     assert "解析结果" in materials
-    assert "可执行资料" in materials
-    assert "核心资料覆盖" in materials
+    assert "资料类型" in materials
+    assert "资料来源结构" in materials
     assert "正式客户前端：`frontend/` React 控制台" in readme
 
 
-def _dashboard_surface() -> str:
-    """Dashboard.tsx plus the modules its surfaces were extracted into.
+def _page_surface(page: Path, module_dir: str) -> str:
+    """A page plus the sibling component modules its surfaces were extracted into.
 
-    Same rationale as test_customer_delivery_gate_contract: the regression
-    closure cards live in components/dashboard/*.tsx after the extraction
-    refactor, so the surface is the page and its modules; the test tracks
-    the capabilities rather than the file they currently live in.
+    The extraction refactor moved the regression/verification closure cards,
+    run-center decisions and finding verification panels out of the page files
+    into components/<module_dir>/*.tsx. The customer-facing workflow was later
+    renamed from "回归" to "验证" (verification-only), so the test tracks the
+    capability copy as it lives today rather than the file it lives in or the
+    pre-rename wording.
     """
-    parts = [DASHBOARD]
-    components = DASHBOARD.parent.parent / "components" / "dashboard"
+    parts = [page]
+    components = page.parent.parent / "components" / module_dir
     if components.is_dir():
         parts.extend(sorted(components.glob("*.tsx")))
     return "\n".join(p.read_text(encoding="utf-8") for p in parts if p.is_file())
 
 
+def _dashboard_surface() -> str:
+    return _page_surface(DASHBOARD, "dashboard")
+
+
+def _findings_surface() -> str:
+    return _page_surface(FINDINGS, "findings")
+
+
+def _evidence_surface() -> str:
+    return _page_surface(EVIDENCE, "findings")
+
+
 def test_frontend_dashboard_and_findings_surface_regression_closure() -> None:
-    findings = FINDINGS.read_text(encoding="utf-8")
+    findings = _findings_surface()
     dashboard = _dashboard_surface()
-    evidence = EVIDENCE.read_text(encoding="utf-8")
+    evidence = _evidence_surface()
     client = CLIENT.read_text(encoding="utf-8")
 
-    assert "生命周期" in findings
-    assert "待执行回归" in findings
-    assert "回归验证" in findings
-    assert "回归历史" in findings
-    assert "执行 Release 回归" in findings
+    assert "真实验证历史" in findings
+    assert "等待重新验证" in findings
+    assert "验证闭环" in findings
+    assert "验证历史" in findings
+    assert "修复后重新验证" in findings
     assert "回归闭环" in dashboard
-    assert "回归趋势" in dashboard
+    assert "验证趋势" in dashboard
     assert "发布 / 交付建议" in dashboard
     assert "真实验真摘要" in dashboard
     assert "最小双轮验真" in dashboard
     assert "历史轮次" in dashboard
-    assert "已覆盖缺陷" in dashboard
-    assert "最近回归" in dashboard
-    assert "执行 Smoke 回归" in dashboard
-    assert "执行 Release 回归" in dashboard
-    assert "回归闭环" in evidence
-    assert "最近轨迹" in evidence
+    assert "已纳入问题" in dashboard
+    assert "最近验证" in dashboard
+    assert "执行 Smoke 验证" in dashboard
+    assert "执行 Release 验证" in dashboard
+    assert "QualiBug 验证闭环" in evidence
+    assert "真实验证历史" in evidence
     assert "export async function runRegression" in client
     assert "/regression/run" in client

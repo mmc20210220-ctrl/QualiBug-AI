@@ -428,9 +428,7 @@ def _iter_inline_schema_roots(payload: dict[str, Any]) -> Iterable[tuple[str, st
             if method_lower not in _HTTP_METHODS or not isinstance(raw_operation, dict):
                 continue
             operation = dict(raw_operation)
-            for index, raw_parameter in enumerate(
-                [*_list(path_item.get("parameters")), *_list(operation.get("parameters"))]
-            ):
+            for index, raw_parameter in enumerate(_list(operation.get("parameters"))):
                 parameter = _dict(raw_parameter)
                 schema = _dict(parameter.get("schema"))
                 if schema:
@@ -545,7 +543,7 @@ def apply_openapi_schema_projection(
             dict(raw_schema),
             pointer=_pointer("components", "schemas", schema_name),
             label=f"schema {schema_name}",
-            property_path=(str(schema_name),),
+            property_path=(),
             root=True,
         )
         if state.truncated:

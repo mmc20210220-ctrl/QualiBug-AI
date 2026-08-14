@@ -47,7 +47,10 @@ def install_ui_upload_scenario_source_authority() -> None:
             row
             for row in payload.get("sources", [])
             if isinstance(row, dict)
-            and _text(row.get("source_id"), limit=160) == identity
+            and (
+                _text(row.get("source_id"), limit=160) == identity
+                or _text(row.get("canonical_source_id"), limit=160) == identity
+            )
         ]
         if len(matches) != 1:
             raise KeyError("enterprise_source_not_found")

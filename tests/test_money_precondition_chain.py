@@ -144,6 +144,25 @@ def _base_ir() -> dict[str, Any]:
                 "source_refs": [{"kind": "document", "locator": "prd"}],
             },
         ],
+        # Explicit source-backed body-reference relations. A field name like
+        # ``orderId`` is not subject authority (principle: no structural name
+        # inference); the source must declare the FK target. These rows are the
+        # same shape the database_body_reference_projection emits from an
+        # operator-approved API/DB mapping or an exact database FK.
+        "body_reference_relations": [
+            {
+                "operation_ref": "op_pay",
+                "body_path": "orderId",
+                "target_entity_ref": "ent_order",
+                "status": "RESOLVED",
+                "source_refs": [
+                    {
+                        "kind": "database_foreign_key",
+                        "locator": "payments.order_id -> orders.id",
+                    }
+                ],
+            },
+        ],
         "invariants": [],
     }
 
@@ -468,6 +487,27 @@ def test_different_industry_names_bind_identically() -> None:
             "to_ref": "op_create_shipment",
             "status": "accepted",
             "source_refs": [{"kind": "document", "locator": "prd"}],
+        },
+        {
+            "relation_type": "permits",
+            "actor_ref": "actor_buyer",
+            "operation_ref": "op_create_shipment",
+            "status": "accepted",
+            "source_refs": [{"kind": "document", "locator": "prd"}],
+        },
+    ]
+    ir["body_reference_relations"] = [
+        {
+            "operation_ref": "op_confirm_shipment",
+            "body_path": "shipmentId",
+            "target_entity_ref": "ent_shipment",
+            "status": "RESOLVED",
+            "source_refs": [
+                {
+                    "kind": "database_foreign_key",
+                    "locator": "shipment_confirm.shipment_id -> shipments.id",
+                }
+            ],
         },
     ]
     result = plan_money_family_precondition(

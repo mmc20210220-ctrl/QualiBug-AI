@@ -104,9 +104,12 @@ from .scan_result_normalizer import (
 # 分片清单在索引文件中的标记键（顶层键，天然不会与产品键冲突）。
 SHARD_MARKER = "_scan_result_shards"
 
-# Targets this PROCESS has fully written (write-once invariant). A fresh
-# process — a new run — overwrites the previous run's artifact freely.
-_WRITTEN_SCAN_RESULTS: set[str] = set()
+# Targets this PROCESS has fully written, keyed by target path -> last written
+# run identity (write-once invariant). A full re-write of the SAME run (the
+# legacy post-hook double-write) is refused; a NEW run in the same process
+# (a fresh scan_id — library callers and long-running servers legitimately
+# re-scan the same project) overwrites the previous run's artifact freely.
+_WRITTEN_SCAN_RESULTS: dict[str, str] = {}
 SCAN_RESULT_SHARD_SCHEMA = "qualibug.scan-result-shard.v1"
 SHARD_DIR_NAME = "scan_result.parts"
 
@@ -427,13 +430,16 @@ def write_scan_result(
 
         return write_json_redacted(target, result, indent=indent, post_redaction_validator=post_redaction_validator)
     # Write-once invariant (in-process): a second full write to the SAME
-    # target within one process re-copies the multi-GB tree (second deepcopy
+    # target for the SAME run re-copies the multi-GB tree (second deepcopy
     # peak) and, if it dies mid-shard, destroys the primary run's complete
     # shard set (run25c: 12 shards reduced to 3 by a post-hook rewrite).
     # Small post-write updates must go through attach_skeleton_keys, never a
-    # full rewrite. The guard is process-scoped — a fresh process (a new run)
-    # legitimately overwrites the previous run's artifact.
-    if str(target) in _WRITTEN_SCAN_RESULTS:
+    # full rewrite. The guard keys on the run identity (scan_id): a fresh run
+    # in the same process (library re-scan of the same project) legitimately
+    # overwrites the previous run's artifact.
+    _run_id = str(result.get("scan_id") or result.get("run_id") or "")
+    _prev_run = _WRITTEN_SCAN_RESULTS.get(str(target))
+    if _prev_run is not None and (_run_id == "" or _prev_run == _run_id):
         raise ArtifactSecretLeakError(
             "scan_result already_sharded_refuse_rewrite: "
             "a sharded scan_result must not be rewritten wholesale; use "
@@ -581,7 +587,7 @@ def write_scan_result(
     _start = _stage_marks[0][1]
     timing = {name: round(stamp - _start, 1) for name, stamp in _stage_marks[1:]}
     timing["total_seconds"] = round(time.time() - _start, 1)
-    _WRITTEN_SCAN_RESULTS.add(str(target))
+    _WRITTEN_SCAN_RESULTS[str(target)] = _run_id
     return _combine_redaction_receipt(
         skeleton_receipt,
         piece_events,

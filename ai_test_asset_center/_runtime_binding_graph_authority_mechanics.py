@@ -136,12 +136,18 @@ def _fixture_structural_collection_paths(
     )
     prefix = _core._api_prefix(target_path)
     candidates = _core.body_field_collection_paths(target, api_prefix=prefix)
-    if not candidates:
-        primary = _core.normalize_path_placeholders(
-            _core.collection_path(target_path)
-        )
-        if primary.startswith("/") and not _core.path_has_placeholders(primary):
-            candidates = [primary]
+    # The read operation's own collection is always a structural create
+    # candidate: its sibling POST create lives on the same collection, whether
+    # or not the identity field's entity stem happens to resolve to a flat
+    # collection path. Without this, a nested collection (e.g. a read at
+    # ``/api/users/addresses`` for a body FK ``address_id`` whose stem derives
+    # only ``/api/addresses``) is silently dropped and its declared create is
+    # never found. Generic and domain-neutral — no field-to-path catalog.
+    primary = _core.normalize_path_placeholders(
+        _core.collection_path(target_path)
+    )
+    if primary.startswith("/") and not _core.path_has_placeholders(primary):
+        candidates.append(primary)
     return list(
         dict.fromkeys(
             _core.normalize_path_placeholders(path).rstrip("/")
@@ -279,7 +285,7 @@ def _declared_fixture_setup(
             create,
             behavior_ir=behavior_ir,
         )
-        if not cleanup_operations or len(actor_refs) != 1:
+        if not cleanup_operations or not actor_refs:
             continue
         viable.append(
             {

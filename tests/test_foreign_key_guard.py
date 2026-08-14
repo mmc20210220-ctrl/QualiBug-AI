@@ -79,48 +79,69 @@ def test_fk_violations_safe_when_no_fk_declared() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Markdown contract: benchmark_mall POST /api/cart/items declares userId FK
+# Markdown contract: a self-contained fixture declaring FK vs. natural-key
+# fields. The real benchmark_mall API_SPEC documents request bodies as JSON
+# examples without a field table, so it cannot declare foreign-key-ness; this
+# fixture supplies the explicit field tables the parser is expected to honor,
+# keeping the test independent of any git-ignored runtime source file.
 # ---------------------------------------------------------------------------
 
+_BENCHMARK_MALL_SPEC = """\
+# API 接口文档
 
-def _benchmark_mall_ops() -> list[dict]:
-    spec = Path("platform_inputs/benchmark_mall/API_SPEC.md").read_text(encoding="utf-8")
-    return _markdown_api_operations(spec, source_id="benchmark_mall")
+### POST /api/products/admin
+
+后台创建商品。seller/admin 可用。
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| sku | string | 是 | SKU |
+| name | string | 否 | 名称 |
+| price | number | 否 | 价格 |
+
+### POST /api/cart/items
+
+| 字段 | 类型 | 必填 | 外键 | 说明 |
+|------|------|------|------|------|
+| sku | string | 是 | 否 | SKU |
+| qty | number | 是 | 否 | 数量 |
+| userId | string | 是 | 是 | 用户 |
+
+### GET /api/cart/items
+
+查询当前用户购物车。
+"""
+
+
+def _parse_benchmark_mall() -> list[dict]:
+    return _markdown_api_operations(_BENCHMARK_MALL_SPEC, source_id="benchmark_mall")
+
+
+def _find(ops: list[dict], method: str, path: str) -> dict:
+    for op in ops:
+        if op.get("method") == method and op.get("path") == path:
+            return op
+    raise AssertionError(f"operation not found: {method} {path}")
 
 
 def test_markdown_cart_items_declares_user_id_foreign_key() -> None:
-    ops = _benchmark_mall_ops()
-    cart = [
-        o for o in ops
-        if o.get("method") == "POST" and o.get("path") == "/api/cart/items"
-    ]
-    assert cart, "POST /api/cart/items not parsed"
-    props = (cart[0].get("request_schema") or {}).get("properties") or {}
+    cart = _find(_parse_benchmark_mall(), "POST", "/api/cart/items")
+    props = (cart.get("request_schema") or {}).get("properties") or {}
     assert "userId" in props, props
     assert props["userId"].get("x-foreign-key") is True
 
 
 def test_markdown_products_admin_sku_is_not_foreign_key() -> None:
-    ops = _benchmark_mall_ops()
-    admin = [
-        o for o in ops
-        if o.get("method") == "POST" and o.get("path") == "/api/products/admin"
-    ]
-    assert admin, "POST /api/products/admin not parsed"
-    props = (admin[0].get("request_schema") or {}).get("properties") or {}
+    admin = _find(_parse_benchmark_mall(), "POST", "/api/products/admin")
+    props = (admin.get("request_schema") or {}).get("properties") or {}
     # sku is required (not-null constraint) but is a natural key, not a FK.
     assert "sku" in props
     assert props["sku"].get("x-foreign-key") is not True
 
 
 def test_markdown_get_endpoint_has_no_request_schema() -> None:
-    ops = _benchmark_mall_ops()
-    get_cart = [
-        o for o in ops
-        if o.get("method") == "GET" and o.get("path") == "/api/cart/items"
-    ]
-    assert get_cart, "GET /api/cart/items not parsed"
-    assert "request_schema" not in get_cart[0]
+    get_cart = _find(_parse_benchmark_mall(), "GET", "/api/cart/items")
+    assert "request_schema" not in get_cart
 
 
 # ---------------------------------------------------------------------------

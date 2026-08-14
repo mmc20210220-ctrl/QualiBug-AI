@@ -708,6 +708,27 @@ def _declared_reads_for_paths(
                     tail = declared_path[len(prefix):].strip("/").split("/")
                     matches = bool(tail and tail[-1] in _LOOKUP_VERB_SEGMENTS)
             if not matches:
+                # Nested-resource reads: wanted=/api/addresses must match
+                # GET /api/users/addresses — a body FK whose entity collection
+                # is namespaced under a parent resource. Match on terminal
+                # resource-segment equality only, and only when the declared
+                # path is strictly nested (more segments than the wanted path)
+                # so a flat path never double-matches through this fallback.
+                # Lookup-verb tails stay excluded: their terminal segment is a
+                # verb (list/search/...), not a resource name. Generic and
+                # domain-neutral — no field→path catalog.
+                wanted_segments = [s for s in path.strip("/").split("/") if s]
+                declared_segments = [
+                    s for s in declared_path.strip("/").split("/") if s
+                ]
+                if (
+                    len(declared_segments) > len(wanted_segments)
+                    and wanted_segments
+                    and declared_segments[-1] == wanted_segments[-1]
+                    and declared_segments[-1] not in _LOOKUP_VERB_SEGMENTS
+                ):
+                    matches = True
+            if not matches:
                 continue
             resolvers.append({
                 "operation_ref": _text(operation.get("id")),

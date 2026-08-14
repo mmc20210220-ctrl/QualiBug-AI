@@ -80,7 +80,11 @@ def test_validation_protocol_declares_control_effect_requirement() -> None:
         operation_ref="op-create",
         control_actor_ref="actor-public",
         treatment_actor_ref="actor-public",
-        property_spec={"field": "name"},
+        property_spec={
+            "field": "name",
+            "validation_constraint": "required",
+            "validation_constraint_source": "request_schema",
+        },
     )
 
     assert protocol["status"] == "COMPILED"

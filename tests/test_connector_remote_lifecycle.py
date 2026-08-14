@@ -170,6 +170,7 @@ def test_second_complete_absence_can_retire_internally_without_remote_delete_cla
         deletion_policy="RETIRE_MISSING",
         authoritative_snapshot_complete=True,
         retire_after_complete_snapshots=2,
+        max_retire_ratio=1.0,
     )
 
     assert result["status"] == "COMPLETE"

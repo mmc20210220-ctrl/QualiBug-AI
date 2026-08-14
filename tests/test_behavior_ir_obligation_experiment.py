@@ -46,7 +46,6 @@ NEW_MODULES = [
     ROOT / "ai_test_asset_center" / "assertion_dsl.py",
     ROOT / "ai_test_asset_center" / "contract_oracles.py",
     ROOT / "ai_test_asset_center" / "adaptive_discovery_planner.py",
-    ROOT / "ai_test_asset_center" / "execution_adapter.py",
 ]
 
 
@@ -120,8 +119,20 @@ def test_request_body_placeholder_uses_source_declared_runtime_read_binding() ->
                 "id": "list_orders",
                 "method": "GET",
                 "path": "/api/orders",
+                "entity_refs": ["entity-order"],
             },
-        ]
+        ],
+        "entities": [{"id": "entity-order", "name": "order"}],
+        "body_reference_relations": [{
+            "operation_ref": "reserve_inventory",
+            "body_path": "orderId",
+            "target_entity_ref": "entity-order",
+            "status": "RESOLVED",
+            "source_refs": [{
+                "kind": "database_foreign_key",
+                "locator": "inventory.order_id -> orders.id",
+            }],
+        }],
     }
 
     plan = build_binding_plan(
@@ -1337,11 +1348,29 @@ def test_collection_create_observer_can_bind_identity_from_write_response() -> N
         "method": "POST",
         "path": "/api/refunds",
         "request_example": {"orderId": "order-1", "amount": 100},
+        "response_schema": {
+            "201": {
+                "content": {
+                    "application/json": {
+                        "schema": {"$ref": "#/components/schemas/Refund"},
+                    },
+                },
+            },
+        },
     }
     observer = {
         "id": "read-refund",
         "method": "GET",
         "path": "/api/refunds/{id}",
+        "response_schema": {
+            "200": {
+                "content": {
+                    "application/json": {
+                        "schema": {"$ref": "#/components/schemas/Refund"},
+                    },
+                },
+            },
+        },
     }
 
     assert declared_effect_observers(
@@ -1692,6 +1721,7 @@ def test_validation_experiment_resolves_source_permitted_actor_when_obligation_o
         "property": {
             "template": "schema_constraint",
             "operation_ref": "op-resource-write",
+            "source_intent": "quantity must be non-negative",
         },
         "required_actors": [],
         "required_operations": ["op-resource-write"],
@@ -2111,13 +2141,13 @@ def test_experiment_compiler_blocks_missing_binding_without_declared_read_resolv
 
 
 def test_experiment_compiler_uses_unique_source_declared_action_compensator() -> None:
-    request_example = {"resourceId": "<resource_id>", "units": 1}
+    request_example = {"resourceId": "<resource_id>", "quantity": 1}
     request_schema = {
         "type": "object",
-        "required": ["resourceId", "units"],
+        "required": ["resourceId", "quantity"],
         "properties": {
             "resourceId": {"type": "string"},
-            "units": {"type": "integer"},
+            "quantity": {"type": "integer"},
         },
     }
     operations = [
@@ -2154,6 +2184,7 @@ def test_experiment_compiler_uses_unique_source_declared_action_compensator() ->
             "path": "/api/resources",
             "read_write": "read",
             "source_refs": [{"source_id": "api", "locator": "GET /api/resources"}],
+            "entity_refs": ["entity-resource"],
         },
     ]
     obligation = {
@@ -2163,6 +2194,7 @@ def test_experiment_compiler_uses_unique_source_declared_action_compensator() ->
             "template": "schema_constraint",
             "operation_ref": "reserve_capacity",
             "actor_ref": "operator",
+            "source_intent": "quantity must be non-negative",
         },
         "required_actors": ["operator"],
         "required_operations": ["reserve_capacity"],
@@ -2177,6 +2209,17 @@ def test_experiment_compiler_uses_unique_source_declared_action_compensator() ->
         behavior_ir={
             "operations": operations,
             "actors": [{"id": "operator", "role": "public"}],
+            "entities": [{"id": "entity-resource", "name": "resource"}],
+            "body_reference_relations": [{
+                "operation_ref": "reserve_capacity",
+                "body_path": "resourceId",
+                "target_entity_ref": "entity-resource",
+                "status": "RESOLVED",
+                "source_refs": [{
+                    "kind": "database_foreign_key",
+                    "locator": "reservation.resource_id -> resources.id",
+                }],
+            }],
             "relations": [{
                 "id": "rel-reserve-release",
                 "kind": "compensates",
@@ -2259,6 +2302,7 @@ def test_recreate_cleanup_reuses_compensator_primary_request_body() -> None:
             "path": "/api/orders",
             "read_write": "read",
             "source_refs": [{"source_id": "api", "locator": "GET /api/orders"}],
+            "entity_refs": ["entity-order"],
         },
         {
             "id": "create_order",
@@ -2276,6 +2320,7 @@ def test_recreate_cleanup_reuses_compensator_primary_request_body() -> None:
             "template": "schema_constraint",
             "operation_ref": "release_stock",
             "actor_ref": "operator",
+            "source_intent": "qty must be non-negative",
         },
         "required_actors": ["operator"],
         "required_operations": ["release_stock"],
@@ -2294,6 +2339,17 @@ def test_recreate_cleanup_reuses_compensator_primary_request_body() -> None:
         behavior_ir={
             "operations": operations,
             "actors": [{"id": "operator", "role": "public"}],
+            "entities": [{"id": "entity-order", "name": "order"}],
+            "body_reference_relations": [{
+                "operation_ref": "release_stock",
+                "body_path": "orderId",
+                "target_entity_ref": "entity-order",
+                "status": "RESOLVED",
+                "source_refs": [{
+                    "kind": "database_foreign_key",
+                    "locator": "inventory.order_id -> orders.id",
+                }],
+            }],
             "relations": [{
                 "id": "rel-release-reserve",
                 "kind": "compensates",
@@ -3517,9 +3573,15 @@ def test_recreate_cleanup_without_buildable_body_degrades_to_residue_on_test() -
         "path": "/api/capacity/reservations/{id}",
         "read_write": "write",
     }
+    read_reservation = {
+        "id": "read_reservation",
+        "method": "GET",
+        "path": "/api/capacity/reservations/{id}",
+        "read_write": "read",
+    }
     obligation = {
         "obligation_id": "obl_recreate_body_missing",
-        "risk_family": "validation",
+        "risk_family": "idempotency",
         "property": {
             "operation_ref": "cancel_reservation",
             "actor_ref": "operator",
@@ -3537,7 +3599,7 @@ def test_recreate_cleanup_without_buildable_body_degrades_to_residue_on_test() -
     experiment = compile_experiment_for_obligation(
         obligation,
         behavior_ir={
-            "operations": [primary, recreate],
+            "operations": [primary, recreate, read_reservation],
             "actors": [{"id": "operator", "role": "public"}],
             "relations": [],
             "conflicts": [],

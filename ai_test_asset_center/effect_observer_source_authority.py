@@ -114,6 +114,20 @@ def install_effect_observer_source_authority(target: Any) -> None:
         source = _d(ops.get(source_ref))
         if not source:
             return []
+        # Fail-closed operation identity: a supplied operation id cannot be
+        # reused under a different transport path/method to gain observer
+        # authority. The authority-mechanics candidate builder enforces this
+        # when it sees the caller's operation, so this facade must apply the
+        # same boundary before resolving the id down to the source operation
+        # (otherwise the forged path is silently discarded and never checked).
+        supplied_path = _t(operation.get("path") or operation.get("raw_path"))
+        source_path = _t(source.get("path") or source.get("raw_path"))
+        if supplied_path and supplied_path != source_path:
+            return []
+        supplied_method = _t(operation.get("method")).upper()
+        source_method = _t(source.get("method")).upper()
+        if supplied_method and source_method and supplied_method != source_method:
+            return []
         priority = {
             "exact_transport_path": 0, "exact_parent_resource_path": 1,
             "request_body_placeholder_path": 2, "matching_response_resource_ref": 3,

@@ -34,6 +34,23 @@ def _http_observation(*, status: int, body: object, phase: str) -> dict:
     }
 
 
+# After the facade split, the executor / plan / runtime-support modules are
+# delegation facades whose ``_http_request`` attribute is a stale import of the
+# sandbox base function, not the binding dereferenced when a step runs. The
+# real transport call sites live in the runtime-support mechanics module (via
+# ``_run_http_step``) and the plan step-kernel core (via the response-bound raw
+# read), so monkeypatching must target those modules directly.
+_HTTP_REQUEST_TARGETS = (
+    "ai_test_asset_center._experiment_runtime_support_mechanics._http_request",
+    "ai_test_asset_center.experiment_plan_step_executor_core._http_request",
+)
+
+
+def _patch_http_request(monkeypatch: pytest.MonkeyPatch, responder) -> None:
+    for target in _HTTP_REQUEST_TARGETS:
+        monkeypatch.setattr(target, responder)
+
+
 @pytest.mark.parametrize("body", [{}, []])
 def test_empty_success_payload_is_indeterminate(body: object) -> None:
     receipt = observe_authorization_comparison(
@@ -339,22 +356,7 @@ def test_executor_does_not_emit_finding_for_empty_2xx_pair(
         {"status": 200, "body": {}, "headers": {"content-type": "application/json"}},
         {"status": 200, "body": {}, "headers": {"content-type": "application/json"}},
     ])
-    monkeypatch.setattr(
-        "ai_test_asset_center.experiment_executor._http_request",
-        lambda *_args, **_kwargs: next(responses),
-    )
-    monkeypatch.setattr(
-        "ai_test_asset_center.experiment_plan_executor._http_request",
-        lambda *_args, **_kwargs: next(responses),
-    )
-    monkeypatch.setattr(
-        "ai_test_asset_center.experiment_runtime_support._http_request",
-        lambda *_args, **_kwargs: next(responses),
-    )
-    monkeypatch.setattr(
-        "ai_test_asset_center.experiment_runtime_credentials._http_request",
-        lambda *_args, **_kwargs: next(responses),
-    )
+    _patch_http_request(monkeypatch, lambda *_args, **_kwargs: next(responses))
 
     experiment = _authorization_experiment()
     # Owner-partitioned resource: an empty 2xx pair cannot prove the viewer
@@ -410,22 +412,7 @@ def test_executor_emits_role_permission_finding_for_empty_2xx_pair(
         {"status": 200, "body": {}, "headers": {"content-type": "application/json"}},
         {"status": 200, "body": {}, "headers": {"content-type": "application/json"}},
     ])
-    monkeypatch.setattr(
-        "ai_test_asset_center.experiment_executor._http_request",
-        lambda *_args, **_kwargs: next(responses),
-    )
-    monkeypatch.setattr(
-        "ai_test_asset_center.experiment_plan_executor._http_request",
-        lambda *_args, **_kwargs: next(responses),
-    )
-    monkeypatch.setattr(
-        "ai_test_asset_center.experiment_runtime_support._http_request",
-        lambda *_args, **_kwargs: next(responses),
-    )
-    monkeypatch.setattr(
-        "ai_test_asset_center.experiment_runtime_credentials._http_request",
-        lambda *_args, **_kwargs: next(responses),
-    )
+    _patch_http_request(monkeypatch, lambda *_args, **_kwargs: next(responses))
 
     experiment = _authorization_experiment()
     experiment["assertions"][0]["property"] = {
@@ -600,6 +587,12 @@ def test_executor_blocks_response_only_write_observer_before_create_transport(
                 "path": "/resources",
                 "read_write": "write",
                 "request_example": {"name": "valid"},
+                # The response-bound readback authority only proves a
+                # /resources/{id} GET as a create observer when the write and
+                # the GET declare a shared response schema $ref.
+                "response_schema": {
+                    "200": {"schema": {"$ref": "#/components/schemas/Resource"}},
+                },
             },
             {
                 "id": "op-read-created",
@@ -607,6 +600,9 @@ def test_executor_blocks_response_only_write_observer_before_create_transport(
                 "method": "GET",
                 "path": "/resources/{id}",
                 "read_write": "read",
+                "response_schema": {
+                    "200": {"schema": {"$ref": "#/components/schemas/Resource"}},
+                },
             },
             {
                 "id": "op-delete",
@@ -694,26 +690,7 @@ def test_executor_blocks_response_only_write_observer_before_create_transport(
             return {"status": 200, "body": {"deleted": True}, "headers": {}}
         raise AssertionError(f"unexpected request: {method} {path}")
 
-    monkeypatch.setattr(
-        "ai_test_asset_center.experiment_executor._http_request",
-        fake_http,
-    )
-    monkeypatch.setattr(
-        "ai_test_asset_center.experiment_plan_executor._http_request",
-        fake_http,
-    )
-    monkeypatch.setattr(
-        "ai_test_asset_center.experiment_runtime_support._http_request",
-        fake_http,
-    )
-    monkeypatch.setattr(
-        "ai_test_asset_center.experiment_runtime_credentials._http_request",
-        fake_http,
-    )
-    monkeypatch.setattr(
-        "ai_test_asset_center.sandbox_write_executor._http_request",
-        fake_http,
-    )
+    _patch_http_request(monkeypatch, fake_http)
 
     result = execute_one_experiment(
         experiment,
@@ -784,22 +761,7 @@ def test_executor_uses_same_resource_receipt_for_violation(
         {"status": 200, "body": payload, "headers": {"content-type": "application/json"}},
         {"status": 200, "body": payload, "headers": {"content-type": "application/json"}},
     ])
-    monkeypatch.setattr(
-        "ai_test_asset_center.experiment_executor._http_request",
-        lambda *_args, **_kwargs: next(responses),
-    )
-    monkeypatch.setattr(
-        "ai_test_asset_center.experiment_plan_executor._http_request",
-        lambda *_args, **_kwargs: next(responses),
-    )
-    monkeypatch.setattr(
-        "ai_test_asset_center.experiment_runtime_support._http_request",
-        lambda *_args, **_kwargs: next(responses),
-    )
-    monkeypatch.setattr(
-        "ai_test_asset_center.experiment_runtime_credentials._http_request",
-        lambda *_args, **_kwargs: next(responses),
-    )
+    _patch_http_request(monkeypatch, lambda *_args, **_kwargs: next(responses))
 
     result = execute_one_experiment(
         _authorization_experiment(),
@@ -856,22 +818,7 @@ def test_executor_treatment_rejection_does_not_emit_finding(
             "headers": {"content-type": "application/json"},
         },
     ])
-    monkeypatch.setattr(
-        "ai_test_asset_center.experiment_executor._http_request",
-        lambda *_args, **_kwargs: next(responses),
-    )
-    monkeypatch.setattr(
-        "ai_test_asset_center.experiment_plan_executor._http_request",
-        lambda *_args, **_kwargs: next(responses),
-    )
-    monkeypatch.setattr(
-        "ai_test_asset_center.experiment_runtime_support._http_request",
-        lambda *_args, **_kwargs: next(responses),
-    )
-    monkeypatch.setattr(
-        "ai_test_asset_center.experiment_runtime_credentials._http_request",
-        lambda *_args, **_kwargs: next(responses),
-    )
+    _patch_http_request(monkeypatch, lambda *_args, **_kwargs: next(responses))
 
     result = execute_one_experiment(
         _authorization_experiment(),
@@ -913,22 +860,7 @@ def test_batch_lineage_includes_typed_observer_receipt_ids(
         {"status": 200, "body": payload, "headers": {"content-type": "application/json"}},
         {"status": 200, "body": payload, "headers": {"content-type": "application/json"}},
     ])
-    monkeypatch.setattr(
-        "ai_test_asset_center.experiment_executor._http_request",
-        lambda *_args, **_kwargs: next(responses),
-    )
-    monkeypatch.setattr(
-        "ai_test_asset_center.experiment_plan_executor._http_request",
-        lambda *_args, **_kwargs: next(responses),
-    )
-    monkeypatch.setattr(
-        "ai_test_asset_center.experiment_runtime_support._http_request",
-        lambda *_args, **_kwargs: next(responses),
-    )
-    monkeypatch.setattr(
-        "ai_test_asset_center.experiment_runtime_credentials._http_request",
-        lambda *_args, **_kwargs: next(responses),
-    )
+    _patch_http_request(monkeypatch, lambda *_args, **_kwargs: next(responses))
 
     batch = execute_selected_experiments(
         [{"obligation_id": "obl-auth", "experiment_id": "exp-auth"}],
@@ -980,15 +912,7 @@ def test_batch_preserves_exact_variant_obligation_lineage(
         {"status": 200, "body": payload, "headers": {"content-type": "application/json"}},
         {"status": 200, "body": payload, "headers": {"content-type": "application/json"}},
     ])
-    for module in (
-        "ai_test_asset_center.experiment_executor",
-        "ai_test_asset_center.experiment_plan_executor",
-        "ai_test_asset_center.experiment_runtime_support",
-    ):
-        monkeypatch.setattr(
-            f"{module}._http_request",
-            lambda *_args, **_kwargs: next(responses),
-        )
+    _patch_http_request(monkeypatch, lambda *_args, **_kwargs: next(responses))
     experiment = _authorization_experiment()
     variant_id = "obl-auth__v_abcd"
     experiment["obligation_id"] = variant_id

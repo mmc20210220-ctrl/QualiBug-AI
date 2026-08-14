@@ -114,8 +114,12 @@ class TestOracleIncompleteNotCompiled:
 class TestOracleRuntimeGate:
     def test_finalizer_blocks_empty_observations(self):
         """Finalizer code contains runtime oracle input validation."""
-        from ai_test_asset_center.experiment_outcome_finalizer_core import finalize_experiment_execution
-        src = inspect.getsource(finalize_experiment_execution)
+        # The facade (experiment_outcome_finalizer_core) delegates to the
+        # extracted mechanics implementation, which owns the runtime Oracle
+        # input validation gate.  Inspect the delegated implementation so the
+        # safety invariant is checked where the logic actually lives.
+        from ai_test_asset_center import _experiment_outcome_finalizer_core_mechanics as _finalizer_core
+        src = inspect.getsource(_finalizer_core.finalize_experiment_execution)
         # Must check for observation data before calling oracle
         assert "BLOCKED_ORACLE_INPUT_INCOMPLETE" in src
         assert "_runtime_oracle_blocked" in src
@@ -246,8 +250,13 @@ class TestUnprovenCompensation:
 class TestMissingCampaignFunnel:
     def test_batch_enforces_funnel_presence(self):
         """Batch executor marks FAILED when funnel is missing."""
-        from ai_test_asset_center.experiment_batch_executor import execute_selected_experiments
-        src = inspect.getsource(execute_selected_experiments)
+        # The facade (experiment_batch_executor) delegates to the extracted
+        # single-finding mechanics implementation, which owns the campaign
+        # validation receipt (funnel / attribution / prioritization gates).
+        # Inspect the delegated implementation so the safety invariants are
+        # checked where the logic actually lives.
+        from ai_test_asset_center import _experiment_batch_executor_single_finding_mechanics as _batch_core
+        src = inspect.getsource(_batch_core.execute_selected_experiments)
         assert "missing_execution_coverage_funnel" in src
         assert "HARNESS_COVERAGE_FUNNEL_FAILED" in src
 
@@ -257,8 +266,13 @@ class TestMissingCampaignFunnel:
 class TestMissingBlockerAttribution:
     def test_batch_enforces_attribution_presence(self):
         """Batch executor marks FAILED when attribution is missing."""
-        from ai_test_asset_center.experiment_batch_executor import execute_selected_experiments
-        src = inspect.getsource(execute_selected_experiments)
+        # The facade (experiment_batch_executor) delegates to the extracted
+        # single-finding mechanics implementation, which owns the campaign
+        # validation receipt (funnel / attribution / prioritization gates).
+        # Inspect the delegated implementation so the safety invariants are
+        # checked where the logic actually lives.
+        from ai_test_asset_center import _experiment_batch_executor_single_finding_mechanics as _batch_core
+        src = inspect.getsource(_batch_core.execute_selected_experiments)
         assert "missing_blocker_attribution" in src
         assert "HARNESS_BLOCKER_ATTRIBUTION_FAILED" in src
 
@@ -268,8 +282,13 @@ class TestMissingBlockerAttribution:
 class TestPrioritizerSilentFallback:
     def test_no_silent_fallback(self):
         """Prioritizer failure is not silently swallowed."""
-        from ai_test_asset_center.experiment_batch_executor import execute_selected_experiments
-        src = inspect.getsource(execute_selected_experiments)
+        # The facade (experiment_batch_executor) delegates to the extracted
+        # single-finding mechanics implementation, which owns the campaign
+        # validation receipt (funnel / attribution / prioritization gates).
+        # Inspect the delegated implementation so the safety invariants are
+        # checked where the logic actually lives.
+        from ai_test_asset_center import _experiment_batch_executor_single_finding_mechanics as _batch_core
+        src = inspect.getsource(_batch_core.execute_selected_experiments)
         # Must have explicit failure handling for prioritizer
         assert "HARNESS_PRIORITIZATION_FAILED" in src
         assert "_prioritization_failed" in src

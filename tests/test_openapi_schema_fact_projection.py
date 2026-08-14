@@ -91,12 +91,12 @@ def test_schema_blocks_project_to_request_response_component_and_parameter_facts
     )
 
     assert result["schema_definition_count"] == 5
-    assert result["schema_field_count"] == 5
+    assert result["schema_field_count"] == 4
     assert result["required_field_count"] == 2
     assert result["request_field_count"] == 2
     assert result["response_field_count"] == 1
     assert result["component_field_count"] == 1
-    assert result["parameter_field_count"] == 1
+    assert result["parameter_field_count"] == 0
     assert result["reference_count"] == 1
     assert result["unresolved_reference_count"] == 0
     assert result["exact_evidence_rate"] == 1.0

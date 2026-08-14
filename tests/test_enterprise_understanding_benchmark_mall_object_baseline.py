@@ -35,7 +35,7 @@ def test_committed_benchmark_mall_sources_match_object_ground_truth_snapshot() -
     }
     assert {row["actual_blob_sha"] for row in receipt["sources"]} == {
         "5fd06faf7cd391af92c3f8bbbe4e5d8e8dfaee0f",
-        "b4000bd8971a41e1ffa8d5ad4392837ce5fdf4d8",
+        "5d2ed786dae93cdebb830b4166ba4469155a43d1",
         "9bde7fe4f8894cdcbc1e749f329699956c080928",
         "7502e130893cb93106d2ec7f0f7df1e265035774",
         "9419bce3daa163bae68c689e5d0b10449fe9de85",

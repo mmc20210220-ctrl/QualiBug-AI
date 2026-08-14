@@ -27,6 +27,9 @@ def test_field_inventory_without_business_behavior_cannot_pass() -> None:
                 "table_id": "table:orders",
                 "source_id": "schema-1",
                 "name": "订单",
+                "description": "订单",
+                "derivation": "entity_inventory_table",
+                "source_locator": "BUSINESS_RULES.md#core-entities",
                 "columns": ["订单号", "状态"],
             }
         ],

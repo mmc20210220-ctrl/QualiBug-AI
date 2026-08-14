@@ -59,7 +59,9 @@ def test_persist_customer_ready_static_artifacts_adds_cumulative_snapshot_withou
             "delivery_package": {"status": "created", "package_ref": "platform_outputs/enterprise-project/delivery_packages/demo.zip"},
         },
     }
-    monkeypatch.setattr(main_module, "_customer_ready_static_snapshot", lambda project_id, root: dict(snapshot))
+    import ai_test_asset_center.scan_customer_ready_artifacts as customer_ready_mod
+
+    monkeypatch.setattr(customer_ready_mod, "_customer_ready_static_snapshot", lambda project_id, root: dict(snapshot))
 
     result = {"project": project, "total_findings": 3}
     persisted = main_module._persist_customer_ready_static_artifacts(project, tmp_path, result)
@@ -566,19 +568,15 @@ def test_scan_persists_external_validated_candidate_evidence_package_into_bundle
     assert verify_evidence_bundle("enterprise-project", result["evidence_bundle"]["bundle_id"], root=tmp_path)["valid"] is True
 
     manifest_data = load_evidence_bundle("enterprise-project", result["evidence_bundle"]["bundle_id"], root=tmp_path)
-    manifest_path = tmp_path / result["evidence_bundle"]["manifest_ref"]
-    findings_artifact = next(item for item in manifest_data["artifacts"] if item["name"] == "findings")
-    findings_payload = json.loads((manifest_path.parent / findings_artifact["path"]).read_text(encoding="utf-8"))
-    candidate_artifact = next(
-        item
-        for item in manifest_data["artifacts"]
-        if item["name"] == "candidate_findings"
-    )
-    candidate_payload = json.loads(
-        (manifest_path.parent / candidate_artifact["path"]).read_text(
-            encoding="utf-8"
-        )
-    )
+    # Single-Write (artifactized) bundles store findings/candidates inside the
+    # content-addressed execution_output part, not as legacy files next to the
+    # manifest. Read them back through the same store the scan wrote to.
+    from ai_test_asset_center.artifact_store import default_artifact_store
+
+    store = default_artifact_store(tmp_path)
+    execution_output = store.get_json(manifest_data["parts"]["execution_output_ref"])
+    findings_payload = execution_output["findings"]
+    candidate_payload = execution_output["candidate_findings"]
 
     assert findings_payload == []
     assert len(candidate_payload) == 1

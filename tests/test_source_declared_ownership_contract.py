@@ -11,8 +11,9 @@ import ai_test_asset_center.experiment_runtime_credentials as runtime_credential
 import ai_test_asset_center.experiment_runtime_support as runtime_support
 import ai_test_asset_center.sandbox_write_executor as sandbox_write_executor
 import ai_test_asset_center.sandbox_write_executor_base as sandbox_write_executor_base
+import ai_test_asset_center._experiment_runtime_support_mechanics as runtime_support_mechanics
 from ai_test_asset_center.behavior_ir import empty_behavior_ir
-from ai_test_asset_center.experiment_compiler_obligation import (
+from ai_test_asset_center.experiment_compiler_base import (
     compile_experiment_for_obligation,
 )
 from ai_test_asset_center.fixture_dag import build_fixture_dag_for_experiment
@@ -82,6 +83,7 @@ def _patch_http(monkeypatch: pytest.MonkeyPatch, fake_http) -> None:
         experiment_executor,
         plan_executor,
         runtime_support,
+        runtime_support_mechanics,
         runtime_credentials,
         sandbox_write_executor,
         sandbox_write_executor_base,

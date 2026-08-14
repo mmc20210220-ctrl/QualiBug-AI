@@ -120,9 +120,9 @@ def test_privacy_obligation_is_rebuilt_with_distinct_source_actors(
     monkeypatch,
 ) -> None:
     monkeypatch.setattr(
-        obligation_compiler,
+        obligation_compiler._base,
         "_original_compile",
-        lambda behavior_ir: _single_actor_result("privacy"),
+        lambda behavior_ir, **kwargs: _single_actor_result("privacy"),
     )
 
     result = obligation_compiler.compile_obligations_from_behavior_ir(
@@ -157,9 +157,9 @@ def test_paired_privacy_obligation_compiles_to_distinct_control_treatment(
 ) -> None:
     behavior_ir = _behavior_ir()
     monkeypatch.setattr(
-        obligation_compiler,
+        obligation_compiler._base,
         "_original_compile",
-        lambda behavior_ir: _single_actor_result("privacy"),
+        lambda behavior_ir, **kwargs: _single_actor_result("privacy"),
     )
     paired = obligation_compiler.compile_obligations_from_behavior_ir(
         behavior_ir
@@ -188,9 +188,9 @@ def test_missing_denied_actor_becomes_coverage_gap_instead_of_fake_experiment(
     monkeypatch,
 ) -> None:
     monkeypatch.setattr(
-        obligation_compiler,
+        obligation_compiler._base,
         "_original_compile",
-        lambda behavior_ir: _single_actor_result("privacy"),
+        lambda behavior_ir, **kwargs: _single_actor_result("privacy"),
     )
 
     result = obligation_compiler.compile_obligations_from_behavior_ir(
@@ -213,9 +213,9 @@ def test_visibility_uses_the_same_source_grounded_pairing_rule(
     monkeypatch,
 ) -> None:
     monkeypatch.setattr(
-        obligation_compiler,
+        obligation_compiler._base,
         "_original_compile",
-        lambda behavior_ir: _single_actor_result("visibility"),
+        lambda behavior_ir, **kwargs: _single_actor_result("visibility"),
     )
 
     result = obligation_compiler.compile_obligations_from_behavior_ir(

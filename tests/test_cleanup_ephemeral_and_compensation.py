@@ -24,6 +24,8 @@ def test_ephemeral_login_compiles_even_when_cleanup_marked_required() -> None:
                 "operation_ref": "op-login",
                 "actor_ref": "actor-buyer",
                 "field": "email",
+                "validation_constraint": "type:string",
+                "validation_constraint_source": "request_schema",
             },
             "required_actors": ["actor-buyer"],
             "required_operations": ["op-login"],
@@ -37,6 +39,13 @@ def test_ephemeral_login_compiles_even_when_cleanup_marked_required() -> None:
                 "path": "/api/auth/login",
                 "read_write": "write",
                 "request_example": {"email": "a@b.com", "password": "x"},
+                "request_schema": {
+                    "type": "object",
+                    "properties": {
+                        "email": {"type": "string"},
+                        "password": {"type": "string"},
+                    },
+                },
                 "source_refs": [{"kind": "endpoint_contract", "file": "api.md"}],
             }],
             "actors": [_actor()],
@@ -91,6 +100,9 @@ def test_collection_create_uses_unique_cancel_compensation() -> None:
             "property": {
                 "operation_ref": "op-create-order",
                 "actor_ref": "actor-buyer",
+                "field": "addressId",
+                "validation_constraint": "required",
+                "validation_constraint_source": "request_schema",
             },
             "required_actors": ["actor-buyer"],
             "required_operations": ["op-create-order"],
@@ -104,6 +116,13 @@ def test_collection_create_uses_unique_cancel_compensation() -> None:
                 "path": "/api/orders",
                 "read_write": "write",
                 "request_example": {"addressId": "addr-1"},
+                "request_schema": {
+                    "type": "object",
+                    "required": ["addressId"],
+                    "properties": {
+                        "addressId": {"type": "string"},
+                    },
+                },
                 "source_refs": [{"kind": "endpoint_contract", "file": "api.md"}],
             }, {
                 "id": "op-list-orders",
@@ -151,6 +170,9 @@ def test_cancel_recreates_via_unique_collection_create() -> None:
             "property": {
                 "operation_ref": "op-cancel",
                 "actor_ref": "actor-buyer",
+                "field": "reason",
+                "validation_constraint": "type:string",
+                "validation_constraint_source": "request_schema",
             },
             "required_actors": ["actor-buyer"],
             "required_operations": ["op-cancel"],
@@ -163,7 +185,13 @@ def test_cancel_recreates_via_unique_collection_create() -> None:
                 "method": "POST",
                 "path": "/api/orders/{id}/cancel",
                 "read_write": "write",
-                "request_example": {},
+                "request_example": {"reason": "user_cancel"},
+                "request_schema": {
+                    "type": "object",
+                    "properties": {
+                        "reason": {"type": "string"},
+                    },
+                },
                 "source_refs": [{"kind": "endpoint_contract", "file": "api.md"}],
             }, {
                 "id": "op-create-order",
@@ -213,6 +241,10 @@ def test_identity_bound_status_uses_snapshot_restore_with_effect_read() -> None:
             "property": {
                 "operation_ref": "op-status",
                 "actor_ref": "actor-buyer",
+                "field": "status",
+                "validation_constraint": "enum",
+                "validation_constraint_value": ["enabled", "disabled"],
+                "validation_constraint_source": "request_schema",
             },
             "required_actors": ["actor-buyer"],
             "required_operations": ["op-status"],
@@ -226,6 +258,12 @@ def test_identity_bound_status_uses_snapshot_restore_with_effect_read() -> None:
                 "path": "/api/auth/admin/users/{id}/status",
                 "read_write": "write",
                 "request_example": {"status": "disabled"},
+                "request_schema": {
+                    "type": "object",
+                    "properties": {
+                        "status": {"type": "string", "enum": ["enabled", "disabled"]},
+                    },
+                },
                 "source_refs": [{"kind": "endpoint_contract", "file": "api.md"}],
             }, {
                 "id": "op-list-users",

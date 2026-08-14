@@ -3,7 +3,10 @@ from __future__ import annotations
 import pytest
 
 import ai_test_asset_center.customer_delivery_gate_v2 as delivery_gate_v2
-from ai_test_asset_center import _customer_delivery_gate_v2_mechanics as gate_mechanics
+from ai_test_asset_center import (
+    _customer_delivery_gate_v2_mechanics as gate_mechanics,
+    _customer_delivery_gate_v2_outcome_mechanics as gate_outcome_mechanics,
+)
 from ai_test_asset_center.customer_delivery_gate_v2 import (
     DeliveryGateV2Error,
     _cleanup_gate_decision,
@@ -204,7 +207,7 @@ def test_harness_reason_detail_is_optional_and_old_bundle_stays_valid(
     assert validate_customer_delivery_gate_receipt_v2(legacy) == legacy
 
     monkeypatch.setattr(
-        delivery_gate_v2,
+        gate_outcome_mechanics,
         "build_customer_delivery_gate_receipt_v2",
         lambda **_: enriched,
     )

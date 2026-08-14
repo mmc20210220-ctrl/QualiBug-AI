@@ -94,6 +94,7 @@ def apply_openapi_path_parameter_schema_projection(
             "openapi_schema_projection_schema": OPENAPI_SCHEMA_PROJECTION_SCHEMA,
             "openapi_path_parameter_schema_projection": True,
             "openapi_path_parameter_schema_count": state.schema_count,
+            "path_level_parameter_schema_pointer_correctness": True,
             "openapi_schema_count": previous_schema_count + state.schema_count,
             "openapi_schema_property_count": previous_property_count + state.property_count,
             "openapi_schema_variant_count": previous_variant_count + state.variant_count,

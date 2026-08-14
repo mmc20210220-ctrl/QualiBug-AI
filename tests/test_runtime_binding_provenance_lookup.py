@@ -33,7 +33,9 @@ from pathlib import Path
 
 import pytest
 
-EXECUTOR = Path(__file__).resolve().parents[1] / "ai_test_asset_center" / "experiment_executor.py"
+# The runtime provenance check moved into the executor core during the
+# executor-core/facade split; the facade only re-exports execute_one_experiment.
+EXECUTOR = Path(__file__).resolve().parents[1] / "ai_test_asset_center" / "experiment_executor_core.py"
 GRAPH = Path(__file__).resolve().parents[1] / "ai_test_asset_center" / "binding_coverage_graph.py"
 
 

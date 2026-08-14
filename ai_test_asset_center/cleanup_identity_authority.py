@@ -21,11 +21,15 @@ def _text(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _field_key(value: Any) -> str:
+    return "".join(ch for ch in str(value or "").lower() if ch.isalnum())
+
+
 def _scalar_for_keys(row: dict[str, Any], keys: tuple[str, ...]) -> str:
-    allowed = {key.lower() for key in keys}
+    allowed = {_field_key(key) for key in keys}
     matches: list[str] = []
     for key, value in row.items():
-        if str(key).lower() not in allowed:
+        if _field_key(key) not in allowed:
             continue
         if isinstance(value, bool) or not isinstance(value, (str, int, float)):
             continue

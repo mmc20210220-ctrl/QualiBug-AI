@@ -65,6 +65,17 @@ def _header_true(value: Any) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+# Human-readable messages for upload byte-decoding failures. These preserve the
+# observability of the pre-mixin ingestion boundary: the machine-readable error
+# code stays authoritative, but a customer-facing reason must not disappear.
+_INGEST_DECODE_MESSAGES: dict[str, str] = {
+    "DECODE_FAILED": "Base64 解码失败，请检查文件内容。",
+    "MISSING_CONTENT": "缺少文件内容。",
+    "EMPTY_UPLOAD": "上传内容为空。",
+    "UPLOAD_TOO_LARGE": "上传文件过大。",
+}
+
+
 class IngestHandlersMixin:
     def _read_ingest_request(self) -> dict[str, Any]:
         """Read raw upload bytes or the legacy bounded JSON envelope."""
@@ -149,14 +160,15 @@ class IngestHandlersMixin:
         except ValueError as exc:
             code = str(exc)
             status = 413 if code == "UPLOAD_TOO_LARGE" else 400
-            return self._json(
-                {
-                    "ok": False,
-                    "error": code,
-                    "max_bytes": MAX_KNOWLEDGE_UPLOAD_BYTES,
-                },
-                status,
-            )
+            payload: dict[str, Any] = {
+                "ok": False,
+                "error": code,
+                "max_bytes": MAX_KNOWLEDGE_UPLOAD_BYTES,
+            }
+            message = _INGEST_DECODE_MESSAGES.get(code)
+            if message:
+                payload["message"] = message
+            return self._json(payload, status)
 
         staging_root = (
             root / "platform_workspace" / project / ".ingest_staging"
@@ -194,15 +206,28 @@ class IngestHandlersMixin:
             ingest_phase = "canonical_ingest"
             from .private_pilot_ingest_authority import ingest_uploaded_enterprise_material
 
-            authority_result = ingest_uploaded_enterprise_material(
-                project=project,
-                root=root,
-                actor=actor,
-                out_path=staging_path,
-                filename=filename,
-                raw=raw,
-                explicit_type=explicit_type,
-            )
+            try:
+                authority_result = ingest_uploaded_enterprise_material(
+                    project=project,
+                    root=root,
+                    actor=actor,
+                    out_path=staging_path,
+                    filename=filename,
+                    raw=raw,
+                    explicit_type=explicit_type,
+                )
+            except ValueError as exc:
+                message = str(exc)
+                if message.startswith("DOCUMENT_INGEST_FAILED:"):
+                    return self._json(
+                        {
+                            "ok": False,
+                            "error": "DOCUMENT_INGEST_FAILED",
+                            "message": message[len("DOCUMENT_INGEST_FAILED:"):],
+                        },
+                        500,
+                    )
+                raise
             if not isinstance(authority_result, dict):
                 raise TypeError("upload ingest authority result must be an object")
             ingest_result = dict(authority_result.get("ingest_result") or {})

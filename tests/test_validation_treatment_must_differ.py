@@ -102,8 +102,12 @@ def test_the_guard_exists_at_the_call_site() -> None:
         Path(__file__).resolve().parents[1]
         / "ai_test_asset_center" / "experiment_protocols_privacy_base.py"
     ).read_text(encoding="utf-8")
-    assert "validation_treatment_identical_to_control" in source
-    guard_at = source.index("validation_treatment_identical_to_control")
+    # Anchor on the guard's emitted reason string (trailing colon), not the
+    # first prose mention in a comment above the arms — the refactor added a
+    # comment that also names the reason, but the guard itself is the string
+    # literal that ships in the BLOCKED detail.
+    assert "validation_treatment_identical_to_control:" in source
+    guard_at = source.index("validation_treatment_identical_to_control:")
     assign_at = source.index('treatment_plan[0]["mutation"] = mutation')
     assert assign_at < guard_at, "the guard must run after the arms are built"
 

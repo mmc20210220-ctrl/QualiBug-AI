@@ -57,8 +57,16 @@ def _direct_child(node: ElementTree.Element, names: Iterable[str]) -> ElementTre
 
 
 def _child_text(node: ElementTree.Element, *names: str) -> str:
-    child = _direct_child(node, names)
-    return _text(child.text) if child is not None else ""
+    # Names are ordered by priority (e.g. "Code" before "Name"): the physical
+    # model code is the canonical name, the display label is only a fallback.
+    # Document order must not override that priority.
+    for name in names:
+        for child in list(node):
+            if _local(child.tag) == name:
+                value = _text(child.text)
+                if value:
+                    return value
+    return ""
 
 
 def _bool(value: Any) -> bool:

@@ -107,7 +107,9 @@ def test_product_phase_reuses_existing_ingest_and_composition_authorities(
 
     def capture(**kwargs):
         calls["capture"] = kwargs
-        Path(kwargs["output_path"]).write_text(
+        output_path = Path(kwargs["output_path"])
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(
             json.dumps(
                 {
                     "asset_id": "asset:ticketsla",

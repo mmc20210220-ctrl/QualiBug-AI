@@ -166,7 +166,19 @@ def _seed_authorities(tmp_path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
     source = next(
         row
         for row in source_result["created"]
-        if row.get("filename") == "bulk-upload-ui.md"
+        if row.get("original_name") == "bulk-upload-ui.md"
+    )
+    # Build the knowledge asset once before any fixture/registry writes. The
+    # scenario semantic authority reads this persisted asset when it binds the
+    # source, safe prerequisite operation and actor role; without it the first
+    # register_upload_scenario call falls back to a full knowledge build whose
+    # source-sync pass re-ingests the fixture bytes and can race the fixture
+    # registry's atomic write on Windows, intermittently removing the registry
+    # file and failing with active_approved_upload_fixture_not_found.
+    build_enterprise_business_knowledge_asset(
+        _PROJECT,
+        tmp_path,
+        options={"enable_semantic_extraction": False},
     )
     fixture_path = tmp_path / "platform_inputs" / _PROJECT / "inbox" / "bulk.csv"
     fixture_path.parent.mkdir(parents=True, exist_ok=True)

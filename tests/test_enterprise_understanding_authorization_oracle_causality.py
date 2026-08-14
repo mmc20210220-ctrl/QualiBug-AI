@@ -161,6 +161,28 @@ def _observer_receipt(*, status: str = "OBSERVED") -> dict:
     )
 
 
+def _sealed_binding_row() -> dict:
+    from ai_test_asset_center.binding_materialization_identity_receipt import (
+        build_binding_materialization_identity_receipt,
+    )
+
+    row = {
+        "target": "order_id",
+        "status": "BOUND",
+        "value_fingerprint": "order-42-fingerprint",
+        "source_priority": "same_actor_list_read",
+        "resolver_operation_ref": "op:get-order",
+        "resolver_path": "/orders/order-42",
+        "status_code": 200,
+    }
+    proof = build_binding_materialization_identity_receipt(row)
+    return {
+        **row,
+        "materialization_receipt_id": proof["receipt_id"],
+        "materialization_identity_receipt": proof,
+    }
+
+
 def _result() -> dict:
     return {
         "schema_version": "qualibug.experiment-execution.v1",
@@ -188,14 +210,7 @@ def _result() -> dict:
             _contract_receipt("treatment"),
         ],
         "observer_receipts": [_observer_receipt()],
-        "binding_materialization_receipts": [
-            {
-                "receipt_id": "binding:order-id",
-                "target": "order_id",
-                "status": "BOUND",
-                "value_fingerprint": "order-42-fingerprint",
-            }
-        ],
+        "binding_materialization_receipts": [_sealed_binding_row()],
         "execution_receipt": {"status": "EXECUTED"},
     }
 
@@ -329,12 +344,14 @@ def test_non_comparison_authorization_records_not_applicable_receipt() -> None:
 
 
 def test_public_executor_applies_causal_gate(monkeypatch, tmp_path: Path) -> None:
+    from ai_test_asset_center import _experiment_executor_mainline_mechanics
+
     result = _result()
     result["binding_materialization_receipts"] = []
     experiment = _experiment()
 
     monkeypatch.setattr(
-        experiment_executor,
+        _experiment_executor_mainline_mechanics,
         "_execute_one_governed",
         lambda *args, **kwargs: deepcopy(result),
     )

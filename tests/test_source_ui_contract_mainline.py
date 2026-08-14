@@ -6,6 +6,9 @@ import json
 from ai_test_asset_center import behavior_ir as bir
 from ai_test_asset_center import obligation_compiler
 from ai_test_asset_center.enterprise_knowledge_center import _parse_source
+from ai_test_asset_center.enterprise_knowledge_center._formal_ui_contracts import (
+    install_formal_ui_contract_parser,
+)
 from ai_test_asset_center.formal_ui_surface import (
     OBSERVER_ID,
     PROTOCOL_TEMPLATE,
@@ -17,6 +20,12 @@ from ai_test_asset_center.source_ui_contract_binding import bind_source_ui_contr
 from ai_test_asset_center.source_ui_obligation_binding import (
     compile_obligations_with_source_ui,
 )
+
+
+# The parser patch is registered by the composition root
+# (``configure_source_parser_extensions``); a direct ``_parse_source`` call in
+# tests mirrors that registration exactly like the product does.
+install_formal_ui_contract_parser()
 
 
 def _contract(*, operation_ref: str = "get_order", actor_ref: str = "actor_admin") -> dict:

@@ -181,7 +181,7 @@ def test_reasoner_worker_defaults_to_json_object_response_format(monkeypatch) ->
             captured["response_format"] = config.response_format
             captured["max_tokens"] = config.max_tokens
 
-        def _chat(self, prompt: str, *, system_prompt: str | None = None) -> str:
+        def _chat(self, prompt: str, *, system_prompt: str | None = None, call_point: str | None = None) -> str:
             return '{"choices":[{"message":{"content":"{\\"hypotheses\\":[{\\"title\\":\\"ok\\"}]}"}}]}'
 
         def usage_snapshot(self) -> dict[str, float]:
@@ -233,7 +233,7 @@ def test_reasoner_worker_allows_enterprise_max_tokens(monkeypatch) -> None:
         def __init__(self, config: ReasoningConfig) -> None:
             captured["max_tokens"] = config.max_tokens
 
-        def _chat(self, prompt: str, *, system_prompt: str | None = None) -> str:
+        def _chat(self, prompt: str, *, system_prompt: str | None = None, call_point: str | None = None) -> str:
             return '{"choices":[{"message":{"content":"{\\"hypotheses\\":[{\\"title\\":\\"ok\\"}]}"}}]}'
 
     import ai_test_asset_center.llm_reasoning as llm_reasoning
@@ -272,7 +272,7 @@ def test_reasoner_worker_retries_tls_eof_and_emits_secret_free_attempt_events(mo
         def __init__(self, config: ReasoningConfig) -> None:
             self.config = config
 
-        def _chat(self, prompt: str, *, system_prompt: str | None = None) -> str:
+        def _chat(self, prompt: str, *, system_prompt: str | None = None, call_point: str | None = None) -> str:
             type(self).calls += 1
             if type(self).calls == 1:
                 raise RuntimeError("TLS unexpected EOF while using sk-do-not-persist")
@@ -315,7 +315,7 @@ def test_reasoner_worker_retries_response_shape_failure(monkeypatch) -> None:
         def __init__(self, config: ReasoningConfig) -> None:
             self.config = config
 
-        def _chat(self, prompt: str, *, system_prompt: str | None = None) -> str:
+        def _chat(self, prompt: str, *, system_prompt: str | None = None, call_point: str | None = None) -> str:
             type(self).calls += 1
             if type(self).calls == 1:
                 return '{"choices":[{"message":{"content":"{\\"unexpected\\":[]}"}}]}'
@@ -352,7 +352,7 @@ def test_reasoner_worker_does_not_retry_authentication_failure(monkeypatch) -> N
         def __init__(self, config: ReasoningConfig) -> None:
             self.config = config
 
-        def _chat(self, prompt: str, *, system_prompt: str | None = None) -> str:
+        def _chat(self, prompt: str, *, system_prompt: str | None = None, call_point: str | None = None) -> str:
             type(self).calls += 1
             raise RuntimeError("HTTP 401 Unauthorized sk-do-not-persist")
 

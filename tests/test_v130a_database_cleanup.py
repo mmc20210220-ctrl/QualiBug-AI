@@ -219,7 +219,7 @@ class TestCleanupAuthority:
         source = (
             Path(__file__).resolve().parents[1]
             / "ai_test_asset_center"
-            / "experiment_cleanup_executor.py"
+            / "experiment_cleanup_executor_core.py"
         ).read_text(encoding="utf-8")
 
         assert 'cleanup_action == "best_effort_delete"' in source
@@ -524,7 +524,7 @@ class TestLifecycleStateMachine:
         """EXECUTED_BUT_NOT_RESTORED must be a valid status in batch executor."""
         import ast
         import pathlib
-        src = pathlib.Path("ai_test_asset_center/experiment_batch_executor.py").read_text(encoding="utf-8")
+        src = pathlib.Path("ai_test_asset_center/_experiment_batch_executor_single_finding_mechanics.py").read_text(encoding="utf-8")
         assert "EXECUTED_BUT_NOT_RESTORED" in src
 
 

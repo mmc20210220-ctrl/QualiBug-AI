@@ -123,6 +123,8 @@ def test_public_executor_removes_finding_when_contract_identity_drifts(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
+    from ai_test_asset_center import _experiment_executor_mainline_mechanics
+
     contract = _contract()
     changed = deepcopy(contract)
     changed["comparison_dimension"] = "TENANT_SCOPE"
@@ -134,12 +136,12 @@ def test_public_executor_removes_finding_when_contract_identity_drifts(
     }
 
     monkeypatch.setattr(
-        experiment_executor,
+        _experiment_executor_mainline_mechanics,
         "_execute_one_governed",
         lambda *args, **kwargs: {"status": "EXECUTED"},
     )
     monkeypatch.setattr(
-        experiment_executor,
+        _experiment_executor_mainline_mechanics,
         "enforce_authorization_oracle_causality",
         lambda **kwargs: deepcopy(governed),
     )

@@ -51,6 +51,13 @@ _original_auto_fixture_create_for_binding_target = (
 _original_composed_materialize_experiment_fixtures = (
     _composed.materialize_experiment_fixtures
 )
+_original_align_body_enums_with_declared_schema = (
+    _core._align_body_enums_with_declared_schema
+)
+_original_declared_unique_fields = _core._declared_unique_fields
+_original_materialize_unique_create_fields = (
+    _core._materialize_unique_create_fields
+)
 
 
 def _text(value: Any) -> str:
@@ -498,18 +505,54 @@ def _ownership_terminal(kwargs: dict[str, Any], receipt: dict[str, Any]) -> dict
     }
 
 
-# Replace exact core authorities. The core materializer resolves these globals at
-# call time, so neither synthetic dependency paths nor first-candidate fixture
-# choices can bypass the public facade.
-_core._align_body_enums_with_declared_schema = _preserve_source_enum_conflicts
-_core._declared_unique_fields = _declared_unique_fields_scoped
-_core._materialize_unique_create_fields = _materialize_unique_create_fields_scoped
-_core._source_backed_dependency_fixture_setup = _source_backed_dependency_fixture_setup
-_core._auto_fixture_create_for_binding_target = _auto_fixture_create_for_binding_target
+# The core materializer resolves these helpers as module globals at call time,
+# so the strict facade authority must be installed for the duration of the
+# facade's own call. Installing them permanently at import time leaks strict
+# authority into any later in-process caller of the core module (e.g. direct
+# core tests), making results order-dependent. A call-scoped install keeps the
+# core pure when the facade is not the caller, and preserves production
+# behavior unchanged.
+from contextlib import contextmanager as _contextmanager
 
-_composed._strict_validate_fixture_preconditions = (
-    _strict_validate_fixture_preconditions
-)
+
+@_contextmanager
+def _fixture_materializer_authority_scope():
+    """Temporarily install strict facade authority; restore on exit."""
+    _core._align_body_enums_with_declared_schema = (
+        _preserve_source_enum_conflicts
+    )
+    _core._declared_unique_fields = _declared_unique_fields_scoped
+    _core._materialize_unique_create_fields = (
+        _materialize_unique_create_fields_scoped
+    )
+    _core._source_backed_dependency_fixture_setup = (
+        _source_backed_dependency_fixture_setup
+    )
+    _core._auto_fixture_create_for_binding_target = (
+        _auto_fixture_create_for_binding_target
+    )
+    _composed._strict_validate_fixture_preconditions = (
+        _strict_validate_fixture_preconditions
+    )
+    try:
+        yield
+    finally:
+        _core._align_body_enums_with_declared_schema = (
+            _original_align_body_enums_with_declared_schema
+        )
+        _core._declared_unique_fields = _original_declared_unique_fields
+        _core._materialize_unique_create_fields = (
+            _original_materialize_unique_create_fields
+        )
+        _core._source_backed_dependency_fixture_setup = (
+            _original_source_backed_dependency_fixture_setup
+        )
+        _core._auto_fixture_create_for_binding_target = (
+            _original_auto_fixture_create_for_binding_target
+        )
+        _composed._strict_validate_fixture_preconditions = (
+            _original_strict_fixture_preconditions
+        )
 
 
 def _cleanup_preflight_terminal(
@@ -566,11 +609,12 @@ def materialize_experiment_fixtures(**kwargs: Any) -> dict[str, Any]:
     )
     if _text(ownership_receipt.get("status")) == "BLOCKED":
         return _ownership_terminal(kwargs, ownership_receipt)
-    state = _dict(
-        _original_composed_materialize_experiment_fixtures(
-            **{**kwargs, "actors": governed_actors}
+    with _fixture_materializer_authority_scope():
+        state = _dict(
+            _original_composed_materialize_experiment_fixtures(
+                **{**kwargs, "actors": governed_actors}
+            )
         )
-    )
     state["ownership_runtime_materialization_receipt"] = ownership_receipt
     terminal_result = _dict(state.get("result"))
     if terminal_result:

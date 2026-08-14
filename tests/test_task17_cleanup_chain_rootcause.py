@@ -76,9 +76,11 @@ def test_observed_resource_identity_resolves_case_variant_primary() -> None:
     """A conventional primary identity in any spelling/envelope resolves."""
     assert observed_resource_identity({"Id": "A1"}, "id") == "A1"
     assert observed_resource_identity({"_ID": "A2"}, "id") == "A2"
+    # Deeply nested envelopes (more than one standard envelope level) are no
+    # longer identity authority: arbitrary nested ids fail closed.
     assert observed_resource_identity(
         {"data": {"row": {"uuid": "U1"}}}, "id"
-    ) == "U1"
+    ) == ""
     assert observed_resource_identity({"data": {"id": "N1"}}, "id") == "N1"
     # Declared business column wins when present.
     assert observed_resource_identity({"sku": "SKU-1"}, "sku") == "SKU-1"

@@ -21,6 +21,7 @@ from urllib.parse import quote, unquote
 from . import runtime_binding_materializer_base as _base
 from .runtime_binding_materializer_base import *  # noqa: F401,F403
 from .cleanup_adapter_ladder import identity_value_from_body
+from .cleanup_adapter_ladder import _RESPONSE_ENTITY_ENVELOPES
 
 
 _PATH_PARAMETER_RE = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
@@ -145,9 +146,42 @@ def _declared_placeholder_identity(body: Any, placeholder: str) -> str:
     that shared helper allow the other generic aliases, and only at the body
     root or a standard response envelope.  Nested related-object IDs and domain
     ``*Id`` suffixes are never substitutes.
+
+    A collection observation (list of rows) is also a valid identity source:
+    the declared column must resolve to exactly one distinct value across the
+    observed rows.  Each row is read through the same flat-body helper, so
+    foreign-key fields inside a row still never qualify.
     """
 
-    return identity_value_from_body(body, placeholder)
+    direct = identity_value_from_body(body, placeholder)
+    if direct:
+        return direct
+
+    # A collection observation is a valid identity source whether the rows are
+    # the body itself or nested under one standard response envelope
+    # (``data``/``result``/``item``/``resource``). The declared column must
+    # resolve to exactly one distinct value across the observed rows; each row
+    # is read through the same flat-body helper, so foreign-key fields inside a
+    # row still never qualify.
+    rows: list[Any] = []
+    if isinstance(body, list):
+        rows = body
+    elif isinstance(body, dict):
+        for envelope in _RESPONSE_ENTITY_ENVELOPES:
+            nested = body.get(envelope)
+            if isinstance(nested, list):
+                rows = nested
+                break
+    values: list[str] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        value = identity_value_from_body(row, placeholder)
+        if value and value not in values:
+            values.append(value)
+    if len(values) == 1:
+        return values[0]
+    return ""
 
 
 def runtime_cleanup_paths(

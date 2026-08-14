@@ -612,6 +612,36 @@ def bind_entity_fields(body: Any, path: str = "") -> dict[str, str]:
                     break
             if bindings.get(param) not in {None, ""}:
                 break
+        # Structural same-resource-FK fallback (domain-neutral, no closed
+        # vocabulary): a bare generic identity placeholder ({id}/{uuid}/{pk}/
+        # {key}) may bind from a ``{noun}_id`` field when no generic identity
+        # field matched. A child row's ``order_id`` IS the parent resource's
+        # identity; cross-entity natural keys (sku/code/business_no) do not end
+        # in ``id`` and stay excluded so they can never masquerade as a
+        # uuid-typed identity. Only a single distinct value may bind.
+        if (
+            bindings.get(param) in {None, ""}
+            and re.sub(r"[^a-z0-9]", "", param.lower()) in {"id", "uuid", "pk", "key"}
+        ):
+            fk_values: list[str] = []
+            fk_field = ""
+            for source in entities:
+                if not isinstance(source, dict):
+                    continue
+                for field_name, field_value in source.items():
+                    if isinstance(field_value, (dict, list, bool)) or field_value in {None, ""}:
+                        continue
+                    key = re.sub(r"[^a-z0-9]", "", str(field_name).lower())
+                    if key.endswith("id") and key not in {
+                        "paid", "said", "avoid", "laid", "maid", "raid",
+                    }:
+                        text = str(field_value)
+                        if text not in fk_values:
+                            fk_values.append(text)
+                            fk_field = field_name
+            if len(fk_values) == 1:
+                bindings[param] = fk_values[0]
+                bindings.setdefault(fk_field, fk_values[0])
     # Mirror ``id`` onto unresolved sibling identity params (e.g., orderId)
     # when ``id`` is an accepted candidate for them.
     primary = bindings.get("id")

@@ -124,8 +124,10 @@ def build_chinese_first_comprehension(
         # overwrite an explicit structured classification with the legacy
         # fallback.
         _structured_classification = (
-            _text(rule.get("rule_type")) not in {"", "business_rule", "business_logic"}
-            or _text(rule.get("risk_type")) not in {"", "business_logic"}
+            _text(rule.get("rule_type"))
+            not in {"", "business_rule", "business_logic", "permission"}
+            or _text(rule.get("risk_type"))
+            not in {"", "business_logic", "authorization"}
         )
         if (
             not _structured_classification

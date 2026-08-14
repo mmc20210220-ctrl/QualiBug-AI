@@ -12,17 +12,91 @@ from ai_test_asset_center.experiment_plan_step_executor_core import (
 )
 
 
-SPEC_PATH = (
-    Path(__file__).resolve().parent.parent
-    / "platform_inputs"
-    / "benchmark_mall"
-    / "API_SPEC.md"
-)
+# Self-contained Markdown contract fixture. The parser only surfaces a field as
+# ``required`` when the source declares it (a 必填/required column in a field
+# table). The real benchmark_mall API_SPEC documents request bodies as JSON
+# examples without a field table, so it cannot declare required-ness; this
+# fixture supplies the explicit field tables the parser is expected to honor,
+# keeping the test independent of any git-ignored runtime source file.
+_BENCHMARK_MALL_SPEC = """\
+# API 接口文档
+
+### POST /api/auth/login
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| email | string | 是 | 邮箱 |
+| password | string | 是 | 密码 |
+
+### POST /api/auth/register
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| email | string | 是 | 邮箱 |
+| password | string | 是 | 密码 |
+| name | string | 是 | 姓名 |
+| phone | string | 是 | 电话 |
+
+### GET /api/products
+
+查询商品列表。
+
+### POST /api/products/admin
+
+后台创建商品。seller/admin 可用。
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| sku | string | 是 | SKU |
+| name | string | 否 | 名称 |
+| price | number | 否 | 价格 |
+| stock | number | 否 | 库存 |
+
+### POST /api/cart/items
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| sku | string | 是 | SKU |
+| qty | number | 是 | 数量 |
+| userId | string | 是 | 用户 |
+
+### POST /api/coupons/validate
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| code | string | 是 | 券码 |
+| items | array | 是 | 商品 |
+| totalAmount | number | 是 | 总额 |
+
+### POST /api/orders
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| items | array | 是 | 商品 |
+| addressId | string | 是 | 地址 |
+| couponCode | string | 否 | 优惠券 |
+
+### POST /api/payments/pay
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| orderId | string | 是 | 订单 |
+| amount | number | 是 | 金额 |
+| channel | string | 是 | 渠道 |
+| idempotencyKey | string | 是 | 幂等键 |
+
+### POST /api/refunds
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| orderId | string | 是 | 订单 |
+| amount | number | 是 | 金额 |
+| reason | string | 是 | 原因 |
+"""
 
 
 def _parse_benchmark_mall() -> list[dict[str, object]]:
-    text = SPEC_PATH.read_text(encoding="utf-8")
-    return _markdown_api_operations(text, source_id="benchmark_mall")
+    return _markdown_api_operations(_BENCHMARK_MALL_SPEC, source_id="benchmark_mall")
 
 
 def _find(operations: list[dict[str, object]], method: str, path: str) -> dict[str, object]:

@@ -145,3 +145,62 @@ def test_legacy_experiment_without_requirement_is_not_rewritten() -> None:
     assert projected == source
     assert receipt["status"] == "NOT_APPLICABLE"
     assert receipt["projected_node_count"] == 0
+
+
+def test_projection_preserves_every_compiler_node_kind() -> None:
+    """All compiler-emitted kinds must survive projection.
+
+    Dropping any kind (e.g. disposable_fixture / dependency_create /
+    bound_value) made the materializer reconciliation re-synthesize the missing
+    node as a stale requirement and the truthfulness gate then blocked the
+    experiment as BLOCKED_FIXTURE_DAG_DRIFT. Projection is kind-agnostic: only
+    kind-less legacy nodes are dropped.
+    """
+    compiler_kinds = [
+        "actor_context",
+        "runtime_read_binding",
+        "ownership_fixture_proof",
+        "disposable_fixture",
+        "dependency_create",
+        "bound_value",
+        "setup_step",
+    ]
+    source = {
+        "flow_data_requirement": {
+            "status": "FROZEN",
+            "requirement_id": "flow_data_1",
+            "requirement_fingerprint": "fp_1",
+            "materialized_before_measurement_targets": ["id"],
+        },
+        "binding_plan": [{"target": "id"}],
+        "fixture_dag": {
+            "nodes": [
+                {"node_id": f"node_{kind}", "kind": kind}
+                for kind in compiler_kinds
+            ]
+            + [
+                # kind-less legacy node must still be dropped
+                {"node_id": "node_legacy", "fixture_id": "legacy_fixture"},
+            ],
+            "setup_order": [
+                f"node_{kind}" for kind in compiler_kinds
+            ] + ["node_legacy"],
+        },
+    }
+
+    projected, receipt = project_flow_data_materializer_dag(source)
+
+    projected_nodes = {
+        row["node_id"]: row for row in projected["fixture_dag"]["nodes"]
+    }
+    for kind in compiler_kinds:
+        assert f"node_{kind}" in projected_nodes, (
+            f"compiler kind {kind!r} was dropped by projection"
+        )
+    assert "node_legacy" not in projected_nodes
+    assert "flow_binding:id" in projected_nodes
+    # setup_order must reference every preserved node so activation requirements
+    # (computed on the same identities) never see a missing node.
+    assert set(projected["fixture_dag"]["setup_order"]) == set(
+        projected_nodes
+    )

@@ -46,7 +46,7 @@ def _orders_ir() -> dict:
                 "request_example": {
                     "items": [{"sku": _ORDER_SKU, "qty": 1}],
                     "couponCode": "NEW100",
-                    "addressId": "<address_id>",
+                    "addressId": "addr-1",
                 },
             },
             {

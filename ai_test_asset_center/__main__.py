@@ -814,7 +814,7 @@ def _scan_impl(project: str, root: Optional[Path] = None, *, prd_text: str = "",
         "benchmark_metrics": benchmark_metrics,
         "dedupe_report": dedupe_report,
         "verified_archive_receipt": verified_archive_receipt,
-        "discovery_verdict": _discovery_verdict(confirmed, db_verification),
+        "discovery_verdict": _discovery_verdict(current_formal_findings, db_verification),
         "discovery_funnel": discovery_funnel,
         "discovery_funnel_report": discovery_funnel_report,
         "pipeline_health": pipeline_health,
@@ -1103,13 +1103,25 @@ def _scan_impl(project: str, root: Optional[Path] = None, *, prd_text: str = "",
             "reason": f"{type(_llm_obs_exc).__name__}:{str(_llm_obs_exc)[:160]}",
         }
     output_root = root / "platform_outputs" / _safe_project(project)
-    write_scan_result(
+    _persist_started = time.time()
+    _persist_receipt = write_scan_result(
         output_root / "scan_result.json",
         result,
         # 编译产物（v12 实验/义务计划快照）占 result ~90% 且与执行结果无关：
         # 落盘只保留身份行（findings/ledger/执行结果全量），落盘从 ~30min
         # 压到 ~2min。内存 result 不变（剪枝只发生在持久化副本）。
         prune_compiled_experiments=True,
+    )
+    # 阶段计时可观测（WARNING 级：INFO 会被产品日志根级别静默丢弃）。
+    # 定位回测慢点必须能看到各阶段真实耗时，否则优化只能靠猜。
+    _persist_timing = _as_dict(_persist_receipt).get("timing") or {}
+    _LOGGER.warning(
+        "scan_stage_timing project=%s planning_execution_ms=%s persist_ms=%s "
+        "persist_stages=%s",
+        project,
+        duration_ms,
+        int((time.time() - _persist_started) * 1000),
+        _persist_timing,
     )
     increment_scan_counter(output_root / "scan_counter.json")
     _persist_customer_ready_static_artifacts(project, root, result)
@@ -1146,13 +1158,20 @@ def _scan_impl(project: str, root: Optional[Path] = None, *, prd_text: str = "",
     # The mainline consumes learned knowledge as a bounded ranking boost at
     # planning time (learning_knowledge_consumption.py); probe-pool files
     # without a mainline consumer are no longer produced.
+    # Learning is gated on THIS run's formal deliveries (current_formal_findings),
+    # never on the archive-merged ``confirmed`` list. Verified-archive hold-overs
+    # were already learned in the run that first delivered them; re-running the
+    # whole closed-loop over them every scan re-learns the same 120 defects and
+    # bloats the SQLite KB, adding ~20min of post-processing to a regression run
+    # that discovered nothing new. A regression run with zero new formal
+    # deliveries therefore skips learning entirely.
     try:
         from .closed_loop_feedback import build_closed_loop_context
         from .auto_learning_trigger import AutoLearningTrigger, LearningTriggerConfig
 
-        if confirmed:
+        if current_formal_findings:
             feedback = build_closed_loop_context(
-                project, root, confirmed, consumed_context=context.get("learned_knowledge")
+                project, root, current_formal_findings, consumed_context=context.get("learned_knowledge")
             )
             result["closed_loop"] = {
                 "patterns": feedback.get("total_patterns", 0),

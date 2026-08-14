@@ -46,6 +46,7 @@ from .runtime_binding_graph import (
 _original_preflight_experiment_executable = _core.preflight_experiment_executable
 _original_unresolved_body_placeholders = _core._unresolved_body_placeholders
 _original_load_actor_tokens = _core.load_actor_tokens
+_original_select_runtime_binding = _core._select_runtime_binding
 _CREDENTIAL_UNRESOLVED_TOKEN = "QUALIBUG_CREDENTIAL_REF_UNRESOLVED"
 _CREDENTIAL_UNRESOLVED_PLACEHOLDER = "{" + _CREDENTIAL_UNRESOLVED_TOKEN + "}"
 _CREDENTIAL_ROOT_CONTEXT: ContextVar[Path | None] = ContextVar(
@@ -96,27 +97,19 @@ def _select_runtime_binding(
     *,
     preferred_body: Any = None,
 ) -> dict[str, str]:
-    governed_body = body
-    governed_path = _text(target_path)
-    if governed_path.startswith("@state="):
-        from .runtime_binding_materializer_base import (
-            _STATE_TARGET_PATH_RE,
-            _state_selected_entity,
-        )
-
-        match = _STATE_TARGET_PATH_RE.match(governed_path)
-        if not match:
-            return {}
-        required_state = _text(match.group(1)).lower()
-        governed_path = _text(match.group(2))
-        selected = _state_selected_entity(
-            _runtime_entity_candidates(governed_body),
-            required_state,
-        )
-        if not selected:
-            return {}
-        governed_body = selected
-    return _structural_bind_entity_fields(governed_body, governed_path)
+    # The established mechanics already implement state-scoped target paths and
+    # the source-declared mutation-field selection (``preferred_body``). This
+    # facade only supplies the strict runtime entity-candidate authority
+    # (``_runtime_entity_candidates`` below); re-implementing selection here
+    # previously dropped the mutation-field preference and regressed runtime
+    # binding to "first row in list order". Delegate to the original mechanics,
+    # which resolves ``_runtime_entity_candidates`` from this module's strict
+    # override at call time.
+    return _original_select_runtime_binding(
+        body,
+        target_path,
+        preferred_body=preferred_body,
+    )
 
 
 def _operation_method_authority(

@@ -68,6 +68,26 @@ def _matrix_structure(*, result_value: str = "允许发货", condition_value: st
             "page_count": 1,
             "text_page_count": 1,
         },
+        "ingestion_pipeline_receipt": {
+            "schema": "qualibug.document-ingestion-pipeline-receipt.v1",
+            "source_id": "source-matrix",
+            "filename": "matrix.pdf",
+            "final_status": "COMPLETE",
+        },
+        "evidence_closure_receipt": {
+            "schema": "qualibug.document-evidence-closure-receipt.v1",
+            "status": "PASS",
+            "source_id": "source-matrix",
+            "filename": "matrix.pdf",
+            "formal_authority_block_count": len(blocks),
+            "traceable_authority_block_count": len(blocks),
+            "exact_address_authority_block_count": len(blocks),
+            "untraceable_authority_block_count": 0,
+            "weak_address_authority_block_count": 0,
+            "locator_conflict_count": 0,
+            "source_traceability_rate": 1.0,
+            "exact_address_rate": 1.0,
+        },
         "unsupported_content": [],
     }
 
@@ -112,8 +132,9 @@ def _fact(
     *,
     modality: str,
     condition: str = "状态=已审核",
+    authorization: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    return {
+    fact = {
         "fact_id": fact_id,
         "status": "ACCEPTED",
         "kind": "RULE",
@@ -136,6 +157,9 @@ def _fact(
         "postconditions": [],
         "exceptions": [],
     }
+    if authorization is not None:
+        fact["authorization_semantics"] = authorization
+    return fact
 
 
 def test_decision_matrix_row_compiles_to_candidate_behavior() -> None:
@@ -188,7 +212,11 @@ def test_numeric_condition_normalizes_chinese_scale() -> None:
 
 
 def test_matching_fact_and_matrix_row_merge_into_confirmed_behavior() -> None:
-    fact = _fact("fact-allow", modality="MAY")
+    fact = _fact(
+        "fact-allow",
+        modality="MAY",
+        authorization={"decision": "ALLOW", "source_backed": True},
+    )
     asset = _asset(_matrix_structure(), [fact])
     _rows, behaviors, conflicts, unknowns, gate = build_governed_business_behavior_ir(
         asset, [fact], [_operation()]
@@ -206,8 +234,16 @@ def test_matching_fact_and_matrix_row_merge_into_confirmed_behavior() -> None:
 
 
 def test_same_conditions_allow_and_deny_create_blocking_behavior_conflict() -> None:
-    allow = _fact("fact-allow", modality="MAY")
-    deny = _fact("fact-deny", modality="MUST_NOT")
+    allow = _fact(
+        "fact-allow",
+        modality="MAY",
+        authorization={"decision": "ALLOW", "source_backed": True},
+    )
+    deny = _fact(
+        "fact-deny",
+        modality="MUST_NOT",
+        authorization={"decision": "DENY", "source_backed": True},
+    )
     asset = _asset(_matrix_structure(), [allow, deny])
     _rows, behaviors, conflicts, _unknowns, gate = build_governed_business_behavior_ir(
         asset, [allow, deny], [_operation()]
@@ -419,6 +455,7 @@ def test_multi_branch_condition_frames_project_without_silent_merge() -> None:
             "status": "ACCEPTED",
             "modality": "MUST_NOT",
             "polarity": "NEGATIVE",
+            "authorization_semantics": {"decision": "DENY", "source_backed": True},
             "action": {"canonical": "审批", "raw": "审批"},
             "subject": {"actor_refs": ["普通用户"], "entity_refs": ["订单"]},
             "object": {"entity_refs": ["订单"]},

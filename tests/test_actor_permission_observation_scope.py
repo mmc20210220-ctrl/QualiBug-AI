@@ -259,9 +259,11 @@ def test_runtime_context_reranks_owner_outside_compile_attempt_prefix(
             }],
         }
 
-    monkeypatch.setattr(experiment_executor, "_execute_one_governed", governed)
     monkeypatch.setattr(
-        experiment_executor,
+        experiment_executor._core, "_execute_one_governed", governed
+    )
+    monkeypatch.setattr(
+        experiment_executor._core,
         "enforce_oracle_validity_gates",
         lambda **kwargs: kwargs["result"],
     )

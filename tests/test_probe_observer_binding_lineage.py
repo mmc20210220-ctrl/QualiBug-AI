@@ -190,10 +190,10 @@ def test_multiple_event_contracts_remain_draft_only() -> None:
     assert probe["knowledge_lineage"][
         "event_observer_execution_handoff_ready"
     ] is False
-    assert probe["formal_event_contract_refs"] == [
+    assert probe["formal_event_contract_refs"] == sorted([
         EVENT_CONTRACT_REF,
         second_contract,
-    ]
+    ])
 
 
 def test_observer_identity_drift_blocks_probe() -> None:

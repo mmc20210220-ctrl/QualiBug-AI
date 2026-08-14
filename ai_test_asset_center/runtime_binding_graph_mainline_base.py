@@ -115,8 +115,17 @@ def _govern_fixture_cleanup_authority(
             }
         )
         if _text(receipt.get("status")) == "RESOLVED":
+            _cleanup_op = _dict(receipt.get("cleanup_operation"))
+            # Keep the executable cleanup list minimal (operation identity only);
+            # the full authority projection stays in the receipt for governance.
             setup["cleanup_operations"] = [
-                dict(_dict(receipt.get("cleanup_operation")))
+                {
+                    "operation_ref": _text(_cleanup_op.get("operation_ref")),
+                    "method": _text(_cleanup_op.get("method")),
+                    "path": normalize_path_placeholders(
+                        _text(_cleanup_op.get("path"))
+                    ),
+                }
             ]
             setup["cleanup_operation_authority_receipt"] = dict(receipt)
             row["fixture_setup"] = setup

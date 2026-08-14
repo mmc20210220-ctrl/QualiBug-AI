@@ -2130,6 +2130,8 @@ def finalize_experiment_execution(
         "schema_version": "qualibug.experiment-execution.v1",
         "experiment_id": eid,
         "obligation_id": oid,
+        "campaign_id": resolved_campaign_id,
+        "execution_id": resolved_execution_id,
         "status": status,
         "reason_code": harness_failure_reason if status == "HARNESS_FAILURE" else "",
         "detail": harness_failure_reason if status == "HARNESS_FAILURE" else "",

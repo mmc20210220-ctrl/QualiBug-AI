@@ -19,6 +19,9 @@ from .api_artifact_adapter import (
     _decode_payload,
 )
 from .contract import DocumentSource
+from .openapi_path_parameter_projection import (
+    apply_openapi_path_parameter_schema_projection,
+)
 from .openapi_schema_projection import (
     apply_openapi_schema_projection,
     normalize_api_json_pointer_locators,
@@ -248,6 +251,11 @@ class GuardedApiArtifactDocumentAdapter(ApiArtifactDocumentAdapter):
         )
         if kind == "openapi":
             document_ir = apply_openapi_schema_projection(
+                document_ir,
+                payload=dict(sanitized),
+                source=safe_source,
+            )
+            document_ir = apply_openapi_path_parameter_schema_projection(
                 document_ir,
                 payload=dict(sanitized),
                 source=safe_source,

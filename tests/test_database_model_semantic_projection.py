@@ -207,12 +207,12 @@ def test_composition_projects_database_models_before_understanding(
     monkeypatch.setattr(
         composition._base_api,
         "build_enterprise_business_knowledge_asset",
-        lambda project, root, options: dict(base_asset),
+        lambda project, root, options, **kwargs: dict(base_asset),
     )
     monkeypatch.setattr(
         composition,
         "_parsed_sources_for_context",
-        lambda asset, root: [],
+        lambda asset, root, **kwargs: [],
     )
     monkeypatch.setattr(
         composition,
@@ -255,9 +255,13 @@ def test_composition_projects_database_models_before_understanding(
     )
 
     assert calls[:3] == ["api", "database", "understanding"]
+    # Cognition now runs in two passes over the same compiled fact ledger
+    # (provisional first pass, then a re-run after structure-first fact
+    # compilation and identity governance). Both passes are the same authority.
     assert calls == [
         "api",
         "database",
+        "understanding",
         "understanding",
         "downstream",
         "jobs",

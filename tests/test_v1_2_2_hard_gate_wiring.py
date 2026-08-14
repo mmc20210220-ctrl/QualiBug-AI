@@ -23,23 +23,30 @@ class TestHardGateWiring:
         src = inspect.getsource(execute_one_experiment)
         assert "BLOCKED_BINDING_GRAPH_INVALID" in src
 
+    def _batch_wiring_src(self):
+        """Source of the module that owns batch executor wiring.
+
+        After the facade -> mechanics split, ``execute_selected_experiments`` in
+        ``experiment_batch_executor`` is a thin facade that delegates to
+        ``execute_selected_experiments_concurrent``. The prioritize / funnel /
+        attribution wiring now lives in the concurrent scheduler (and its
+        ``_apply_global_budget`` / ``_merge_group_batches`` helpers), not in the
+        facade body.
+        """
+        from ai_test_asset_center import experiment_batch_concurrent_scheduler
+        return inspect.getsource(experiment_batch_concurrent_scheduler)
+
     def test_batch_calls_prioritizer(self):
         """Batch executor calls prioritize_experiments."""
-        from ai_test_asset_center.experiment_batch_executor import execute_selected_experiments
-        src = inspect.getsource(execute_selected_experiments)
-        assert "prioritize_experiments" in src
+        assert "prioritize_experiments" in self._batch_wiring_src()
 
     def test_batch_calls_funnel(self):
         """Batch executor calls build_execution_coverage_funnel."""
-        from ai_test_asset_center.experiment_batch_executor import execute_selected_experiments
-        src = inspect.getsource(execute_selected_experiments)
-        assert "build_execution_coverage_funnel" in src
+        assert "build_execution_coverage_funnel" in self._batch_wiring_src()
 
     def test_batch_calls_attribution(self):
         """Batch executor calls attribute_all_blockers."""
-        from ai_test_asset_center.experiment_batch_executor import execute_selected_experiments
-        src = inspect.getsource(execute_selected_experiments)
-        assert "attribute_all_blockers" in src
+        assert "attribute_all_blockers" in self._batch_wiring_src()
 
     def test_orchestrator_version_v2(self):
         """Orchestrator outputs v2 schema."""

@@ -91,8 +91,12 @@ def test_compute_benchmark_with_ground_truth(tmp_path: Path) -> None:
     assert result.get("true_positives") == 2
     assert result.get("false_negatives") == 1
     assert result.get("recall") == round(2 / 3, 4)
-    assert result.get("precision") == 1.0  # both findings matched
-    assert result.get("false_positive_rate") == 0.0
+    # Commercial scoring contract: a seeded-defect benchmark has no
+    # false-positive authority, so precision/FPR are NOT_MEASURED; the truthful
+    # counterpart of "both findings matched" is benchmark_match_rate.
+    assert result.get("benchmark_match_rate") == 1.0  # both findings matched
+    assert result.get("precision") == "NOT_MEASURED"
+    assert result.get("false_positive_rate") == "NOT_MEASURED"
     assert result.get("high_value_recall") == round(2 / 3, 4)  # BUG_001(P0)+BUG_003(P0) found, BUG_002(P1) missed among 3 high-value bugs
     # Evidence completeness: both have request + response + assertion
     assert result.get("evidence_completeness_rate") == 1.0
@@ -158,7 +162,8 @@ def test_endpoint_coverage_alone_is_not_counted_as_a_detected_bug(tmp_path: Path
     )
 
     assert result["true_positives"] == 0
-    assert result["false_positives"] == 1
+    assert result["false_positives"] is None
+    assert result["ground_truth_unmatched_runtime_defect_count"] == 1
     assert result["recall"] == 0.0
     assert result["canonical_unmatched"] == ["cdef_permission"]
     assert result["gt_unmatched"] == ["BUG_PRICE"]
@@ -220,15 +225,18 @@ def test_canonical_matching_is_order_independent_and_globally_optimal(
         ("cdef_b", "GT-1"): 0.85,
     }
 
+    # The matching implementation now lives in _benchmark_compute_mechanics;
+    # the facade delegates to it, so patch the core module the computation
+    # actually resolves these names from.
     monkeypatch.setattr(
-        benchmark_compute_module,
+        benchmark_compute_module._core,
         "_score_finding_gt",
         lambda finding, gt: edge_scores.get(
             (finding["canonical_defect_id"], gt["bug_id"])
         ),
     )
     monkeypatch.setattr(
-        benchmark_compute_module,
+        benchmark_compute_module._core,
         "_match_evidence_finding_gt",
         lambda finding, gt: (
             {"criteria": ["synthetic_test_edge"]}

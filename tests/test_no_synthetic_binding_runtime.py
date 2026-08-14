@@ -20,7 +20,11 @@ class TestNoSyntheticBindingRuntime:
 
     def test_blocked_status_for_no_source(self):
         """Binding without verified source gets blocked status."""
-        from ai_test_asset_center.experiment_fixture_materializer import materialize_experiment_fixtures
+        # The blocking logic now lives in the fixture-materializer core after the
+        # facade split; the public facade delegates to it.
+        from ai_test_asset_center.experiment_fixture_materializer_core import (
+            materialize_experiment_fixtures,
+        )
         src = inspect.getsource(materialize_experiment_fixtures)
         assert "binding_has_no_verified_runtime_source" in src
 

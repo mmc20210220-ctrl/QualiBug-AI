@@ -172,7 +172,7 @@ def test_resolver_exceptions_are_logged_and_blocked() -> None:
 
     source = (
         Path(__file__).resolve().parents[1]
-        / "ai_test_asset_center" / "experiment_compiler_obligation.py"
+        / "ai_test_asset_center" / "experiment_compiler_obligation_core.py"
     ).read_text(encoding="utf-8")
     marker = "from .source_declared_readback_resolver import"
     assert marker in source

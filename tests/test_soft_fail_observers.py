@@ -18,9 +18,13 @@ def test_business_outcome_detects_soft_reject_envelope() -> None:
 
 
 def test_http_response_observer_surfaces_soft_reject() -> None:
+    # When a body carries a decision flag (success/ok/valid/…), the top-level
+    # ``code`` key is the entity's own code (e.g. a coupon code), not a
+    # rejection status; the decision flag is the authoritative soft-reject
+    # signal. The status token still surfaces through the ``status`` key.
     receipt = _observe_http_response(
         {},
-        {"status_code": 200, "body": {"success": False, "code": "DENIED"}},
+        {"status_code": 200, "body": {"success": False, "status": "DENIED"}},
     )
     assert receipt["status"] == "OBSERVED"
     assert receipt["evidence"]["business_rejected"] is True
@@ -127,6 +131,8 @@ def test_declared_effect_observers_join_via_shared_entity() -> None:
                 "from_ref": "op-manual-success",
                 "to_ref": "ent-payment",
                 "operation_ref": "op-manual-success",
+                "source_refs": [{"source_id": "api-doc"}],
+                "status": "accepted",
             },
             {
                 "id": "rel-observes",
@@ -134,6 +140,8 @@ def test_declared_effect_observers_join_via_shared_entity() -> None:
                 "from_ref": "op-read-payment",
                 "to_ref": "ent-payment",
                 "operation_ref": "op-read-payment",
+                "source_refs": [{"source_id": "api-doc"}],
+                "status": "accepted",
             },
         ],
     }

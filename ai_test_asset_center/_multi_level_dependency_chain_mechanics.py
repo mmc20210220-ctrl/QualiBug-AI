@@ -51,6 +51,7 @@ dropped, never guessed.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from .money_precondition_chain import (

@@ -58,7 +58,13 @@ def test_body_example_bindings_resolve_declared_example() -> None:
 
 
 def test_body_example_bindings_match_body_path_leaf() -> None:
-    """A nested body path (user.id) resolves via its leaf field name."""
+    """An identity-shaped body path (user.id) is fail-closed, never source-bound.
+
+    Source-declared request-schema examples/defaults may supply ordinary
+    business scalars, but never resource identity. ``user_id`` names an
+    identity reference, so the source-example fallback must refuse to bind it
+    (return None) rather than minting a fabricated ``42`` resource id.
+    """
     op = _op_with_body_schema(properties={
         "user": {
             "type": "object",
@@ -70,8 +76,7 @@ def test_body_example_bindings_match_body_path_leaf() -> None:
         ["user_id"],
         {"user_id": ["user.id"]},
     )
-    assert bindings is not None
-    assert bindings["user_id"]["materialized_value"] == "42"
+    assert bindings is None
 
 
 def test_body_example_bindings_return_none_without_examples() -> None:

@@ -292,6 +292,18 @@ def apply_authority_decisions_to_conflicts(
         if not schema and not _participant_fact_ids(conflict):
             updated.append(conflict)
             continue
+        # An already-governed conflict carries an explicit inline operator decision
+        # (a reused authority ledger entry). It must not be downgraded by a durable
+        # ledger that predates or omits it; only freshly detected conflicts are
+        # re-reconciled here.
+        existing_decision = _dict(conflict.get("authority_decision"))
+        if (
+            _text(conflict.get("status")).upper()
+            in {"RESOLVED", "SUPERSEDED", "DISMISSED"}
+            and _text(existing_decision.get("decision_id"))
+        ):
+            updated.append(conflict)
+            continue
         participants = _participant_fact_ids(conflict)
         decision = _match_decision(conflict, decisions)
         if not decision:

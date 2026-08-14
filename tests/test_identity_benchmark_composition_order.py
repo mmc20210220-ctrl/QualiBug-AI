@@ -99,16 +99,16 @@ def test_structural_candidates_run_only_after_final_identity_model_projection() 
     structural_line = next(
         line
         for name, line in calls
-        if name == "project_identity_structural_candidates"
+        if name == "project_distinctness_structural_candidates"
     )
     receipt_line = next(
         line for name, line in calls if name == "_attach_identity_audit_receipts"
     )
 
     assert legacy_line < identity_line < recognition_line < structural_line < receipt_line
-    assert source.count("project_identity_structural_candidates(") == 1
+    assert source.count("project_distinctness_structural_candidates(") == 1
     assert (
-        "project_identity_structural_candidates(asset, model, resolution)"
+        "project_distinctness_structural_candidates(asset, model, resolution)"
         in source
     )
     assert 'model["identity_structural_evidence"]' in source
@@ -132,7 +132,7 @@ def test_structural_review_confirmation_rebuilds_through_same_identity_builder()
     candidate_line = next(
         line
         for name, line in calls
-        if name == "project_identity_structural_candidates"
+        if name == "project_distinctness_structural_candidates"
     )
     admission_line = next(
         line

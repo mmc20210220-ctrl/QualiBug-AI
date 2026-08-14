@@ -38,11 +38,14 @@ def test_unsupported_authorization_scheme_is_rejected() -> None:
 
 def test_bearer_without_tenant_subject_is_rejected(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     monkeypatch.setattr(service.jwt_auth, "verify_token", lambda token: {"role": "admin"})
 
-    with pytest.raises(service.TenantAuthenticationError, match="bearer token"):
-        service._tenant_from_headers({"Authorization": "Bearer subjectless"})
+    with pytest.raises(
+        service.TenantAuthenticationError, match="bearer account no longer exists"
+    ):
+        service._tenant_from_headers({"Authorization": "Bearer subjectless"}, root=tmp_path)
 
 
 def test_invalid_tenant_cookie_is_rejected_instead_of_ignored(
@@ -60,11 +63,13 @@ def test_api_key_verification_failure_is_not_hidden(
 ) -> None:
     monkeypatch.setattr(
         service.db_persist,
-        "verify_api_key",
-        lambda root, key: (_ for _ in ()).throw(RuntimeError("tenant database unavailable")),
+        "authenticate_tenant",
+        lambda root, key, password="": (_ for _ in ()).throw(
+            RuntimeError("tenant database unavailable")
+        ),
     )
 
-    with pytest.raises(service.TenantAuthenticationError, match="API key verification failed"):
+    with pytest.raises(RuntimeError, match="tenant database unavailable"):
         service._tenant_from_headers({"X-API-Key": "key"}, root=tmp_path)
 
 
@@ -78,7 +83,11 @@ def test_no_explicit_tenant_credential_keeps_local_default(
 ) -> None:
     # Patch where the resolver is defined: _tenant_from_headers calls its own
     # module-level _current_tenant, so rebinding the re-export on the facade
-    # would leave the delegation under test untouched.
+    # would leave the delegation under test untouched. No explicit credential
+    # now fail-closes to the local development principal, which is only issued
+    # when local development actor mode is enabled.
+    monkeypatch.delenv("QUALIBUG_ALLOW_PUBLIC_BIND", raising=False)
+    monkeypatch.setenv("QUALIBUG_LOCAL_DEV_ACTOR", "1")
     monkeypatch.setattr(tenant_auth, "_current_tenant", lambda: "local-default")
 
     assert service._tenant_from_headers({}) == "local-default"
@@ -90,8 +99,9 @@ def test_handler_returns_401_for_invalid_explicit_tenant_credential(
 ) -> None:
     monkeypatch.setattr(service.jwt_auth, "verify_token", lambda token: None)
 
-    class Handler:
+    class Handler(service.AuthScopeMixin):
         headers = {"Authorization": "Bearer invalid"}
+        server = None
 
         def __init__(self) -> None:
             self.status: int | None = None

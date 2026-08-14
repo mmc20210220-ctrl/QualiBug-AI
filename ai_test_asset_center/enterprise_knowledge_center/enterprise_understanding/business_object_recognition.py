@@ -32,6 +32,13 @@ def recognize_business_objects(asset: dict[str, Any]) -> dict[str, Any]:
     governed = asset
     if not business_object_source_conflicts(governed):
         governed = project_business_object_source_conflicts(governed)
+    # The operator authority ledger resolves only business-object declaration
+    # conflicts here. Running it unconditionally also re-reconciles every other
+    # cross-document conflict (modality/authorization/…) and mutates
+    # ``enterprise_comprehension_gate``, which masks the model's own conflict
+    # gate or clears a legitimately blocked upstream gate. Gate the invocation
+    # on the presence of an actual object-declaration conflict.
+    if business_object_source_conflicts(governed):
         governed = apply_authority_decisions_to_conflicts(
             governed,
             project_id=str(governed.get("project_id") or ""),

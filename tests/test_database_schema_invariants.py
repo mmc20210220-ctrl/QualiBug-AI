@@ -146,6 +146,10 @@ def test_readonly_numeric_audit_compiles_and_evaluates_explicit_boundary() -> No
     })
     assert clean["passed"] is True
 
+    # A numeric boundary is decidable on a single row (one observed row below
+    # the boundary is already violation evidence), unlike a uniqueness claim
+    # which needs two rows to exhibit a duplicate. A single clean row therefore
+    # passes instead of sealing INDETERMINATE.
     small = _evaluate_readonly_numeric_audit({
         "spec": assertion,
         "observations": {
@@ -153,8 +157,8 @@ def test_readonly_numeric_audit_compiles_and_evaluates_explicit_boundary() -> No
             "body": {"items": [{"total_amount": "100.00"}]},
         },
     })
-    assert small["passed"] is None
-    assert small["reason_code"] == "AUDIT_COLLECTION_TOO_SMALL"
+    assert small["passed"] is True
+    assert small["reason_code"] == ""
 
 
 def test_readonly_audit_positive_operator_rejects_zero() -> None:

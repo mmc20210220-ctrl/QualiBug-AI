@@ -79,7 +79,16 @@ def prepare_identity_safe_behavior_surfaces(
     """Remove behavior mentions from identity input while retaining audit traces."""
     projected = clone_asset_for_understanding_projection(asset)
     bindings = _behavior_surface_bindings(recognition)
-    binding_keys = set(bindings)
+    # Only genuine short surfaces (surface label differs from its parent) are
+    # behavior mentions to strip from identity input. Self-bindings emitted for
+    # ACCEPTED explicit objects reuse the object's own label and must not erase
+    # that identity coordinate.
+    binding_keys = {
+        key
+        for key, binding in bindings.items()
+        if comparison_key(binding.get("surface_label"))
+        != comparison_key(binding.get("parent_label"))
+    }
     ledger = dict(as_dict(projected.get("business_fact_ledger")))
     facts: list[dict[str, Any]] = []
     for raw in as_list(ledger.get("items")):

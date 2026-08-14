@@ -40,13 +40,21 @@ from ai_test_asset_center.money_precondition_chain import (
 )
 
 
-def _entity(entity_id: str, name: str) -> dict[str, Any]:
-    return {
+def _entity(
+    entity_id: str,
+    name: str,
+    *,
+    collection: str = "",
+) -> dict[str, Any]:
+    entity: dict[str, Any] = {
         "id": entity_id,
         "name": name,
         "source_entity_names": [name + "s"],
         "identity_fields": ["id"],
     }
+    if collection:
+        entity["collection_path"] = collection
+    return entity
 
 
 def _post(op_id: str, path: str, example: dict[str, Any]) -> dict[str, Any]:
@@ -80,6 +88,28 @@ def _get(op_id: str, path: str) -> dict[str, Any]:
     }
 
 
+def _body_ref(op_id: str, field: str, entity_ref: str) -> dict[str, Any]:
+    """Explicit source-declared body-reference relation.
+
+    A request field name (``userId``) is not entity authority — the source
+    must declare the FK target. These rows match the shape the
+    ``database_body_reference_projection`` emits from an operator-approved
+    API/DB mapping or an exact database foreign key.
+    """
+    return {
+        "operation_ref": op_id,
+        "body_path": field,
+        "target_entity_ref": entity_ref,
+        "status": "RESOLVED",
+        "source_refs": [
+            {
+                "kind": "database_foreign_key",
+                "locator": f"{op_id}.{field} -> {entity_ref}.id",
+            }
+        ],
+    }
+
+
 def _three_level_ir() -> dict[str, Any]:
     """user -> address -> order: order create needs addressId; address create
     needs userId; user create has no references."""
@@ -87,7 +117,10 @@ def _three_level_ir() -> dict[str, Any]:
         "schema_version": "qualibug.behavior-ir.v2",
         "entities": [
             _entity("ent_user", "user"),
-            _entity("ent_address", "address"),
+            # "address" pluralizes irregularly (addresses), so the entity
+            # declares its collection path explicitly — structural +s
+            # derivation cannot invent the correct surface.
+            _entity("ent_address", "address", collection="/api/addresses"),
             _entity("ent_order", "order"),
         ],
         "operations": [
@@ -153,6 +186,15 @@ def _three_level_ir() -> dict[str, Any]:
                 "status": "accepted",
                 "source_refs": [{"kind": "document", "locator": "prd"}],
             },
+        ],
+        # Explicit source-backed body-reference relations. A field name like
+        # ``userId`` is not entity authority (no structural name inference);
+        # the source must declare the FK target for each reference field the
+        # dependency chain traverses.
+        "body_reference_relations": [
+            _body_ref("op_create_address", "userId", "ent_user"),
+            _body_ref("op_create_order", "addressId", "ent_address"),
+            _body_ref("op_pay", "orderId", "ent_order"),
         ],
         "invariants": [],
     }
@@ -270,6 +312,10 @@ def test_dependency_cycle_blocks_with_named_reason() -> None:
     # order -> address -> user -> order (user create now references orderId).
     user_op = next(op for op in ir["operations"] if op["id"] == "op_create_user")
     user_op["request_example"] = {"orderId": "<order_id>"}
+    # The user create now references the order entity, closing the cycle.
+    ir["body_reference_relations"].append(
+        _body_ref("op_create_user", "orderId", "ent_order")
+    )
     result = plan_multi_level_dependency_chain(
         behavior_ir=ir,
         entity_id="ent_order",
@@ -291,6 +337,11 @@ def test_self_reference_is_not_a_cycle() -> None:
         "orderId": "<order_id>",
         "addressId": "<address_id>",
     }
+    # orderId is the create's own identity echoed back: declare the explicit
+    # FK target so the planner resolves it as a self-reference and skips it.
+    ir["body_reference_relations"].append(
+        _body_ref("op_create_order", "orderId", "ent_order")
+    )
     result = plan_multi_level_dependency_chain(
         behavior_ir=ir,
         entity_id="ent_order",
@@ -314,11 +365,19 @@ def test_too_deep_chain_blocks_with_named_reason() -> None:
         _entity(f"ent_e{i}", f"entity_{i}") for i in range(MAX_DEPENDENCY_DEPTH + 2)
     ]
     ops: list[dict[str, Any]] = []
+    body_refs: list[dict[str, Any]] = []
     for i, entity in enumerate(chain_entities):
         example: dict[str, Any] = {"name": f"n{i}"}
         if i + 1 < len(chain_entities):
             next_name = chain_entities[i + 1]["name"]
             example[f"{next_name}Id"] = f"<{next_name}_id>"
+            body_refs.append(
+                _body_ref(
+                    f"op_create_{entity['name']}",
+                    f"{next_name}Id",
+                    chain_entities[i + 1]["id"],
+                )
+            )
         ops.append(_post(f"op_create_{entity['name']}", f"/api/{entity['name']}s", example))
         ops.append(_get(f"op_list_{entity['name']}", f"/api/{entity['name']}s"))
         ops.append(_delete(f"op_del_{entity['name']}", f"/api/{entity['name']}s/{{id}}"))
@@ -347,6 +406,7 @@ def test_too_deep_chain_blocks_with_named_reason() -> None:
             for op in ops
             if op["method"] == "POST"
         ],
+        "body_reference_relations": body_refs,
         "invariants": [],
     }
     result = plan_multi_level_dependency_chain(
@@ -443,6 +503,10 @@ def test_diamond_binds_every_parent_reference_field() -> None:
         "addressId": "<address_id>",
         "billingAddressId": "<address_id>",
     }
+    # Both parent fields are explicit FK targets of the same entity.
+    ir["body_reference_relations"].append(
+        _body_ref("op_create_order", "billingAddressId", "ent_address")
+    )
     result = plan_multi_level_dependency_chain(
         behavior_ir=ir,
         entity_id="ent_order",
@@ -503,6 +567,10 @@ def test_warehouse_terms_plan_identically() -> None:
         }
         for op in ir["operations"]
         if op["method"] == "POST"
+    ]
+    ir["body_reference_relations"] = [
+        _body_ref("op_create_shipment", "locationId", "ent_location"),
+        _body_ref("op_dispatch", "shipmentId", "ent_shipment"),
     ]
     result = plan_multi_level_dependency_chain(
         behavior_ir=ir,
@@ -568,6 +636,11 @@ def test_plural_entity_names_and_nested_collection_resolve() -> None:
         }
         for op in ir["operations"]
         if op["method"] == "POST"
+    ]
+    ir["body_reference_relations"] = [
+        _body_ref("op_create_users_addresses", "userId", "ent_users"),
+        _body_ref("op_create_orders", "addressId", "ent_addresses"),
+        _body_ref("op_pay", "orderId", "ent_orders"),
     ]
     result = plan_multi_level_dependency_chain(
         behavior_ir=ir,
@@ -673,6 +746,17 @@ def test_produces_relation_create_is_used_when_collection_missing() -> None:
             "source_refs": [{"kind": "document", "locator": "prd"}],
         }
     )
+    # The produced create still needs a declared fixture actor (the create
+    # authority refuses caller-order inference), so declare the permit.
+    ir["relations"].append(
+        {
+            "relation_type": "permits",
+            "actor_ref": "actor_buyer",
+            "operation_ref": "op_register_user",
+            "status": "accepted",
+            "source_refs": [{"kind": "document", "locator": "prd"}],
+        }
+    )
     result = plan_multi_level_dependency_chain(
         behavior_ir=ir,
         entity_id="ent_order",
@@ -710,6 +794,17 @@ def test_produces_create_without_compensator_is_reported_not_invented() -> None:
             "relation_type": "produces",
             "from_ref": "op_register_user",
             "to_ref": "ent_user",
+            "operation_ref": "op_register_user",
+            "status": "accepted",
+            "source_refs": [{"kind": "document", "locator": "prd"}],
+        }
+    )
+    # Declare the fixture actor so the create authority reaches the cleanup
+    # gate (the missing compensator is what this test must surface).
+    ir["relations"].append(
+        {
+            "relation_type": "permits",
+            "actor_ref": "actor_buyer",
             "operation_ref": "op_register_user",
             "status": "accepted",
             "source_refs": [{"kind": "document", "locator": "prd"}],

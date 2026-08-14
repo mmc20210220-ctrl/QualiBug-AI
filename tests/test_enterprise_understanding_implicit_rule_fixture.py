@@ -29,6 +29,11 @@ IDEMPOTENCY = "同一付款请求不得重复成功扣款；重复提交时业�
 
 def _git_blob_sha(path: Path) -> str:
     payload = path.read_bytes()
+    # The frozen SHAs are the *git blob* SHAs. With core.autocrlf=true a Windows
+    # checkout materializes text files with CRLF, but git stores the normalized
+    # LF bytes in the blob. Hash the LF-normalized content so the frozen git
+    # blobs match on every platform without depending on the checkout's EOL.
+    payload = payload.replace(b"\r\n", b"\n")
     header = f"blob {len(payload)}\0".encode("utf-8")
     return hashlib.sha1(header + payload).hexdigest()
 

@@ -7,6 +7,9 @@ import json
 import pytest
 
 import ai_test_asset_center.customer_delivery_gate_v2 as delivery_gate_v2
+from ai_test_asset_center import (
+    _customer_delivery_gate_v2_mechanics as delivery_gate_v2_mechanics,
+)
 from ai_test_asset_center.contract_oracles import (
     ACTIVATION_RECEIPT_SCHEMA,
     CONTRACT_ORACLE_RECEIPT_SCHEMA,
@@ -253,12 +256,12 @@ def test_delivery_gate_rejects_observer_activation_reference_mismatch() -> None:
 
 def test_reproduction_requires_exact_obligation_lineage(monkeypatch) -> None:
     monkeypatch.setattr(
-        delivery_gate_v2,
+        delivery_gate_v2_mechanics,
         "validate_delivery_execution_receipt",
         lambda value: value,
     )
     monkeypatch.setattr(
-        delivery_gate_v2,
+        delivery_gate_v2_mechanics,
         "validate_contract_oracle_receipt",
         lambda value: value,
     )
@@ -294,22 +297,22 @@ def test_reproduction_requires_exact_obligation_lineage(monkeypatch) -> None:
 
 def test_delivery_evidence_requires_exact_obligation_lineage(monkeypatch) -> None:
     monkeypatch.setattr(
-        delivery_gate_v2,
+        delivery_gate_v2_mechanics,
         "validate_contract_evidence_receipt",
         lambda value: value,
     )
     monkeypatch.setattr(
-        delivery_gate_v2,
+        delivery_gate_v2_mechanics,
         "validate_observer_receipt",
         lambda value: value,
     )
     monkeypatch.setattr(
-        delivery_gate_v2,
+        delivery_gate_v2_mechanics,
         "validate_contract_oracle_receipt",
         lambda value: value,
     )
     monkeypatch.setattr(
-        delivery_gate_v2,
+        delivery_gate_v2_mechanics,
         "validate_reproduction_receipt",
         lambda value: value,
     )
@@ -353,12 +356,12 @@ def test_reproduction_never_synthesizes_observation_receipt_identity(
     monkeypatch,
 ) -> None:
     monkeypatch.setattr(
-        delivery_gate_v2,
+        delivery_gate_v2_mechanics,
         "validate_delivery_execution_receipt",
         lambda value: value,
     )
     monkeypatch.setattr(
-        delivery_gate_v2,
+        delivery_gate_v2_mechanics,
         "validate_contract_oracle_receipt",
         lambda value: value,
     )
@@ -402,12 +405,12 @@ def test_reproduction_never_synthesizes_observation_receipt_identity(
 
 def test_reproduction_never_synthesizes_request_semantics(monkeypatch) -> None:
     monkeypatch.setattr(
-        delivery_gate_v2,
+        delivery_gate_v2_mechanics,
         "validate_delivery_execution_receipt",
         lambda value: value,
     )
     monkeypatch.setattr(
-        delivery_gate_v2,
+        delivery_gate_v2_mechanics,
         "validate_contract_oracle_receipt",
         lambda value: value,
     )

@@ -16,7 +16,7 @@ def test_post_compensator_relation_is_protocol_gap_without_safe_delete() -> None
                 {
                     "id": "cancel-order",
                     "method": "POST",
-                    "path": "/api/orders/{id}/cancel",
+                    "path": "/api/orders/cancel",
                 },
             ],
             "relations": [
@@ -80,7 +80,7 @@ def test_unproven_post_compensator_can_fall_back_to_unique_identity_delete() -> 
                 {
                     "id": "cancel-order",
                     "method": "POST",
-                    "path": "/api/orders/{id}/cancel",
+                    "path": "/api/orders/cancel",
                 },
                 {
                     "id": "delete-order",

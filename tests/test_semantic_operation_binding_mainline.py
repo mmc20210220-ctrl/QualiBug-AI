@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from ai_test_asset_center.behavior_ir import (
     _content_addressed_id,
     _fact_node,
@@ -210,14 +212,22 @@ def test_public_discovery_runtime_installs_binding_before_plan_compilation() -> 
     )
     # The public entry point is the binding-layer plan wrapper (it binds the
     # scan UI/event/performance/stability contract contexts around one
-    # planning call) and it must delegate to the planning authority; the
-    # wrapper never replaces compilation.
-    assert discovery_runtime.build_discovery_plan is (
-        discovery_runtime_semantic_binding.build_discovery_plan
-    )
+    # planning call) plus scan-stage progress marking. It must delegate to the
+    # planning authority through the binding layer, never replace compilation.
+    # The delegation below proves the full chain (runtime → binding → planning).
+    from ai_test_asset_center import discovery_runtime_planning as _planning_mod
 
+    assert discovery_runtime.build_discovery_plan is not (
+        _planning_mod.build_discovery_plan
+    ), "runtime entry must be a distinct public wrapper, not a raw re-export"
+
+    from dataclasses import dataclass, field as _dc_field
+
+    @dataclass
     class _ProbeInputs:
-        campaign_context: dict = {}
+        campaign_context: dict = _dc_field(default_factory=dict)
+        root: object = Path(".")
+        project: str = "probe"
 
     delegated: list[tuple] = []
     sentinel = object()

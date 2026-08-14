@@ -19,7 +19,13 @@ class _JsonCaptureHandler:
         self.payload = body
 
     def _build_command_center(self, project: str, root: Path) -> dict:
-        return {"data": {"risks": [{"risk_id": "finding-1"}]}}
+        return {
+            "data": {
+                "risks": [
+                    {"id": "finding-1", "finding_persistence_id": "finding-1"}
+                ]
+            }
+        }
 
     def _request_tenant(self) -> str:
         return "tenant-demo"

@@ -5,9 +5,6 @@ from ai_test_asset_center.experiment_compile_freezer import (
     BLOCKED_READBACK_CONTRACT_INCOMPLETE,
     freeze_compiled_experiment,
 )
-from ai_test_asset_center.flow_data_execution_contract import (
-    BLOCKED_FLOW_DATA_EXECUTION_CONTRACT_INCOMPLETE,
-)
 from ai_test_asset_center.flow_data_requirement import (
     BLOCKED_FLOW_DATA_BINDING_INCOMPLETE,
 )
@@ -29,6 +26,7 @@ def _policy(*, terminal: str = "business_state_changed") -> dict:
         "expected_max_delay_ms": 1000,
         "poll_interval_ms": 100,
         "max_attempts": 5,
+        "required_stable_observations": 1,
         "terminal_condition": terminal,
     }
 
@@ -68,8 +66,10 @@ def _experiment() -> dict:
         "binding_plan": [
             {
                 "target": "id",
-                "status": "runtime_resolvable",
+                "status": "bound",
+                "source_priority": "source_declared_path_example",
                 "target_path": "/items/{id}",
+                "materialized_value": "item_1",
                 "resolver_operations": [
                     {
                         "operation_ref": "op_read",
@@ -283,6 +283,13 @@ def test_graph_output_can_supply_later_step_with_explicit_binding_ref() -> None:
             "_execution_graph": graph,
         }
     )
+    experiment["binding_plan"].append(
+        {
+            "target": "confirmation_id",
+            "status": "runtime_resolvable",
+            "source_priority": "sequential_output_binding",
+        }
+    )
 
     frozen = freeze_compiled_experiment(experiment, behavior_ir=IR)
 
@@ -306,7 +313,7 @@ def test_sequential_output_binding_is_not_treated_as_executable() -> None:
 
     assert frozen["compile_receipt"]["status"] == "BLOCKED"
     assert frozen["compile_receipt"]["reason_code"] == (
-        BLOCKED_FLOW_DATA_EXECUTION_CONTRACT_INCOMPLETE
+        BLOCKED_FLOW_DATA_BINDING_INCOMPLETE
     )
     assert "OUTPUT_BINDING_EXECUTOR_UNAVAILABLE" in frozen[
         "compile_receipt"
@@ -323,7 +330,7 @@ def test_query_placeholder_requires_an_executable_binding_source() -> None:
 
     assert frozen["compile_receipt"]["status"] == "BLOCKED"
     assert frozen["compile_receipt"]["reason_code"] == (
-        BLOCKED_FLOW_DATA_EXECUTION_CONTRACT_INCOMPLETE
+        BLOCKED_FLOW_DATA_BINDING_INCOMPLETE
     )
     assert "STEP_BINDING_EXECUTION_SOURCE_MISSING" in frozen[
         "compile_receipt"
@@ -347,7 +354,7 @@ def test_graph_output_requires_exact_response_source_path() -> None:
 
     assert frozen["compile_receipt"]["status"] == "BLOCKED"
     assert frozen["compile_receipt"]["reason_code"] == (
-        BLOCKED_FLOW_DATA_EXECUTION_CONTRACT_INCOMPLETE
+        BLOCKED_FLOW_DATA_BINDING_INCOMPLETE
     )
     assert "OUTPUT_BINDING_IDENTITY_INCOMPLETE" in frozen[
         "compile_receipt"

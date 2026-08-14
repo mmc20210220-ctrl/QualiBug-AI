@@ -20,6 +20,7 @@ from ai_test_asset_center import experiment_executor
 from ai_test_asset_center import experiment_executor_governance
 from ai_test_asset_center import experiment_plan_executor
 from ai_test_asset_center import experiment_runtime_support
+from ai_test_asset_center import _experiment_runtime_support_mechanics
 
 
 def _compiled_authorization_experiment() -> tuple[dict[str, Any], dict[str, Any]]:
@@ -113,6 +114,7 @@ def test_chinese_role_permission_detects_real_unauthorized_access(
         experiment_executor_governance,
         experiment_plan_executor,
         experiment_runtime_support,
+        _experiment_runtime_support_mechanics,
     ):
         monkeypatch.setattr(module, "_http_request", fake_http, raising=False)
 
@@ -201,6 +203,7 @@ def test_chinese_role_permission_correct_denial_is_not_reported(
         experiment_executor_governance,
         experiment_plan_executor,
         experiment_runtime_support,
+        _experiment_runtime_support_mechanics,
     ):
         monkeypatch.setattr(module, "_http_request", fake_http, raising=False)
 

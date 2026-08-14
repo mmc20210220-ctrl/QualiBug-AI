@@ -191,20 +191,26 @@ def project_actor_scoped_query_bindings(
             if not isinstance(raw_step, dict):
                 projected.append(raw_step)
                 continue
-            step = deepcopy(raw_step)
-            operation_ref = _text(step.get("operation_ref"))
+            operation_ref = _text(raw_step.get("operation_ref"))
             operation = _dict(ops.get(operation_ref))
-            query = _dict(step.get("query"))
+            query = _dict(raw_step.get("query"))
             if not operation or not query:
-                projected.append(step)
+                # No query projection is needed; keep the exact step object so
+                # identity-based ``consumed_barrier_steps`` filtering still sees
+                # the same object the barrier executor consumed.
+                projected.append(raw_step)
                 continue
             ownership_params = set(
                 _ownership_params_declared_on_operation(operation)
             )
             if not ownership_params:
-                projected.append(step)
+                projected.append(raw_step)
                 continue
 
+            # Only deep-copy the step that actually gets its query projected:
+            # the projection mutates ``step["query"]`` and must not touch the
+            # sealed experiment plan.
+            step = deepcopy(raw_step)
             step_actor_ref = _text(step.get("actor_ref"))
             new_query = dict(query)
             projected_targets: list[str] = []

@@ -28,6 +28,7 @@ from ..professional_ui_responsive_accessibility import (
     CONFIG_ACTIONS,
 )
 from . import _parsing
+from . import _parsing_mechanics as _core
 
 _INSTALL_MARKER = "_qualibug_formal_ui_contract_parser_installed"
 _ORIGINAL_MARKER = "_qualibug_original_uiux_specs_from_text"
@@ -475,15 +476,21 @@ def extract_formal_ui_contracts(
 
 
 def install_formal_ui_contract_parser() -> None:
-    """Patch the UI-spec extractor additively; package import performs no target I/O."""
-    if getattr(_parsing, _INSTALL_MARKER, False):
+    """Patch the UI-spec extractor additively; package import performs no target I/O.
+
+    ``_parse_source`` lives in ``_parsing_mechanics`` and resolves
+    ``_uiux_specs_from_text`` from that module's globals, so the add-on must
+    patch the mechanics module (``_core``) rather than the ``_parsing`` facade —
+    a facade-only patch is a silent no-op after the mechanics split.
+    """
+    if getattr(_core, _INSTALL_MARKER, False):
         return
     original = getattr(
-        _parsing,
+        _core,
         _ORIGINAL_MARKER,
-        _parsing._uiux_specs_from_text,
+        _core._uiux_specs_from_text,
     )
-    setattr(_parsing, _ORIGINAL_MARKER, original)
+    setattr(_core, _ORIGINAL_MARKER, original)
 
     def uiux_specs_with_formal_contracts(
         text: str,
@@ -505,8 +512,8 @@ def install_formal_ui_contract_parser() -> None:
         specs[0]["formal_ui_contract_count"] = len(contracts)
         return specs
 
-    _parsing._uiux_specs_from_text = uiux_specs_with_formal_contracts
-    setattr(_parsing, _INSTALL_MARKER, True)
+    _core._uiux_specs_from_text = uiux_specs_with_formal_contracts
+    setattr(_core, _INSTALL_MARKER, True)
 
 
 __all__ = [

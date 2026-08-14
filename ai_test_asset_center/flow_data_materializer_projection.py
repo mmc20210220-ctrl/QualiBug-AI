@@ -16,19 +16,16 @@ from typing import Any
 
 
 SCHEMA_VERSION = "qualibug.flow-data-materializer-projection.v1"
-_RECOGNIZED_KINDS = frozenset(
-    {
-        "actor_context",
-        "runtime_read_binding",
-        "ownership_fixture_proof",
-        # Every compiled experiment carries a compiler-emitted setup_plan
-        # (action=resolve_bindings) whose fixture_dag node must survive the
-        # projection: dropping it made the oracle activation reference a node
-        # missing from the projected DAG, and the materializer reconciliation
-        # blocked every such experiment as BLOCKED_FIXTURE_DAG_DRIFT.
-        "setup_step",
-    }
-)
+# Projection must be kind-agnostic. The core materializer has an execution
+# branch for every node the compiler emits (actor_context, runtime_read_binding,
+# ownership_fixture_proof, disposable_fixture, dependency_create, bound_value,
+# setup_step) plus a fail-safe ``resolved`` fallback. The contract activation
+# requirements are computed against the SAME node identities, so any node the
+# projection drops here is later re-synthesized by the materializer's
+# reconciliation as a stale requirement and blocked by the truthfulness gate as
+# BLOCKED_FIXTURE_DAG_DRIFT. The only nodes we must drop are legacy nodes with
+# no ``kind`` at all (the historical ``fixture_id`` / ``create_operation_ref``
+# schema the core cannot execute) — that is checked inline, not by kind name.
 
 
 def _dict(value: Any) -> dict[str, Any]:
@@ -112,7 +109,7 @@ def project_flow_data_materializer_dag(
         for row in _list(legacy_dag.get("nodes"))
         if isinstance(row, dict)
         and _text(row.get("node_id"))
-        and _text(row.get("kind")) in _RECOGNIZED_KINDS
+        and _text(row.get("kind"))
     ]
     existing_by_target = {
         _text(row.get("target")): row

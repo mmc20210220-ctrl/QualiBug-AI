@@ -28,65 +28,86 @@ def _actor(role: str = "buyer", actor_id: str = "actor-buyer") -> dict:
     }
 
 
-# ─── §16.1: Empty body action → BLOCKED_NON_REVERSIBLE_WRITE ──────────────────
+# ─── §16.1: Empty body action → accepted residue (non-production) / fail-closed
+# (production) ─────────────────────────────────────────────────────────────
+
+
+def _compile_empty_body_action(action_path: str, environment_type: str) -> dict:
+    return compile_experiment_for_obligation(
+        {
+            "obligation_id": f"obl-{action_path.split('/')[-1]}",
+            "risk_family": "state",
+            "property": {
+                "operation_ref": "op-action",
+                "actor_ref": "actor-buyer",
+                "from_state_ref": "state-a",
+                "to_state_ref": "state-b",
+            },
+            "required_actors": ["actor-buyer"],
+            "required_operations": ["op-action"],
+            "required_observers": ["http_response", "before_state", "after_state"],
+            "cleanup_requirement": {"required": True},
+        },
+        behavior_ir={
+            "operations": [{
+                "id": "op-action",
+                "method": "POST",
+                "path": action_path,
+                "read_write": "write",
+                "request_example": {},
+                "source_refs": [{"kind": "endpoint_contract", "file": "api.md"}],
+            }, {
+                "id": "op-get",
+                "method": "GET",
+                "path": action_path.rsplit("/", 1)[0],
+                "read_write": "read",
+                "source_refs": [{"kind": "endpoint_contract", "file": "api.md"}],
+            }, {
+                "id": "op-list",
+                "method": "GET",
+                "path": "/" + "/".join(action_path.strip("/").split("/")[:2]),
+                "read_write": "read",
+                "source_refs": [{"kind": "endpoint_contract", "file": "api.md"}],
+            }],
+            "actors": [_actor()],
+            "relations": [],
+        },
+        environment_type=environment_type,
+    )
 
 
 class TestEmptyBodyActionNR:
-    """Empty body identity-bound POST actions must be NR without explicit inverse."""
+    """Empty body identity-bound POST actions have no source-declared inverse.
+
+    On a declared non-production target they degrade to accepted residue (the
+    write is tested and the leftover is marked for later environment reset).
+    Production stays fail-closed — the degradation must never apply there."""
 
     @pytest.mark.parametrize("action_path", [
         "/api/orders/{id}/ship",
         "/api/orders/{id}/confirm",
         "/api/refunds/{id}/approve",
     ])
-    def test_empty_body_action_blocks_nr(self, action_path: str) -> None:
-        experiment = compile_experiment_for_obligation(
-            {
-                "obligation_id": f"obl-{action_path.split('/')[-1]}",
-                "risk_family": "state",
-                "property": {
-                    "operation_ref": "op-action",
-                    "actor_ref": "actor-buyer",
-                    "from_state_ref": "state-a",
-                    "to_state_ref": "state-b",
-                },
-                "required_actors": ["actor-buyer"],
-                "required_operations": ["op-action"],
-                "required_observers": ["http_response", "before_state", "after_state"],
-                "cleanup_requirement": {"required": True},
-            },
-            behavior_ir={
-                "operations": [{
-                    "id": "op-action",
-                    "method": "POST",
-                    "path": action_path,
-                    "read_write": "write",
-                    "request_example": {},
-                    "source_refs": [{"kind": "endpoint_contract", "file": "api.md"}],
-                }, {
-                    "id": "op-get",
-                    "method": "GET",
-                    "path": action_path.rsplit("/", 1)[0],
-                    "read_write": "read",
-                    "source_refs": [{"kind": "endpoint_contract", "file": "api.md"}],
-                }, {
-                    "id": "op-list",
-                    "method": "GET",
-                    "path": "/" + "/".join(action_path.strip("/").split("/")[:2]),
-                    "read_write": "read",
-                    "source_refs": [{"kind": "endpoint_contract", "file": "api.md"}],
-                }],
-                "actors": [_actor()],
-                "relations": [],
-            },
-            environment_type="test",
-        )
-        # Must be BLOCKED before transport — either NR or binding issue
-        assert experiment["compile_receipt"]["status"] == "BLOCKED"
-        assert experiment["compile_receipt"]["reason_code"] in {
-            "BLOCKED_NON_REVERSIBLE_WRITE",
-            "BLOCKED_MISSING_BINDING",
-        }
+    def test_empty_body_action_degrades_to_residue(self, action_path: str) -> None:
+        experiment = _compile_empty_body_action(action_path, "test")
+        assert experiment["compile_receipt"]["status"] == "COMPILED", experiment[
+            "compile_receipt"
+        ]
+        assert experiment["cleanup_plan"][0]["action"] == "accepted_residue"
+        assert experiment["cleanup_plan"][0]["mode"] == "accepted_residue_no_cleanup"
+
+    @pytest.mark.parametrize("action_path", [
+        "/api/orders/{id}/ship",
+        "/api/orders/{id}/confirm",
+        "/api/refunds/{id}/approve",
+    ])
+    def test_empty_body_action_still_blocked_on_production(
+        self, action_path: str
+    ) -> None:
+        experiment = _compile_empty_body_action(action_path, "production")
+        assert experiment["compile_receipt"]["status"] == "BLOCKED", experiment[
+            "compile_receipt"
+        ]
 
     def test_empty_patch_does_not_infer_restore_fields_from_entity_schema(
         self,
@@ -186,8 +207,11 @@ class TestSiblingMisbinding:
             },
             environment_type="test",
         )
-        # Must be BLOCKED — cancel is not a valid inverse for ship
-        assert experiment["compile_receipt"]["status"] == "BLOCKED"
+        # Cancel is not a valid inverse for ship: with no source-declared
+        # compensator the write degrades to accepted residue on the declared
+        # non-production target (never to a fabricated sibling binding).
+        assert experiment["compile_receipt"]["status"] == "COMPILED"
+        assert experiment["cleanup_plan"][0]["action"] == "accepted_residue"
         # Cleanup plan must NOT reference cancel
         for item in experiment.get("cleanup_plan", []):
             assert item.get("operation_ref") != "op-cancel"
@@ -269,9 +293,11 @@ class TestResponseBoundCreateBlocking:
         behavior_ir = {
             "operations": [
                 {"id": "op-create", "method": "POST", "path": "/items",
-                 "read_write": "write", "request_example": {"name": "x"}},
+                 "read_write": "write", "request_example": {"name": "x"},
+                 "responses": {"201": {"schema": {"$ref": "#/components/schemas/Item"}}}},
                 {"id": "op-get-item", "method": "GET", "path": "/items/{id}",
-                 "read_write": "read"},
+                 "read_write": "read",
+                 "responses": {"200": {"schema": {"$ref": "#/components/schemas/Item"}}}},
                 {"id": "op-delete", "method": "DELETE", "path": "/items/{id}",
                  "read_write": "write"},
             ],

@@ -93,7 +93,7 @@ def _seed_knowledge(tmp_path: Path) -> dict[str, object]:
     return next(
         row
         for row in result["created"]
-        if row.get("filename") == _SOURCE_FILENAME
+        if row.get("original_name") == _SOURCE_FILENAME
     )
 
 

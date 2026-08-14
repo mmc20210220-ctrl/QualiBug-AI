@@ -553,7 +553,7 @@ def collect_object_candidates(asset: dict[str, Any]) -> dict[str, Any]:
         if kind in {"RULE", "STATE_TRANSITION"}:
             for label, role in positive_fact_mentions(fact):
                 reason = object_slot_rejection_reason(
-                    fact, label, declared_object_keys
+                    fact, label, declared_object_labels
                 )
                 if reason:
                     rejected_fact_mentions.append(

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import ai_test_asset_center.experiment_executor as executor
+from ai_test_asset_center import experiment_executor_core as executor
 
 
 def _experiment() -> dict:

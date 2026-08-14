@@ -184,6 +184,54 @@ def _reject_synthetic_activation_reconciliation(
         "diagnostics": diagnostic_rows,
         "synthetic_resolution_allowed": False,
     }
+    # Diagnostic-only capture: when QUALIBUG_FIXTURE_DIAG_PATH is set, append the
+    # blocked experiment's fixture/binding receipts so a bounded run can expose
+    # the exact reconciliation rows (never affects product behavior).
+    import os as _diag_os
+
+    _diag_path = str(_diag_os.environ.get("QUALIBUG_FIXTURE_DIAG_PATH") or "").strip()
+    if _diag_path:
+        try:
+            import json as _diag_json
+
+            with open(_diag_path, "a", encoding="utf-8") as _diag_fh:
+                _diag_fh.write(_diag_json.dumps({
+                    "event": "BLOCKED_FIXTURE_DAG_DRIFT",
+                    "experiment_id": _text(exp.get("experiment_id")),
+                    "obligation_id": _text(exp.get("obligation_id")),
+                    "affected_fixture_ids": sorted(affected),
+                    "diagnostics": diagnostic_rows,
+                    "fixture_receipts": fixture_receipts,
+                    "binding_materialization_receipts": _list(
+                        state.get("binding_materialization_receipts")
+                    ),
+                    "binding_plan_targets": [
+                        {
+                            "target": _text(_dict(b).get("target")),
+                            "status": _text(_dict(b).get("status")),
+                            "source_priority": _text(
+                                _dict(b).get("source_priority")
+                            ),
+                        }
+                        for b in _list(exp.get("binding_plan"))
+                    ],
+                    "fixture_dag": {
+                        "setup_order": _list(
+                            _dict(exp.get("fixture_dag")).get("setup_order")
+                        ),
+                        "nodes": [
+                            {
+                                "node_id": _text(_dict(n).get("node_id")),
+                                "kind": _text(_dict(n).get("kind")),
+                            }
+                            for n in _list(
+                                _dict(exp.get("fixture_dag")).get("nodes")
+                            )
+                        ],
+                    },
+                }, ensure_ascii=False, default=str) + "\n")
+        except OSError:
+            pass
     return _block_measurement(
         exp=exp,
         state=state,
@@ -271,18 +319,25 @@ def materialize_experiment_fixtures(**kwargs: Any) -> dict[str, Any]:
     projected_exp, projection_receipt = project_flow_data_materializer_dag(exp)
 
     # The core materializer resolves this helper from its own module globals.
-    # Install the strict tri-state validator before the core executes.
+    # Install the strict tri-state validator only for the duration of this
+    # call; a permanent install leaks strict validation into any later
+    # in-process caller of the core module and makes results order-dependent.
     _materializer_core._validate_fixture_preconditions = (
         _strict_validate_fixture_preconditions
     )
-    state = _dict(
-        _materialize_experiment_fixtures(
-            **{
-                **kwargs,
-                "exp": projected_exp,
-            }
+    try:
+        state = _dict(
+            _materialize_experiment_fixtures(
+                **{
+                    **kwargs,
+                    "exp": projected_exp,
+                }
+            )
         )
-    )
+    finally:
+        _materializer_core._validate_fixture_preconditions = (
+            _original_validate_fixture_preconditions
+        )
     state["flow_data_materializer_projection_receipt"] = projection_receipt
     if _text(state.get("status")) != "ready":
         terminal_result = _dict(state.get("result"))

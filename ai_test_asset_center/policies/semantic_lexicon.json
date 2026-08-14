@@ -1063,8 +1063,7 @@
     "refresh",
     "session",
     "otp",
-    "captcha",
-    "password"
+    "captcha"
   ],
   "ephemeral_session_path_suffixes": [
     "oauth/token",

@@ -537,7 +537,12 @@ def _with_source_declared_ownership_relations(behavior_ir: dict[str, Any]) -> di
                 {"produces", "consumes", "transitions", "scopes"},
             )
             shared_entities = owned_entities.intersection(write_entities)
-            if not shared_entities:
+            # The collection-match fallback only applies to runtime-discovered
+            # writes that declare NO entity relation at all. A write that does
+            # declare an entity relation (even a disjoint one) is a distinct
+            # resource: it must not inherit ownership from an owned read that
+            # merely shares its collection path.
+            if not write_entities:
                 # Runtime-discovered writes may lack entity relations; a
                 # collection match against the owned read anchor is the same
                 # identity evidence (DELETE /api/users/addresses/{id} vs

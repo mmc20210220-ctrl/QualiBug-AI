@@ -13,6 +13,7 @@ from ai_test_asset_center import private_pilot_service
 
 class _JsonCaptureHandler:
     _require_known_project = private_pilot_service.PrivatePilotHandler._require_known_project
+    _upload_bytes = private_pilot_service.PrivatePilotHandler._upload_bytes
 
     def __init__(self) -> None:
         self.status_code: int | None = None
@@ -29,6 +30,10 @@ def _ensure_known_project(root: Path, project: str) -> None:
     (input_dir / "real_project_config.json").write_text('{"project_id":"%s"}' % project, encoding="utf-8")
 
 
+def _composed_manifest(*args, **kwargs) -> dict[str, object]:
+    return {"source_id": "src_composed", "source_hash": "a" * 64, "composed_from": [], "part_count": 1}
+
+
 def test_handle_ingest_persists_binary_upload_bytes_verbatim(monkeypatch, tmp_path: Path) -> None:
     project = "demo"
     actor = {"name": "tester", "role": "project_owner"}
@@ -42,32 +47,42 @@ def test_handle_ingest_persists_binary_upload_bytes_verbatim(monkeypatch, tmp_pa
 
     def fake_ingest_document(path: str) -> dict[str, object]:
         captured["ingest_path"] = path
+        captured["staged_bytes"] = Path(path).read_bytes()
         return {"ok": True, "format": ".pdf"}
 
     def fake_knowledge_ingest(project_id: str, documents, root: Path, actor):
         captured["project_id"] = project_id
         captured["documents"] = documents
-        return {"ok": True, "created": [{"source_id": "src_created"}], "duplicates": [], "errors": []}
+        return {
+            "ok": True,
+            "created": [{"source_id": "src_created", "stored_path": "platform_workspace/demo/sources/spec.pdf"}],
+            "duplicates": [],
+            "errors": [],
+        }
 
     _ensure_known_project(tmp_path, project)
     monkeypatch.setattr("ai_test_asset_center.document_change_watcher.ingest_document", fake_ingest_document)
     monkeypatch.setattr("ai_test_asset_center.enterprise_knowledge_center.ingest_enterprise_knowledge_documents", fake_knowledge_ingest)
+    monkeypatch.setattr(
+        "ai_test_asset_center.enterprise_source_registry.compose_project_source_manifest",
+        _composed_manifest,
+    )
 
     handler = _JsonCaptureHandler()
     private_pilot_service.PrivatePilotHandler._handle_ingest(handler, project, body, tmp_path, actor)
 
     assert handler.status_code == 200
     assert handler.payload is not None
-    stored_path = Path(str(handler.payload["path"]))
-    assert stored_path.name == "spec.pdf"
-    assert stored_path.read_bytes() == raw
-    assert Path(str(captured["ingest_path"])) == stored_path
     assert handler.payload["source_id"] == "src_created"
-    assert handler.payload["storage_mode"] == "verbatim_bytes"
+    assert handler.payload["path"] == "platform_workspace/demo/sources/spec.pdf"
+    assert handler.payload["storage_mode"] == "canonical_immutable_source"
+    assert captured["staged_bytes"] == raw
     assert ".docx" in handler.payload["supported_extensions"]
     assert "postman" in handler.payload["supported_source_types"]
     assert captured["project_id"] == project
-    assert captured["documents"] == [{"file_path": str(stored_path), "filename": "spec.pdf", "source_type": "prd"}]
+    assert captured["documents"] == [
+        {"file_path": captured["ingest_path"], "filename": "spec.pdf", "source_type": "prd"}
+    ]
 
 
 def test_handle_ingest_rejects_invalid_base64_payload(tmp_path: Path) -> None:
@@ -83,11 +98,9 @@ def test_handle_ingest_rejects_invalid_base64_payload(tmp_path: Path) -> None:
     )
 
     assert handler.status_code == 400
-    assert handler.payload == {
-        "ok": False,
-        "error": "DECODE_FAILED",
-        "message": "Base64 解码失败，请检查文件内容。",
-    }
+    assert handler.payload["ok"] is False
+    assert handler.payload["error"] == "DECODE_FAILED"
+    assert handler.payload["message"] == "Base64 解码失败，请检查文件内容。"
 
 
 def test_handle_ingest_rejects_unknown_project_before_writing(tmp_path: Path) -> None:
@@ -133,11 +146,9 @@ def test_handle_ingest_returns_failure_when_knowledge_center_rejects_upload(monk
     )
 
     assert handler.status_code == 500
-    assert handler.payload == {
-        "ok": False,
-        "error": "INGEST_FAILED",
-        "message": "资料导入失败：parser exploded",
-    }
+    assert handler.payload["ok"] is False
+    assert handler.payload["error"] == "INGEST_FAILED"
+    assert handler.payload["message"] == "资料导入失败：parser exploded"
     assert list((tmp_path / "platform_workspace" / project / "input").glob("*")) == []
 
 
@@ -174,7 +185,7 @@ def test_handle_ingest_does_not_report_success_when_knowledge_center_raises(
     receipt = json.loads(
         (tmp_path / "platform_outputs" / project / "knowledge_ingest_last_error.json").read_text(encoding="utf-8")
     )
-    assert receipt["phase"] == "knowledge_center"
+    assert receipt["phase"] == "canonical_ingest"
     assert receipt["knowledge_updated"] is False
     assert receipt["error"] == "knowledge index unavailable"
 
@@ -232,7 +243,7 @@ def test_handle_ingest_rejects_malformed_knowledge_center_result(
     )
     handler = _JsonCaptureHandler()
 
-    with pytest.raises(ValueError, match="missing ok=true"):
+    with pytest.raises(ValueError, match="knowledge ingest result ok must be a boolean"):
         private_pilot_service.PrivatePilotHandler._handle_ingest(
             handler,
             project,
@@ -244,7 +255,7 @@ def test_handle_ingest_rejects_malformed_knowledge_center_result(
     receipt = json.loads(
         (tmp_path / "platform_outputs" / project / "knowledge_ingest_last_error.json").read_text(encoding="utf-8")
     )
-    assert receipt["phase"] == "knowledge_center"
+    assert receipt["phase"] == "canonical_ingest"
     assert receipt["error_type"] == "ValueError"
 
 
@@ -271,7 +282,7 @@ def test_handle_ingest_does_not_hide_source_registry_failure(
         raise RuntimeError("source registry unavailable")
 
     monkeypatch.setattr(
-        "ai_test_asset_center.enterprise_source_registry.resolve_source_manifest",
+        "ai_test_asset_center.enterprise_source_registry.compose_project_source_manifest",
         fail_manifest,
     )
     handler = _JsonCaptureHandler()
@@ -289,9 +300,9 @@ def test_handle_ingest_does_not_hide_source_registry_failure(
     receipt = json.loads(
         (tmp_path / "platform_outputs" / project / "knowledge_ingest_last_error.json").read_text(encoding="utf-8")
     )
-    assert receipt["phase"] == "source_registry"
-    assert receipt["knowledge_updated"] is True
-    assert receipt["source_id"] == "source-1"
+    assert receipt["phase"] == "canonical_ingest"
+    assert receipt["knowledge_updated"] is False
+    assert receipt["source_id"] == ""
 
 
 def test_invalid_api_document_skips_auto_scan_instead_of_launching_it(
@@ -313,7 +324,7 @@ def test_invalid_api_document_skips_auto_scan_instead_of_launching_it(
         },
     )
     monkeypatch.setattr(
-        "ai_test_asset_center.enterprise_source_registry.resolve_source_manifest",
+        "ai_test_asset_center.enterprise_source_registry.compose_project_source_manifest",
         lambda *args, **kwargs: {"source_id": "source-1", "source_hash": "a" * 64},
     )
     monkeypatch.setattr(
@@ -410,18 +421,28 @@ def test_knowledge_asset_sources_align_with_ingested_inventory(tmp_path: Path) -
 
 
 def test_project_import_output_dir_stays_inside_platform_outputs(tmp_path: Path) -> None:
-    project_id, output_dir = private_pilot_service._project_output_dir_for_import(tmp_path, r"..\outside/customer")
+    project_id, output_dir = private_pilot_service._project_output_dir_for_import(tmp_path, "customer_a")
 
-    assert project_id == "..outsidecustomer"
+    assert project_id == "customer_a"
     assert (tmp_path / "platform_outputs").resolve() in output_dir.parents
     assert output_dir.name == project_id
 
+    # Path-unsafe project ids must fail closed, never be silently rewritten into a
+    # path segment that could escape the platform_outputs root.
+    with pytest.raises(ValueError):
+        private_pilot_service._project_output_dir_for_import(tmp_path, r"..\outside/customer")
 
-def test_project_list_scope_filter_limits_public_project_listing(monkeypatch) -> None:
-    monkeypatch.setenv("QUALIBUG_ALLOW_PUBLIC_BIND", "1")
+
+def test_project_list_scope_filter_limits_public_project_listing() -> None:
     handler = SimpleNamespace(
-        headers={private_pilot_service.PROJECT_SCOPE_HEADER: "customer_a; customer_b"},
-        server=SimpleNamespace(server_address=("0.0.0.0", 8088)),
+        _principal=lambda: {
+            "tenant_id": "tenant_a",
+            "name": "viewer",
+            "role": "viewer",
+            "auth_type": "bearer",
+            "session_version": "1",
+        },
+        _tenant_project_ids=lambda: {"customer_a", "customer_b"},
     )
 
     scopes, wildcard = private_pilot_service.PrivatePilotHandler._project_list_scope_filter(handler)

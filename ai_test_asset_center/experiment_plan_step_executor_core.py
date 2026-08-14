@@ -1422,7 +1422,18 @@ def execute_non_barrier_plans(
                 )
                 continue
             runtime_body_plan = deepcopy(_dict(step.get("runtime_body_plan")))
-            if runtime_body_plan:
+            # The compile freezer also writes effect-observer readback metadata
+            # (readback_contract/async_policy) into runtime_body_plan. That is
+            # not a source-observed mutation plan: only a real mutation plan
+            # (schema_version) may enrich identity_bindings or replace the
+            # treatment body with the control body. Otherwise an isolation
+            # treatment whose body already materialized the cross-account
+            # ownership identity would be silently overwritten by the control
+            # body, dropping the ownership attack from the request entirely.
+            if (
+                _text(runtime_body_plan.get("schema_version"))
+                == "qualibug.source-observed-mutation-plan.v1"
+            ):
                 identity_fields = infer_path_params(path_template)
                 runtime_body_plan["identity_bindings"] = {
                     field: runtime_bindings[field]

@@ -24,7 +24,10 @@ from pathlib import Path
 from typing import Any
 
 from . import ui_upload_scenario_registry as _scenarios
-from .enterprise_knowledge_center import load_enterprise_business_knowledge_asset
+from .enterprise_knowledge_center import (
+    build_enterprise_business_knowledge_asset,
+    load_enterprise_business_knowledge_asset,
+)
 
 _INSTALL_MARKER = "_qualibug_upload_scenario_semantic_authority_installed"
 _ORIGINAL_MARKER = "_qualibug_upload_scenario_builder_before_semantic_authority"
@@ -74,6 +77,8 @@ def _merged_rows(asset: dict[str, Any], *keys: str) -> list[dict[str, Any]]:
 def _knowledge_asset(project: str, root: Path) -> dict[str, Any]:
     asset = load_enterprise_business_knowledge_asset(project, root=Path(root))
     if not isinstance(asset, dict) or not asset:
+        asset = build_enterprise_business_knowledge_asset(project, root=Path(root))
+    if not isinstance(asset, dict) or not asset:
         raise RuntimeError("ui_upload_scenario_knowledge_asset_missing")
     return asset
 
@@ -85,7 +90,7 @@ def _active_source_identity(
     identity = _text(source_id, limit=160)
     matches = [
         row
-        for row in _merged_rows(asset, "sources", "source_inventory")
+        for row in _merged_rows(asset, "sources", "source_inventory", "canonical_source_inventory")
         if _text(row.get("source_id") or row.get("id"), limit=160) == identity
         and _text(row.get("status") or "active", limit=40).lower() == "active"
     ]

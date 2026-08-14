@@ -2,20 +2,39 @@
 from __future__ import annotations
 
 import json
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
-
-from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding.business_object_benchmark import (
-    ANNOTATION_SCOPE,
-    GROUND_TRUTH_SCHEMA,
-    OBJECT_TYPE,
-    SUPPORTED_TYPES,
-    evaluate_business_object_recognition,
-)
 
 BUSINESS_OBJECT_MEASUREMENT_SCHEMA = (
     "qualibug.enterprise-understanding-business-object-measurement.v1"
 )
+
+
+@lru_cache(maxsize=1)
+def _benchmark_authority() -> dict[str, Any]:
+    """Reuse the product's object-benchmark authority lazily.
+
+    The evaluator package must stay importable without loading the product
+    facade (boundary contract). Schema constants and the measurement function
+    are resolved only when an actual validation/evaluation runs, never at
+    evaluator import time.
+    """
+    from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding.business_object_benchmark import (  # noqa: E501
+        ANNOTATION_SCOPE,
+        GROUND_TRUTH_SCHEMA,
+        OBJECT_TYPE,
+        SUPPORTED_TYPES,
+        evaluate_business_object_recognition,
+    )
+
+    return {
+        "ANNOTATION_SCOPE": ANNOTATION_SCOPE,
+        "GROUND_TRUTH_SCHEMA": GROUND_TRUTH_SCHEMA,
+        "OBJECT_TYPE": OBJECT_TYPE,
+        "SUPPORTED_TYPES": SUPPORTED_TYPES,
+        "evaluate_business_object_recognition": evaluate_business_object_recognition,
+    }
 
 
 class BusinessObjectGroundTruthValidationError(ValueError):
@@ -51,45 +70,54 @@ def _labels(row: dict[str, Any]) -> list[str]:
 
 
 def _expected_business_object(row: dict[str, Any]) -> bool | None:
+    authority = _benchmark_authority()
+    object_type = authority["OBJECT_TYPE"]
+    supported_types = authority["SUPPORTED_TYPES"]
     if "expected_business_object" in row:
         value = row.get("expected_business_object")
         return value if isinstance(value, bool) else None
     expected_type = _text(row.get("expected_type")).upper()
-    return expected_type == OBJECT_TYPE if expected_type in SUPPORTED_TYPES else None
+    return expected_type == object_type if expected_type in supported_types else None
 
 
 def _semantic_roles(row: dict[str, Any], expected_object: bool) -> set[str]:
+    object_type = _benchmark_authority()["OBJECT_TYPE"]
     values: list[Any] = [row.get("expected_type")]
     for field in ("semantic_roles", "allowed_context_roles"):
         if isinstance(row.get(field), list):
             values.extend(row.get(field) or [])
     roles = {_text(value).upper() for value in values if _text(value)}
     if expected_object:
-        roles.add(OBJECT_TYPE)
+        roles.add(object_type)
     if not roles:
-        roles.add(OBJECT_TYPE if expected_object else "OTHER_NON_OBJECT")
+        roles.add(object_type if expected_object else "OTHER_NON_OBJECT")
     return roles
 
 
 def _ordered_roles(roles: set[str]) -> list[str]:
-    return ([OBJECT_TYPE] if OBJECT_TYPE in roles else []) + sorted(roles - {OBJECT_TYPE})
+    object_type = _benchmark_authority()["OBJECT_TYPE"]
+    return ([object_type] if object_type in roles else []) + sorted(roles - {object_type})
 
 
 def validate_business_object_ground_truth(document: dict[str, Any]) -> dict[str, Any]:
+    authority = _benchmark_authority()
+    ground_truth_schema = authority["GROUND_TRUTH_SCHEMA"]
+    annotation_scope = authority["ANNOTATION_SCOPE"]
+    supported_types = authority["SUPPORTED_TYPES"]
     if not isinstance(document, dict):
         raise BusinessObjectGroundTruthValidationError(
             "business-object Ground Truth root must be an object"
         )
-    if _text(document.get("schema")) != GROUND_TRUTH_SCHEMA:
+    if _text(document.get("schema")) != ground_truth_schema:
         raise BusinessObjectGroundTruthValidationError(
-            f"schema must equal {GROUND_TRUTH_SCHEMA}"
+            f"schema must equal {ground_truth_schema}"
         )
     project_id = _text(document.get("project_id"))
     if not project_id:
         raise BusinessObjectGroundTruthValidationError("project_id is required")
-    if _text(document.get("annotation_scope")) != ANNOTATION_SCOPE:
+    if _text(document.get("annotation_scope")) != annotation_scope:
         raise BusinessObjectGroundTruthValidationError(
-            f"annotation_scope must equal {ANNOTATION_SCOPE}"
+            f"annotation_scope must equal {annotation_scope}"
         )
     if bool(document.get("ground_truth_generated_from_product_output")):
         raise BusinessObjectGroundTruthValidationError(
@@ -143,7 +171,7 @@ def validate_business_object_ground_truth(document: dict[str, Any]) -> dict[str,
                 f"{context}: expected_business_object must be boolean or expected_type supported"
             )
         roles = _semantic_roles(row, expected_object)
-        invalid_roles = sorted(roles - set(SUPPORTED_TYPES))
+        invalid_roles = sorted(roles - set(supported_types))
         if invalid_roles:
             raise BusinessObjectGroundTruthValidationError(
                 f"{context}: unsupported semantic_roles {invalid_roles}"
@@ -186,7 +214,7 @@ def validate_business_object_ground_truth(document: dict[str, Any]) -> dict[str,
     normalized_document["validation_receipt"] = {
         "status": "PASS",
         "project_id": project_id,
-        "annotation_scope": ANNOTATION_SCOPE,
+        "annotation_scope": _benchmark_authority()["ANNOTATION_SCOPE"],
         "closed_world": True,
         "label_row_count": len(normalized_rows),
         "normalized_label_count": len(decisions),
@@ -257,7 +285,9 @@ def evaluate_business_object_types(
             ground_truth_validation_receipt=validation_receipt,
         )
 
-    measured = evaluate_business_object_recognition(recognition, validated)
+    measured = _benchmark_authority()["evaluate_business_object_recognition"](
+        recognition, validated
+    )
     product_benchmark_schema = measured.get("schema")
     result = dict(measured)
     result.update(

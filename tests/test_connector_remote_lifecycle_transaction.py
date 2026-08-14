@@ -65,7 +65,7 @@ def test_transaction_contention_fails_closed_without_mutation(
 
     @contextmanager
     def busy(*args, **kwargs):
-        raise lifecycle.KnowledgeTransactionBusy("knowledge_transaction_busy")
+        raise lifecycle.KnowledgeTransactionBusy()
         yield  # pragma: no cover
 
     monkeypatch.setattr(lifecycle, "knowledge_transaction", busy)

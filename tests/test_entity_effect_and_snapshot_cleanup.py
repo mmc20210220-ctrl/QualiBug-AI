@@ -193,7 +193,9 @@ def test_identity_action_write_prefers_entity_get_over_collection() -> None:
         max_candidates=5,
     )
     assert resolvers[0]["path"] == "/api/orders/{id}"
-    assert any(row["path"] == "/api/orders" for row in resolvers)
+    # Fail-closed observer authority: only the source-declared entity GET is
+    # authoritative; the collection GET is no longer auto-included.
+    assert [row["path"] for row in resolvers] == ["/api/orders/{id}"]
 
     ops = {row["id"]: row for row in ops_list}
     assert (
@@ -204,11 +206,9 @@ def test_identity_action_write_prefers_entity_get_over_collection() -> None:
         )
         == "/api/orders/ord-1"
     )
-    # Without identity binding, collection remains the only materializable fallback.
-    assert (
-        _declared_observation_path("/api/orders/{id}/confirm", ops)
-        == "/api/orders"
-    )
+    # Without identity binding, the entity observer cannot materialize and the
+    # collection GET is no longer an authoritative fallback (fail-closed).
+    assert _declared_observation_path("/api/orders/{id}/confirm", ops) == ""
 
 
 def test_entity_join_finds_payment_order_read() -> None:
@@ -234,12 +234,16 @@ def test_entity_join_finds_payment_order_read() -> None:
                 "from_ref": "op-manual",
                 "to_ref": "ent-pay",
                 "operation_ref": "op-manual",
+                "source_refs": [{"source_id": "api-doc"}],
+                "status": "accepted",
             },
             {
                 "relation_type": "observes",
                 "from_ref": "op-read",
                 "to_ref": "ent-pay",
                 "operation_ref": "op-read",
+                "source_refs": [{"source_id": "api-doc"}],
+                "status": "accepted",
             },
         ],
     }

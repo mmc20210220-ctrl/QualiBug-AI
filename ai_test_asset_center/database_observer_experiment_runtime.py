@@ -77,8 +77,8 @@ def _materialize(value: Any, runtime_bindings: dict[str, Any]) -> Any:
         return [_materialize(child, runtime_bindings) for child in value]
     if isinstance(value, str):
         match = _PLACEHOLDER.fullmatch(value.strip())
-        if match and match.group(1) in runtime_bindings:
-            return runtime_bindings[match.group(1)]
+        if match:
+            return runtime_bindings.get(match.group(1))
     return value
 
 

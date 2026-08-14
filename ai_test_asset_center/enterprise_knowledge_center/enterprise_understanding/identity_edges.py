@@ -271,6 +271,49 @@ def build_identity_edges(
             }
         )
 
+    # A source-declared business-object asset names its display aliases directly
+    # (``name`` + ``aliases``). That declared alias is identity evidence that the
+    # canonical label and the alias denote one entity; identity resolution must not
+    # split them back into separate entities merely because their surface text
+    # differs. This is the same source-backed authority as a hard TERM_ALIAS fact.
+    canonical_mentions: dict[tuple[str, str], dict[str, Any]] = {}
+    for mention in mentions:
+        if text(mention.get("source_kind")) == "BUSINESS_OBJECT_ASSET":
+            key = (text(mention.get("source_id")), text(mention.get("source_locator")))
+            canonical_mentions.setdefault(key, mention)
+    alias_edges: dict[str, dict[str, Any]] = {}
+    for mention in mentions:
+        if text(mention.get("source_kind")) != "BUSINESS_OBJECT_ALIAS":
+            continue
+        key = (text(mention.get("source_id")), text(mention.get("source_locator")))
+        canonical = canonical_mentions.get(key)
+        if canonical is None:
+            continue
+        edge_id = stable_id(
+            "identity_edge",
+            canonical.get("mention_id"),
+            mention.get("mention_id"),
+            "SAME_AS",
+            "SOURCE_DECLARED_BUSINESS_OBJECT_ALIAS",
+        )
+        alias_edges[edge_id] = {
+            "schema": IDENTITY_EDGE_SCHEMA,
+            "edge_id": edge_id,
+            "left_mention_id": canonical.get("mention_id"),
+            "right_mention_id": mention.get("mention_id"),
+            "relation": "SAME_AS",
+            "evidence_class": "EXPLICIT_ALIAS",
+            "authority": "SOURCE_DECLARED_BUSINESS_OBJECT_ALIAS",
+            "status": "ACCEPTED",
+            "independent_evidence_family": "BUSINESS_OBJECT_ASSET_ALIAS",
+            "scope": as_dict(mention.get("scope")),
+            "evidence": dedupe_evidence(
+                [*as_list(canonical.get("evidence")), *as_list(mention.get("evidence"))]
+            ),
+            "automatic_union_allowed": True,
+        }
+    edges.extend(alias_edges.values())
+
     conflicting_aliases = _conflicting_aliases(facts)
     identity_anchor_labels = _source_declared_identity_anchor_labels(
         facts, mentions, conflicting_aliases

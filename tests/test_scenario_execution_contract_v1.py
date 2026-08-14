@@ -29,6 +29,47 @@ def _evidence() -> list[dict]:
     ]
 
 
+def _interface(
+    *, method: str = "POST", path: str = "/orders/{order_id}/ship"
+) -> dict:
+    return {
+        "interface_id": "interface:ship",
+        "source_id": "openapi",
+        "method": method,
+        "path": path,
+        "operation_id": "shipOrder",
+        "parameter_contracts": [
+            {
+                "name": "order_id",
+                "field": "order_id",
+                "location": "PATH",
+                "required": True,
+                "schema_type": "string",
+            }
+        ],
+        "request_body_fields": [
+            {
+                "name": "status",
+                "field": "status",
+                "field_path": "status",
+                "location": "BODY",
+                "required": True,
+                "schema_type": "string",
+                "media_type": "application/json",
+            },
+            {
+                "name": "reason",
+                "field": "reason",
+                "field_path": "reason",
+                "location": "BODY",
+                "required": False,
+                "schema_type": "string",
+                "media_type": "application/json",
+            },
+        ],
+    }
+
+
 def _scenario(
     *,
     scenario_id: str = "scenario:ship",
@@ -169,12 +210,33 @@ def _binding(*, method: str = "POST", path: str = "/orders/{order_id}/ship") -> 
                 "evidence": _evidence(),
             }
         ],
+        "condition_observer_bindings": [
+            {
+                "slot_ref": "slot:status",
+                "purpose": "PRECONDITION_OBSERVER",
+                "status": "BOUND",
+                "bindings": [
+                    {
+                        "binding_kind": "API_CONTRACT_FIELD",
+                        "interface_id": "interface:ship",
+                        "field": "status",
+                        "authoritative": True,
+                    }
+                ],
+            }
+        ],
         "evidence": _evidence(),
     }
 
 
 def _asset(scenario: dict, *, gate_pass: bool = True) -> dict:
     return {
+        "interfaces": [
+            _interface(
+                method=scenario["action_entry"]["method"],
+                path=scenario["action_entry"]["path"],
+            )
+        ],
         "scenario_ir": [scenario],
         "scenario_ir_gate": {
             "status": "PASS" if gate_pass else "BLOCKED_SCENARIO_IR_UPSTREAM_GATE",
@@ -338,7 +400,14 @@ def test_final_scenario_projection_automatically_compiles_canonical_contract() -
                 "slot_ref": row["slot_ref"],
                 "source_field_candidate": row["field_candidate"],
                 "status": "BOUND",
-                "bindings": [],
+                "bindings": [
+                    {
+                        "binding_kind": "API_CONTRACT_FIELD",
+                        "interface_id": "interface:ship",
+                        "field": row["field_candidate"],
+                        "authoritative": True,
+                    }
+                ],
             }
             for row in predicates
         ],
@@ -368,7 +437,13 @@ def test_final_scenario_projection_automatically_compiles_canonical_contract() -
         "source_summary": {},
         "metrics": {},
     }
-    asset = {"summary": {}, "governance": {}, "coverage_gaps": [], "relationships": []}
+    asset = {
+        "summary": {},
+        "governance": {},
+        "coverage_gaps": [],
+        "relationships": [],
+        "interfaces": [_interface()],
+    }
     project_final_scenario_planning_gate(asset, model)
     assert asset["scenario_ir_gate"]["status"] == "PASS"
     assert asset["scenario_execution_contract_gate"]["status"] == "PASS"

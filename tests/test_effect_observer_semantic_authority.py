@@ -38,8 +38,12 @@ def test_exact_transport_path_get_is_observer_authority() -> None:
 def test_explicit_produces_observes_relation_chain_is_authoritative() -> None:
     from ai_test_asset_center.runtime_binding_graph import _observer_authority
 
+    # Source and observer must sit on different transport paths so the relation
+    # chain is the only authority that can bind them; an identical path would
+    # legitimately resolve as ``exact_transport_path`` before the relation chain
+    # is ever consulted.
     source = {"id": "create-order", "method": "POST", "path": "/api/orders"}
-    observer = {"id": "list-orders", "method": "GET", "path": "/api/orders"}
+    observer = {"id": "list-orders", "method": "GET", "path": "/api/orders/listing"}
     behavior_ir = {
         "operations": [source, observer],
         "entities": [{"id": "entity-order"}],

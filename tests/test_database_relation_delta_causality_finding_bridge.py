@@ -171,8 +171,32 @@ def test_causal_finding_is_exact_and_raw_identifier_free() -> None:
     serialized = json.dumps(evidence)
     assert "req-1" not in serialized
     assert "raw_value" not in serialized
-    assert "predicate_values" not in serialized
-    assert "rows" not in serialized
+
+    # The bridge retains explicit `*_retained: False` flags to declare that raw
+    # predicate values and raw child rows were not captured; only the actual raw
+    # data keys themselves must be absent, not the retention flags.
+    forbidden_exact_keys = {
+        "predicate_values",
+        "rows",
+        "raw_value",
+        "value",
+        "raw_sql",
+        "sql",
+        "aggregate_values",
+    }
+
+    def _has_forbidden_key(value: object) -> bool:
+        if isinstance(value, dict):
+            for key, child in value.items():
+                if str(key).lower() in forbidden_exact_keys:
+                    return True
+                if _has_forbidden_key(child):
+                    return True
+        elif isinstance(value, list):
+            return any(_has_forbidden_key(child) for child in value)
+        return False
+
+    assert not _has_forbidden_key(evidence)
 
 
 def test_enrichment_does_not_upgrade_delivery_gate() -> None:

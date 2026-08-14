@@ -525,7 +525,10 @@ def test_unchanged_snapshot_skips_all_exports_and_batch_touches_occurrences(
         root=tmp_path,
     )
     assert observations["source_occurrence_count"] == 3
-    assert {row["observation_count"] for row in observations["source_occurrences"]} == {2}
+    # Each sync records a source-occurrence observation (materialized or unchanged)
+    # plus an ACL-visibility observation, so each of the 3 occurrences is observed 4
+    # times across the two syncs.
+    assert {row["observation_count"] for row in observations["source_occurrences"]} == {4}
 
 
 def test_single_revision_change_exports_only_changed_and_retires_missing(

@@ -343,12 +343,12 @@ def test_explicit_composition_projects_api_before_enterprise_understanding(monke
     monkeypatch.setattr(
         composition._base_api,
         "build_enterprise_business_knowledge_asset",
-        lambda project, root, options: dict(asset),
+        lambda project, root, options, **kwargs: dict(asset),
     )
     monkeypatch.setattr(
         composition,
         "_parsed_sources_for_context",
-        lambda asset, root: [],
+        lambda asset, root, **kwargs: [],
     )
 
     def project_api(value, sources):

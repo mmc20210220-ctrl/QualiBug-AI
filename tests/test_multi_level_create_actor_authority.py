@@ -31,7 +31,6 @@ def test_duplicate_structural_create_operations_are_ambiguous() -> None:
             "relations": [],
         },
         _entity(),
-        "addressId",
     )
 
     assert [row["id"] for row in candidates] == ["create-a", "create-b"]
@@ -63,7 +62,6 @@ def test_produces_relation_without_source_refs_is_not_create_authority() -> None
             ],
         },
         _entity(),
-        "addressId",
     )
 
     assert candidates == []
@@ -95,7 +93,6 @@ def test_source_backed_produces_relation_authorizes_non_collection_create() -> N
             ],
         },
         _entity(),
-        "addressId",
     )
 
     assert len(candidates) == 1

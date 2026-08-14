@@ -27,7 +27,7 @@ import hashlib
 import json
 from typing import Any
 
-from . import _parsing
+from . import _parsing_mechanics as _core
 
 _INSTALL_MARKER = "_qualibug_ui_surface_declaration_parser_installed"
 _ORIGINAL_MARKER = "_qualibug_original_uiux_requirements_from_json"
@@ -614,15 +614,21 @@ def compile_ui_surface_contracts(
 
 
 def install_ui_surface_declaration_parser() -> None:
-    """Attach surface declarations and compiled contracts to UIUX requirement specs."""
-    if getattr(_parsing, _INSTALL_MARKER, False):
+    """Attach surface declarations and compiled contracts to UIUX requirement specs.
+
+    ``_parse_source`` lives in ``_parsing_mechanics`` and resolves
+    ``_uiux_requirements_from_json`` from that module's globals, so the add-on
+    must patch the mechanics module (``_core``) rather than the ``_parsing``
+    facade — a facade-only patch is a silent no-op after the mechanics split.
+    """
+    if getattr(_core, _INSTALL_MARKER, False):
         return
     original = getattr(
-        _parsing,
+        _core,
         _ORIGINAL_MARKER,
-        _parsing._uiux_requirements_from_json,
+        _core._uiux_requirements_from_json,
     )
-    setattr(_parsing, _ORIGINAL_MARKER, original)
+    setattr(_core, _ORIGINAL_MARKER, original)
 
     def with_surface_declarations(
         payload: dict[str, Any],
@@ -642,8 +648,8 @@ def install_ui_surface_declaration_parser() -> None:
             spec["surface_contract_count"] = len(contracts)
         return specs, rules
 
-    _parsing._uiux_requirements_from_json = with_surface_declarations
-    setattr(_parsing, _INSTALL_MARKER, True)
+    _core._uiux_requirements_from_json = with_surface_declarations
+    setattr(_core, _INSTALL_MARKER, True)
 
 
 __all__ = [

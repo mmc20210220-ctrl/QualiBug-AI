@@ -1,3 +1,4 @@
+import ast
 from pathlib import Path
 
 import ai_test_asset_center.experiment_compiler_obligation as compiler
@@ -190,15 +191,38 @@ def test_blocked_minimal_experiment_does_not_forge_subject_binding() -> None:
 
 
 def test_main_compiler_imports_public_obligation_facade() -> None:
+    # After the module split, the single-obligation semantic compiler lives in
+    # ``experiment_compiler_obligation_core`` and the raw freeze mechanics moved
+    # to ``_experiment_compiler_base_mechanics``. The mainline surface that must
+    # import the public obligation facade (not the private core) is now
+    # ``_experiment_compiler_base_mechanics``, which re-exports the facade's
+    # symbols to ``experiment_compiler_base``.
     source = (
-        ROOT / "ai_test_asset_center/experiment_compiler_base.py"
+        ROOT / "ai_test_asset_center/_experiment_compiler_base_mechanics.py"
     ).read_text(encoding="utf-8")
 
     assert "from .experiment_compiler_obligation import" in source
-    assert "experiment_compiler_obligation_core" not in source
+    assert "from . import experiment_compiler_obligation_core" not in source
 
 
 def test_no_mainline_module_imports_obligation_core_directly() -> None:
+    # Only the public facade (``experiment_compiler_obligation``) may import the
+    # private core. A plain substring scan is too naive: it also matches the
+    # product SSOT comment in ``coverage_unit_registry`` and the fail-closed
+    # deferred import (a legitimate circular-import workaround, evaluated at
+    # call time inside a function) in ``experiment_protocols``. Inspect
+    # module-scope ``import`` statements only, so function-local deferred
+    # imports and prose comments do not read as layering violations.
+    def _top_level_imports(module_name: str) -> set[str]:
+        tree = ast.parse(
+            (ROOT / f"ai_test_asset_center/{module_name}").read_text(encoding="utf-8")
+        )
+        imports: set[str] = set()
+        for node in tree.body:
+            if isinstance(node, ast.ImportFrom) and node.level == 1:
+                imports.update(alias.name for alias in node.names)
+        return imports
+
     violations: list[str] = []
     for path in (ROOT / "ai_test_asset_center").glob("*.py"):
         if path.name in {
@@ -206,8 +230,7 @@ def test_no_mainline_module_imports_obligation_core_directly() -> None:
             "experiment_compiler_obligation_core.py",
         }:
             continue
-        source = path.read_text(encoding="utf-8")
-        if "experiment_compiler_obligation_core" in source:
+        if "experiment_compiler_obligation_core" in _top_level_imports(path.name):
             violations.append(path.name)
 
     assert violations == []

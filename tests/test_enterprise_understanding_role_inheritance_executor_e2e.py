@@ -8,6 +8,7 @@ from ai_test_asset_center import experiment_executor
 from ai_test_asset_center import experiment_executor_governance
 from ai_test_asset_center import experiment_plan_executor
 from ai_test_asset_center import experiment_runtime_support
+from ai_test_asset_center import _experiment_runtime_support_mechanics
 from ai_test_asset_center.behavior_ir import build_behavior_ir_from_knowledge_asset
 from ai_test_asset_center.enterprise_knowledge_center._chinese_business_comprehension import (
     build_chinese_first_comprehension,
@@ -124,6 +125,7 @@ def _execute(
         experiment_executor_governance,
         experiment_plan_executor,
         experiment_runtime_support,
+        _experiment_runtime_support_mechanics,
     ):
         monkeypatch.setattr(module, "_http_request", fake_http, raising=False)
 

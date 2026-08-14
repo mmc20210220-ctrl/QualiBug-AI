@@ -34,8 +34,14 @@ class BusinessObjectBaselineSpec:
 
 
 def git_blob_sha(blob: bytes) -> str:
-    header = f"blob {len(blob)}\0".encode("utf-8")
-    return hashlib.sha1(header + blob).hexdigest()
+    # Source files are text and git normalizes CRLF to LF before storing the
+    # blob (autocrlf). A Windows checkout therefore reads back CRLF bytes whose
+    # raw hash differs from the canonical git blob sha recorded in the frozen
+    # ground-truth snapshot. Normalize line endings so the verification compares
+    # the canonical git identity, not the checkout's working-tree bytes.
+    normalized = blob.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    header = f"blob {len(normalized)}\0".encode("utf-8")
+    return hashlib.sha1(header + normalized).hexdigest()
 
 
 def _json_clone(value: Any) -> Any:

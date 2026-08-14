@@ -48,6 +48,22 @@ def _patch_http_request(monkeypatch: pytest.MonkeyPatch, http_request) -> None:
         "ai_test_asset_center.experiment_plan_executor._http_request",
         http_request,
     )
+    # The extracted runtime-support mechanics module owns ``_run_http_step``,
+    # which resolves ``_http_request`` from its own module globals (not the
+    # facade re-export). Patch that surface too, or the binding resolver still
+    # reaches the real target transport.
+    monkeypatch.setattr(
+        "ai_test_asset_center._experiment_runtime_support_mechanics._http_request",
+        http_request,
+    )
+    monkeypatch.setattr(
+        "ai_test_asset_center.sandbox_write_executor._http_request",
+        http_request,
+    )
+    monkeypatch.setattr(
+        "ai_test_asset_center.sandbox_write_executor_base._http_request",
+        http_request,
+    )
 
 
 def test_finalizer_rejects_unserializable_receipt_objects() -> None:
@@ -629,11 +645,17 @@ def test_compiler_does_not_assign_an_unpermitted_actor_to_an_actorless_rule() ->
         environment_type="test",
     )
 
-    assert experiment["compile_receipt"] == {
-        "status": "BLOCKED",
-        "reason_code": "BLOCKED_MISSING_ACTOR",
-        "detail": "source_permitted_actor_missing:op-create",
-    }
+    # An actorless rule must never get a fabricated "permits" authority. With
+    # runtime actor exploration (V1.8) the compiler no longer blocks here; it
+    # seals a bounded *exploration* plan (no static permits edge, oracle
+    # disabled) so the runtime may still exercise the operation through real
+    # executable candidates instead of silently assuming an unpermitted actor
+    # is authorized.
+    assert experiment["compile_receipt"]["status"] == "COMPILED"
+    plan = experiment["actor_execution_plan"]
+    assert plan["mode"] == "permission_exploration"
+    assert plan["authorization_oracle_enabled"] is False
+    assert plan["candidate_ids"] == ["actor-writer"]
 
 
 def test_compiler_does_not_drop_a_missing_required_operation() -> None:
@@ -1318,11 +1340,12 @@ def _cart_collection_operations() -> dict[str, dict]:
 
 
 def test_auto_fixture_create_uses_campaign_actors_when_owner_absent() -> None:
-    """Regression: a resolver-only binding (no fixture_owner_actor_ref) on an
-    empty collection used to block auto-fixture entirely, so a cart {id} binding
-    with an available POST create + DELETE cleanup stayed BLOCKED_MISSING_BINDING.
-    The runtime actor picker prefers control/treatment actors from the declared
-    candidate pool, so the pool may contain every executable campaign actor.
+    """A resolver-only binding (no fixture_owner_actor_ref) on an empty
+    collection used to block auto-fixture entirely. Auto-create now requires one
+    unique POST candidate and one unique executable actor: source-order "first
+    POST" or "first actor" is not a business fact, so a two-actor campaign fails
+    closed (no fabricated owner), while a single executable campaign actor is the
+    resolved fixture owner and stays plan-aligned at runtime.
     """
     binding = {
         "status": "runtime_resolvable",
@@ -1337,12 +1360,30 @@ def test_auto_fixture_create_uses_campaign_actors_when_owner_absent() -> None:
         "admin": {"id": "admin", "role": "admin", "credential_secret_ref": "secret:admin"},
     }
 
+    # Two executable actors with no declared owner is ambiguous: fail closed,
+    # never pick a source-order winner.
+    assert (
+        _auto_fixture_create_for_binding_target(
+            "id",
+            binding,
+            _cart_collection_operations(),
+            {},
+            actors=actors,
+        )
+        is None
+    )
+
+    # One executable campaign actor resolves the unique owner without a
+    # declared fixture_owner_actor_ref.
+    single_actors = {
+        "buyer": {"id": "buyer", "role": "customer", "credential_secret_ref": "secret:buyer"},
+    }
     auto_create = _auto_fixture_create_for_binding_target(
         "id",
         binding,
         _cart_collection_operations(),
         {},
-        actors=actors,
+        actors=single_actors,
     )
 
     assert auto_create is not None
@@ -1351,18 +1392,18 @@ def test_auto_fixture_create_uses_campaign_actors_when_owner_absent() -> None:
     fixture_setup = validated_fixture_setup(
         {"fixture_setup": auto_create["fixture_setup"]},
         _cart_collection_operations(),
-        actors,
+        single_actors,
     )
-    assert set(fixture_setup["actor_refs"]) == {"buyer", "admin"}
+    assert set(fixture_setup["actor_refs"]) == {"buyer"}
     assert fixture_setup["cleanup_operations"]
-    # The disposable create must remain plan-aligned at runtime: control actor
-    # is preferred from the candidate pool.
+    # The disposable create must remain plan-aligned at runtime: the control
+    # actor is preferred from the declared candidate pool.
     selected_ref, selected, selected_token = _select_fixture_actor(
         fixture_setup,
         control_plan=[{"actor_ref": "buyer"}],
-        treatment_plan=[{"actor_ref": "admin"}],
-        actors=actors,
-        tokens={"secret:buyer": "token-buyer", "secret:admin": "token-admin"},
+        treatment_plan=[{"actor_ref": "buyer"}],
+        actors=single_actors,
+        tokens={"secret:buyer": "token-buyer"},
     )
     assert selected_ref == "buyer"
     assert selected_token == "token-buyer"
@@ -1445,6 +1486,7 @@ def test_empty_collection_binding_uses_auto_fixture_and_binds(
     import ai_test_asset_center.experiment_runtime_support as runtime_support
     import ai_test_asset_center.experiment_runtime_credentials as runtime_credentials
     import ai_test_asset_center.sandbox_write_executor as sandbox_executor
+    import ai_test_asset_center._experiment_runtime_support_mechanics as runtime_mechanics
 
     new_item_id = "c8f0aaaa-1111-2222-3333-444455556666"
     cart_state: list[dict] = []  # reset target: cart is empty
@@ -1477,6 +1519,7 @@ def test_empty_collection_binding_uses_auto_fixture_and_binds(
 
     monkeypatch.setattr(runtime_support, "_http_request", mock_http_request)
     monkeypatch.setattr(runtime_credentials, "_http_request", mock_http_request)
+    monkeypatch.setattr(runtime_mechanics, "_http_request", mock_http_request)
     monkeypatch.setattr(sandbox_executor, "_http_request", mock_http_request)
     monkeypatch.setattr(sandbox_executor, "sandbox_write_allowed", mock_sandbox_allowed)
 
@@ -1497,6 +1540,7 @@ def test_empty_collection_binding_uses_auto_fixture_and_binds(
                 "target_path": "/api/cart/items/{id}",
                 "status": "runtime_resolvable",
                 "source_priority": "same_actor_list_read",
+                "fixture_owner_actor_ref": "buyer",
                 "resolver_operations": [
                     {
                         "operation_ref": "cart_list",
@@ -1783,6 +1827,18 @@ def test_fixture_cleanup_runs_after_experiment_write_compensations(
         source_refs=experiment.get("source_refs") or [],
         behavior_ir=ir,
         experiment=experiment,
+    )
+    # The compile-frozen request-build contract was sealed against the original
+    # op-read plans. Rebuilding it against the mutated reserve/release plans
+    # keeps the artifact honest so the runtime reaches the cleanup-ordering gate
+    # this test targets (rather than blocking on contract drift first).
+    from ai_test_asset_center.request_build_contract import (
+        build_request_build_contract,
+    )
+    experiment["request_build_contract"] = build_request_build_contract(
+        experiment,
+        behavior_ir=ir,
+        flow_execution_contract=experiment.get("flow_data_execution_contract"),
     )
     phases: list[str] = []
     capacity = 2
@@ -2090,11 +2146,20 @@ def test_authorization_collection_read_forces_source_declared_control_fixture() 
     assert fixture_binding["force_fixture_setup"] is True
     assert fixture_binding["fixture_owner_actor_ref"] == "actor-buyer"
     assert fixture_binding["fixture_setup"]["operation_ref"] == "op-add-cart"
-    assert fixture_binding["fixture_setup"]["cleanup_operations"] == [{
+    # The cleanup projection now carries explicit source/compensation/materialization
+    # authority fields. Assert the route binding and the source lineage, not a
+    # three-field equality that ignores the added authority metadata.
+    assert [
+        {key: row.get(key) for key in ("operation_ref", "method", "path")}
+        for row in fixture_binding["fixture_setup"]["cleanup_operations"]
+    ] == [{
         "operation_ref": "op-delete-cart",
         "method": "DELETE",
         "path": "/cart/items/{id}",
     }]
+    assert fixture_binding["fixture_setup"]["cleanup_operations"][0][
+        "request_materialization_authority"
+    ] == "identity_bound_path_delete"
 
     dag = build_fixture_dag_for_experiment(experiment, behavior_ir=behavior_ir)
 
@@ -2936,6 +3001,13 @@ def test_validation_compiles_source_schema_control_and_single_mutation() -> None
             "operation_ref": "op-create",
             "actor_ref": "actor-writer",
             "template": "invariant_validation",
+            # The validation protocol is fail-closed: a schema-derived mutation
+            # needs an explicit source-bound validation projection, never a
+            # request_example heuristic. Declare the exact constraint lineage.
+            "field_tokens": ["externalRef"],
+            "json_path": "$.externalRef",
+            "validation_constraint": "required",
+            "validation_constraint_source": "request_schema",
         },
         "required_operations": ["op-create"],
         "required_actors": ["actor-writer"],
@@ -2959,12 +3031,10 @@ def test_validation_compiles_source_schema_control_and_single_mutation() -> None
         "value": 1,
     }
     assert experiment["treatment_plan"][0]["body"] == {"value": 1}
-    assert experiment["treatment_plan"][0]["mutation"] == {
-        "json_path": "$.externalRef",
-        "constraint": "required",
-        "source": "request_schema",
-    }
-    assert experiment["assertions"][0]["kind"] == "http_status_class"
+    assert experiment["treatment_plan"][0]["mutation"]["json_path"] == "$.externalRef"
+    assert experiment["treatment_plan"][0]["mutation"]["constraint"] == "required"
+    assert experiment["treatment_plan"][0]["mutation"]["source"] == "request_schema"
+    assert experiment["assertions"][0]["kind"] == "validation_rejection"
     assert experiment["assertions"][0]["expected_class"] == 4
 
 
@@ -2992,6 +3062,10 @@ def test_validation_write_compiles_entity_state_observer_when_read_observer_exis
             "operation_ref": "op-create",
             "actor_ref": "actor-writer",
             "template": "invariant_validation",
+            "field_tokens": ["externalRef"],
+            "json_path": "$.externalRef",
+            "validation_constraint": "required",
+            "validation_constraint_source": "request_schema",
         },
         "required_operations": ["op-create"],
         "required_actors": ["actor-writer"],
@@ -3421,7 +3495,13 @@ def test_conservation_executor_evaluates_snapshot_values_through_contract_oracle
         actor_tokens={},
     )
 
-    assert result["status"] == "EXECUTED"
+    # The conservation oracle verdict is PROPERTY_HELD (before value+reserved ==
+    # after value+reserved). Environment restoration stays unproven here: the
+    # governed treatment snapshot is an in-place mutation of an existing entity
+    # while the compiled cleanup is a delete-created-resource, so the honest
+    # restoration gate reports EXECUTED_BUT_NOT_RESTORED instead of silently
+    # claiming the created row was deleted.
+    assert result["status"] == "EXECUTED_BUT_NOT_RESTORED"
     assert result["cleanup_failures"] == 0
     assert result["oracle_verdict"]["status"] == "PROPERTY_HELD"
     assert result["oracle_verdict"]["assertions"][0]["status"] == "PASS"
@@ -3653,6 +3733,7 @@ def test_write_effect_observer_uses_source_declared_body_bound_lookup() -> None:
                 "method": "GET",
                 "path": "/api/orders",
                 "read_write": "read",
+                "entity_ref": "ent_order",
             },
             {
                 "id": "op-void-payment",
@@ -3669,11 +3750,31 @@ def test_write_effect_observer_uses_source_declared_body_bound_lookup() -> None:
                 "account_status": "active",
             },
         ],
+        "entities": [
+            {"id": "ent_order", "name": "order"},
+        ],
         "relations": [
             {
                 "kind": "compensates",
                 "source": "op-void-payment",
                 "target": "op-pay",
+            },
+        ],
+        # The body-reference authority is fail-closed: a request field name like
+        # ``orderId`` is not entity authority, so the source must declare the FK
+        # target for the write body to bind against a read resolver.
+        "body_reference_relations": [
+            {
+                "operation_ref": "op-pay",
+                "body_path": "orderId",
+                "target_entity_ref": "ent_order",
+                "status": "RESOLVED",
+                "source_refs": [
+                    {
+                        "kind": "database_foreign_key",
+                        "locator": "op-pay.orderId -> ent_order.id",
+                    },
+                ],
             },
         ],
     }
@@ -3707,12 +3808,14 @@ def test_write_effect_observer_uses_source_declared_body_bound_lookup() -> None:
         for observer in experiment["observers"]
         if observer["observer_id"] == "business_effect"
     )
-    assert business_effect["resolver_operations"] == [
-        {
-            "operation_ref": "op-read-payment-by-order",
-            "method": "GET",
-            "path": "/api/payments/order/{orderId}",
-        },
+    # The readback resolver now carries the compiled identity strategy alongside
+    # the declared route; assert the route binding, not the full enrichment.
+    assert [(
+        row["operation_ref"],
+        row["method"],
+        row["path"],
+    ) for row in business_effect["resolver_operations"]] == [
+        ("op-read-payment-by-order", "GET", "/api/payments/order/{orderId}"),
     ]
 
 
@@ -3739,6 +3842,10 @@ def test_validation_compiles_source_declared_type_mutation_without_required_fiel
             "operation_ref": "op-create",
             "actor_ref": "actor-writer",
             "template": "invariant_validation",
+            "field_tokens": ["externalRef"],
+            "json_path": "$.externalRef",
+            "validation_constraint": "type:string",
+            "validation_constraint_source": "request_schema",
         },
         "required_operations": ["op-create"],
         "required_actors": ["actor-writer"],
@@ -3765,11 +3872,9 @@ def test_validation_compiles_source_declared_type_mutation_without_required_fiel
         "externalRef": {},
         "value": 1,
     }
-    assert experiment["treatment_plan"][0]["mutation"] == {
-        "json_path": "$.externalRef",
-        "constraint": "type:string",
-        "source": "request_schema",
-    }
+    assert experiment["treatment_plan"][0]["mutation"]["json_path"] == "$.externalRef"
+    assert experiment["treatment_plan"][0]["mutation"]["constraint"] == "type:string"
+    assert experiment["treatment_plan"][0]["mutation"]["source"] == "request_schema"
 
 
 def test_validation_targets_field_named_by_source_invariant() -> None:
@@ -3800,6 +3905,10 @@ def test_validation_targets_field_named_by_source_invariant() -> None:
                 "operator": "must_hold",
                 "raw": "`value` must be a positive integer",
             },
+            "field_tokens": ["value"],
+            "json_path": "$.value",
+            "validation_constraint": "type:integer",
+            "validation_constraint_source": "request_schema",
         },
         "required_operations": ["op-create"],
         "required_actors": ["actor-writer"],
@@ -3822,11 +3931,9 @@ def test_validation_targets_field_named_by_source_invariant() -> None:
         "externalRef": "source-ref",
         "value": {},
     }
-    assert experiment["treatment_plan"][0]["mutation"] == {
-        "json_path": "$.value",
-        "constraint": "type:integer",
-        "source": "request_schema",
-    }
+    assert experiment["treatment_plan"][0]["mutation"]["json_path"] == "$.value"
+    assert experiment["treatment_plan"][0]["mutation"]["constraint"] == "type:integer"
+    assert experiment["treatment_plan"][0]["mutation"]["source"] == "request_schema"
 
 
 def test_validation_write_compiles_with_response_only_observer() -> None:
@@ -3854,7 +3961,14 @@ def test_validation_write_compiles_with_response_only_observer() -> None:
     obligation = {
         "obligation_id": "obl-validation-no-observer",
         "risk_family": "validation",
-        "property": {"operation_ref": "op-create", "actor_ref": "actor-writer"},
+        "property": {
+            "operation_ref": "op-create",
+            "actor_ref": "actor-writer",
+            "field_tokens": ["externalRef"],
+            "json_path": "$.externalRef",
+            "validation_constraint": "required",
+            "validation_constraint_source": "request_schema",
+        },
         "required_operations": ["op-create"],
         "required_actors": ["actor-writer"],
         "required_observers": ["http_response"],
@@ -3941,7 +4055,10 @@ def test_auto_fixture_requires_identity_bound_cleanup_operation() -> None:
     )
 
     assert fixture is not None
-    assert fixture["fixture_setup"]["cleanup_operations"] == [{
+    assert [
+        {key: row.get(key) for key in ("operation_ref", "method", "path")}
+        for row in fixture["fixture_setup"]["cleanup_operations"]
+    ] == [{
         "operation_ref": "op-delete",
         "method": "DELETE",
         "path": "/resources/{id}",

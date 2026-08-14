@@ -9,13 +9,19 @@ bound into exactly one path placeholder from the created resource.
 Authority tiers are therefore:
 
 1. one source-backed, non-conflicting ``compensates`` relation whose compensator
-   is DELETE with exactly one path identity placeholder; otherwise
+   is an identity-bound write (DELETE, or a POST/PUT/PATCH state-transition
+   action) with exactly one path identity placeholder; otherwise
 2. one identity-bound DELETE on the same source collection.
 
-POST/PUT/PATCH compensators and identity-free DELETE compensators remain visible
-as protocol gaps until a dedicated compensator request-body/identity contract is
-implemented.  The executor must never reuse the original business request body,
-drop unresolved fields, or infer a cleanup method/path to make them executable.
+The executor materializes identity-bound state-transition compensators the same
+way it does DELETE: ``runtime_cleanup_paths`` binds the single path identity
+placeholder from the accepted create response (exactly one candidate required),
+the body is built from a declared template with unresolved server-assigned
+fields dropped and required unresolved fields failing visibly, and restoration
+is proven by ``_cleanup_compensates_created_resource``. The executor must never
+reuse the original business request body, drop required fields silently, or
+infer a cleanup method/path to make them executable. Identity-free compensators
+(with zero path identity placeholders) remain protocol gaps.
 """
 from __future__ import annotations
 
@@ -58,15 +64,20 @@ def _operation_projection(
     authority: str,
     compensates_operation_ref: str,
 ) -> dict[str, Any]:
+    method = _text(operation.get("method")).upper()
     return {
         "operation_ref": _text(operation.get("id") or operation.get("operation_id")),
-        "method": _text(operation.get("method")).upper(),
+        "method": method,
         "path": normalize_path_placeholders(
             _text(operation.get("path") or operation.get("raw_path"))
         ),
         "source": authority,
         "compensates_operation_ref": _text(compensates_operation_ref),
-        "request_materialization_authority": "identity_bound_path_delete",
+        "request_materialization_authority": (
+            "identity_bound_path_delete"
+            if method == "DELETE"
+            else "identity_bound_path_state_transition"
+        ),
     }
 
 
@@ -133,13 +144,42 @@ def _source_compensator_candidates(
     return [candidates[key] for key in sorted(candidates)]
 
 
-def _identity_bound_delete(operation: dict[str, Any]) -> bool:
-    if _text(operation.get("method")).upper() != "DELETE":
+def _identity_bound_path_write(
+    operation: dict[str, Any],
+    methods: frozenset[str],
+) -> bool:
+    if _text(operation.get("method")).upper() not in methods:
         return False
     path = normalize_path_placeholders(
         _text(operation.get("path") or operation.get("raw_path"))
     )
     return bool(path.startswith("/") and len(infer_path_params(path)) == 1)
+
+
+def _identity_bound_delete(operation: dict[str, Any]) -> bool:
+    return _identity_bound_path_write(operation, frozenset({"DELETE"}))
+
+
+def _identity_bound_state_transition(operation: dict[str, Any]) -> bool:
+    return _identity_bound_path_write(operation, _WRITE_METHODS - frozenset({"DELETE"}))
+
+
+def _identity_bound_compensator(operation: dict[str, Any]) -> bool:
+    """True when the executor can materialize this compensator route.
+
+    Both identity-bound DELETE and identity-bound POST/PUT/PATCH state
+    transitions share one binding contract: exactly one path identity
+    placeholder resolved from the accepted create response.
+    """
+    return _identity_bound_delete(operation) or _identity_bound_state_transition(operation)
+
+
+def _compensator_authority(operation: dict[str, Any]) -> str:
+    return (
+        "explicit_identity_delete_compensator"
+        if _identity_bound_delete(operation)
+        else "explicit_identity_state_transition_compensator"
+    )
 
 
 def _identity_delete_candidates(
@@ -174,7 +214,7 @@ def _candidate_diagnostic(operation: dict[str, Any]) -> dict[str, Any]:
         "method": _text(operation.get("method")).upper(),
         "path": path,
         "path_identity_count": len(infer_path_params(path)),
-        "executor_protocol_supported": _identity_bound_delete(operation),
+        "executor_protocol_supported": _identity_bound_compensator(operation),
     }
 
 
@@ -201,8 +241,8 @@ def resolve_cleanup_operation(
         }
 
     explicit_all = _source_compensator_candidates(create_operation, behavior_ir)
-    explicit = [row for row in explicit_all if _identity_bound_delete(row)]
-    unsupported = [row for row in explicit_all if not _identity_bound_delete(row)]
+    explicit = [row for row in explicit_all if _identity_bound_compensator(row)]
+    unsupported = [row for row in explicit_all if not _identity_bound_compensator(row)]
 
     if len(explicit) == 1:
         return {
@@ -213,7 +253,7 @@ def resolve_cleanup_operation(
             "authority": "source_compensates_relation",
             "cleanup_operation": _operation_projection(
                 explicit[0],
-                authority="explicit_identity_delete_compensator",
+                authority=_compensator_authority(explicit[0]),
                 compensates_operation_ref=create_ref,
             ),
             "candidate_operation_ids": [

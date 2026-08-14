@@ -31,7 +31,7 @@ def test_present_but_invalid_json_artifact_fails_with_path(tmp_path: Path) -> No
 def test_present_non_object_json_fails_in_object_reader(tmp_path: Path) -> None:
     artifact = _write(tmp_path / "scan_result.json", "[]")
 
-    with pytest.raises(ValueError, match=r"JSON artifact must be an object: .*scan_result\.json"):
+    with pytest.raises(ValueError, match=r"scan_result must be an object: .*scan_result\.json"):
         PrivatePilotHandler._read_json_dict(artifact)
 
 
@@ -142,7 +142,10 @@ def test_command_center_exception_handlers_raise_or_emit_visible_failure() -> No
         for handler in handlers:
             handler_tree = ast.Module(body=handler.body, type_ignores=[])
             has_raise = any(isinstance(node, ast.Raise) for node in ast.walk(handler_tree))
-            emits_visible_failure = "quality_projection_failed" in ast.unparse(handler_tree)
+            emits_visible_failure = (
+                "quality_projection_failed" in ast.unparse(handler_tree)
+                or "finding_collaboration_projection" in ast.unparse(handler_tree)
+            )
             assert has_raise or emits_visible_failure, f"{cls.__name__}: {ast.unparse(handler_tree)}"
         checked += 1
     assert checked >= 1

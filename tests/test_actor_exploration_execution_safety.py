@@ -1,28 +1,54 @@
+import hashlib
+import json
 from pathlib import Path
 
+from ai_test_asset_center import experiment_executor
+from ai_test_asset_center import _experiment_executor_mainline_mechanics as _executor_mechanics
 from ai_test_asset_center.actor_exploration_execution import (
     apply_actor_execution_overlay,
     exploration_execution_policy,
     extract_primary_http_attempt_evidence,
     should_continue_actor_exploration,
 )
-from ai_test_asset_center import experiment_executor
 
 
-def _experiment(method="GET", path="/api/items", cleanup=False):
+def _canonical(value):
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+
+
+def _sealed_actor_plan(candidate_ids, *, max_attempts=2, source_actor_id="actor-a"):
+    """Compiler-sealed top-level actor plan (same contract the compiler emits)."""
+    plan = {
+        "schema_version": "qualibug.actor-execution-plan.v1",
+        "mode": "permission_exploration",
+        "source_actor_id": source_actor_id,
+        "candidate_ids": list(candidate_ids),
+        "authorization_oracle_enabled": False,
+        "max_attempts": max_attempts,
+        "reason": "",
+        "authority": "compiled_actor_execution_plan",
+    }
+    plan["plan_hash"] = hashlib.sha256(
+        _canonical(plan).encode("utf-8")
+    ).hexdigest()
+    return plan
+
+
+def _experiment(method="GET", path="/api/items", cleanup=False, owner=True):
     experiment = {
         "experiment_id": "exp-actor-exploration",
         "obligation_id": "obl-actor-exploration",
         "required_actors": ["actor-a"],
+        "actor_execution_plan": _sealed_actor_plan(["actor-a", "actor-b"]),
         "property": {
             "operation_ref": "op",
             "actor_ref": "actor-a",
-            "_actor_exploration_plan": {
-                "mode": "permission_exploration",
-                "candidate_ids": ["actor-a", "actor-b"],
-                "max_attempts": 2,
-                "authorization_oracle_enabled": False,
-            },
         },
         "control_plan": [
             {
@@ -38,14 +64,18 @@ def _experiment(method="GET", path="/api/items", cleanup=False):
                 "actor_ref": "actor-a",
             }
         ],
-        "binding_plan": [
-            {
-                "fixture_owner_actor_ref": "actor-a",
-                "resolver_operations": [
-                    {"resolver_actor_ref": "actor-a"}
-                ],
-            }
-        ],
+        "binding_plan": (
+            [
+                {
+                    "fixture_owner_actor_ref": "actor-a",
+                    "resolver_operations": [
+                        {"resolver_actor_ref": "actor-a"}
+                    ],
+                }
+            ]
+            if owner
+            else []
+        ),
         "cleanup_plan": (
             [{"action": "restore", "actor_ref": "actor-a"}]
             if cleanup
@@ -65,8 +95,16 @@ def _experiment(method="GET", path="/api/items", cleanup=False):
     }
     behavior_ir = {
         "actors": [
-            {"id": "actor-a", "role": "one"},
-            {"id": "actor-b", "role": "two"},
+            {
+                "id": "actor-a",
+                "role": "one",
+                "credential_secret_ref": "secret_ref:test_accounts:actor-a",
+            },
+            {
+                "id": "actor-b",
+                "role": "two",
+                "credential_secret_ref": "secret_ref:test_accounts:actor-b",
+            },
         ],
         "operations": [
             {"id": "op", "method": method, "path": path}
@@ -215,9 +253,9 @@ def test_executor_really_switches_step_actor(monkeypatch):
             ],
         }
 
-    monkeypatch.setattr(experiment_executor, "_execute_one_governed", governed)
+    monkeypatch.setattr(_executor_mechanics, "_execute_one_governed", governed)
     monkeypatch.setattr(
-        experiment_executor,
+        _executor_mechanics,
         "enforce_oracle_validity_gates",
         lambda **kwargs: {**kwargs["result"], "validity_gate_ran": True},
     )
@@ -262,9 +300,9 @@ def test_executor_stops_write_after_5xx(monkeypatch):
             ],
         }
 
-    monkeypatch.setattr(experiment_executor, "_execute_one_governed", governed)
+    monkeypatch.setattr(_executor_mechanics, "_execute_one_governed", governed)
     monkeypatch.setattr(
-        experiment_executor,
+        _executor_mechanics,
         "enforce_oracle_validity_gates",
         lambda **kwargs: kwargs["result"],
     )
@@ -293,12 +331,12 @@ def test_executor_stops_write_after_5xx(monkeypatch):
 def test_state_transition_without_owner_blocks_before_transport(monkeypatch):
     calls = []
     monkeypatch.setattr(
-        experiment_executor,
+        _executor_mechanics,
         "_execute_one_governed",
         lambda *args, **kwargs: calls.append(True),
     )
     monkeypatch.setattr(
-        experiment_executor,
+        _executor_mechanics,
         "enforce_oracle_validity_gates",
         lambda **kwargs: kwargs["result"],
     )
@@ -307,6 +345,7 @@ def test_state_transition_without_owner_blocks_before_transport(monkeypatch):
         method="POST",
         path="/api/orders/{id}/submit",
         cleanup=True,
+        owner=False,
     )
     result = experiment_executor.execute_one_experiment(
         experiment,

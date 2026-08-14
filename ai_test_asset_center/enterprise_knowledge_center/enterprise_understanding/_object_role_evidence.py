@@ -7,6 +7,8 @@ from typing import Any
 
 from .schema import as_dict, as_list, text, unique_text
 
+_CJK_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]")
+
 ACCEPTED_FACT_STATES = frozenset({"ACCEPTED", "CONFIRMED"})
 HARD_NON_OBJECT_ROLES = frozenset({"ACTOR", "ACTION", "STATE"})
 NON_SEED_FACT_DERIVATIONS = frozenset(
@@ -20,6 +22,25 @@ NON_SEED_FACT_DERIVATIONS = frozenset(
 def comparison_key(value: Any) -> str:
     """Formatting-only key. It is not semantic or fuzzy identity."""
     return re.sub(r"\s+", "", text(value)).casefold()
+
+
+def _contains_declared_object(
+    label: Any, declared_key: str, declared_raw: str
+) -> bool:
+    """Whether ``label`` embeds a declared object as a separate composite.
+
+    CJK has no word boundaries, so a declared label is a substring match. Latin
+    labels require a whole-token match so a compound entity such as ``OrderLine``
+    is not misread as a phrase built from ``Order``.
+    """
+    raw = text(label)
+    key = comparison_key(label)
+    if not declared_key or not declared_raw or declared_key == key:
+        return False
+    if _CJK_RE.search(declared_raw):
+        return declared_key in key
+    pattern = r"(?<![A-Za-z0-9])" + re.escape(declared_raw) + r"(?![A-Za-z0-9])"
+    return re.search(pattern, raw, flags=re.IGNORECASE) is not None
 
 
 def accepted_facts(asset: dict[str, Any]) -> list[dict[str, Any]]:
@@ -65,19 +86,24 @@ def fact_can_seed_object_type(fact: dict[str, Any]) -> bool:
     """
 
     if text(fact.get("parent_fact_ref")) or text(fact.get("atomic_claim_ref")):
-        return False
+        # An atomic claim projection materializes an explicit source-backed
+        # DATA_EFFECT claim (object + predicate + source span) into a child fact.
+        # Its object is source-attested, so it may seed an object type. A bare
+        # derived marker (parent_fact_ref without a source-backed materialization
+        # receipt) is not source authority and may not.
+        return bool(fact.get("source_backed"))
     return text(fact.get("derivation")) not in NON_SEED_FACT_DERIVATIONS
 
 
 def object_slot_rejection_reason(
     fact: dict[str, Any],
     label: Any,
-    declared_object_keys: set[str],
+    declared_object_labels: dict[str, str],
 ) -> str:
     """Return a structural rejection reason, never a vocabulary judgement."""
 
     key = comparison_key(label)
-    if not key or key in declared_object_keys:
+    if not key or key in declared_object_labels:
         return ""
     if not fact_can_seed_object_type(fact):
         return "DERIVED_FACT_CANNOT_DECLARE_BUSINESS_OBJECT"
@@ -105,8 +131,8 @@ def object_slot_rejection_reason(
     # becoming a second object while still allowing explicitly declared
     # "order attachment" as its own entity.
     if any(
-        declared and declared != key and declared in key
-        for declared in declared_object_keys
+        _contains_declared_object(label, declared_key, declared_raw)
+        for declared_key, declared_raw in declared_object_labels.items()
     ):
         return "COMPOSITE_PHRASE_CONTAINS_DECLARED_BUSINESS_OBJECT"
 
@@ -114,6 +140,7 @@ def object_slot_rejection_reason(
     resolved_behavior = bool(
         text(action.get("canonical"))
         or text(action.get("raw"))
+        or text(fact.get("predicate"))
         or text(fact.get("from_state"))
         or text(fact.get("to_state"))
         or as_list(fact.get("state_effects"))

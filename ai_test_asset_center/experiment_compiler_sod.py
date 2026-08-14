@@ -95,7 +95,20 @@ def attach_sod_fixture_owner_binding(
         },
     ])
     result["binding_plan"] = bindings
+    # The pre-freeze runtime-read resolver is being replaced by the source-declared
+    # SoD fixture. Re-run the fixture-cleanup authority so the setup carries the
+    # resolved cleanup receipt, then re-freeze the request-build contract against
+    # the new binding_plan/fixture_dag. Otherwise the runtime request-build rebuild
+    # sees a different materialization channel than the frozen contract and blocks
+    # the experiment as REQUEST_BUILD_CONTRACT_DRIFT.
+    from .runtime_binding_graph_mainline_base import _govern_fixture_cleanup_authority
+    from .experiment_compile_freezer import freeze_compiled_experiment
+
+    result["binding_plan"] = _govern_fixture_cleanup_authority(
+        bindings, behavior_ir=behavior_ir
+    )
     result["fixture_dag"] = build_fixture_dag_for_experiment(result, behavior_ir=behavior_ir)
+    result = freeze_compiled_experiment(result, behavior_ir=behavior_ir)
     receipt = dict(_dict(result.get("compile_receipt")))
     receipt["sod_fixture_owner_bound"] = True
     receipt["sod_fixture_owner_actor_ref"] = fixture_owner

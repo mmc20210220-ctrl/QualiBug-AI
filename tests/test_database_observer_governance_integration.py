@@ -89,9 +89,18 @@ def test_governance_replaces_raw_database_binding_with_approved_observer(monkeyp
         {
             "behavior_id": "behavior:create-order",
             "status": "CONFIRMED",
+            "source_kind": "ACCEPTED_BUSINESS_FACT",
             "operation_ref": "createOrder",
             "object_refs": ["Order"],
             "preconditions": [],
+            "data_effects": [
+                {
+                    "action": "update",
+                    "field": "amount",
+                    "object": "Order",
+                    "statement": "update order amount",
+                }
+            ],
         }
     ]
 

@@ -97,6 +97,7 @@ def test_sod_real_executor_detects_same_credential_approval(
             "path": kwargs["path"],
             "before": {"status": 200, "body": {"id": "order-1", "status": "pending"}},
             "write": {"status": status, "body": body},
+            "write_request_attempt_count": 1,
             "after": {"status": 404 if cleanup else 200, "body": {} if cleanup else body},
             "audit_path": "sandbox_write_audit.jsonl",
             "audit_record": {"phase": phase, "actor_token": token},
