@@ -730,7 +730,10 @@ def _expand_one(
                     "archive_is_transport_not_business_authority": True,
                 },
             }
-            if inherited.get("source_type"):
+            if (
+                inherited.get("source_type")
+                and inherited.get("inherit_source_type_to_members") is True
+            ):
                 envelope["source_type"] = inherited.get("source_type")
             expansion.documents.append(envelope)
             receipt["document_member_count"] += 1

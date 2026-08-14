@@ -159,8 +159,6 @@ def _canonical_step_fact(row: dict[str, Any]) -> dict[str, Any]:
             _unique_texts(list(row.get("scoped_cleanup_receipt_ids") or []))
         ),
         "transport_attempted": row.get("transport_attempted") is True,
-        "transport_started": row.get("transport_started"),
-        "transport_completed": row.get("transport_completed"),
         "transport_failed": row.get("transport_failed") is True,
         "response_received": row.get("response_received") is True,
         "status_code": _safe_int(row.get("status_code")),

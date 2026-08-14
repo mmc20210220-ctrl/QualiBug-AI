@@ -80,7 +80,9 @@ def test_distinct_actor_nodes_sharing_one_account_are_blocked() -> None:
     )
 
     assert experiment["compile_receipt"]["status"] == "BLOCKED"
-    assert experiment["compile_receipt"]["reason_code"] == "BLOCKED_MISSING_ACTOR"
+    assert experiment["compile_receipt"]["reason_code"] == (
+        "BLOCKED_RUNTIME_ACTOR_PAIR_NOT_DISTINCT"
+    )
     assert experiment["compile_receipt"]["detail"] == (
         "runtime_actor_pair_not_distinct:shared_account_ref"
     )
@@ -188,7 +190,7 @@ def test_batch_compiler_enforces_the_same_runtime_principal_rule() -> None:
 
     assert result["compiled_count"] == 0
     assert result["blocked_count"] == 1
-    assert result["block_reason_counts"] == {"BLOCKED_MISSING_ACTOR": 1}
+    assert result["block_reason_counts"] == {"BLOCKED_RUNTIME_ACTOR_PAIR_NOT_DISTINCT": 1}
     assert obligation["compile_status"] == "BLOCKED"
 
 
@@ -306,10 +308,10 @@ def test_empty_patch_without_source_declared_body_is_blocked() -> None:
 
     assert experiment["compile_receipt"]["status"] == "BLOCKED"
     assert experiment["compile_receipt"]["reason_code"] == (
-        "BLOCKED_NON_REVERSIBLE_WRITE"
+        "BLOCKED_MISSING_BINDING"
     )
     assert experiment["compile_receipt"]["detail"] == (
-        "field_snapshot_restore_no_writable_fields"
+        "source_declared_request_body_missing:op-empty-patch"
     )
 
 

@@ -68,7 +68,7 @@ def _ingest_initial(tmp_path: Path) -> dict[str, object]:
         _PROJECT,
         [
             {
-                "text": "# Upload\nAdmin uploads a fixture and sees Ready.",
+                "text": "# Upload\nThe operator uploads a fixture and sees Ready.",
                 "filename": "upload-ui.md",
                 "source_type": "uiux_spec",
             },
@@ -88,7 +88,7 @@ def _ingest_initial(tmp_path: Path) -> dict[str, object]:
     )
     return next(
         row for row in result["created"]
-        if row.get("filename") == "upload-ui.md"
+        if row.get("original_name") == "upload-ui.md"
     )
 
 

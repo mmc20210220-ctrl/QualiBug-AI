@@ -24,10 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from . import ui_upload_scenario_registry as _scenarios
-from .enterprise_knowledge_center import (
-    build_enterprise_business_knowledge_asset,
-    load_enterprise_business_knowledge_asset,
-)
+from .enterprise_knowledge_center import build_enterprise_business_knowledge_asset
 
 _INSTALL_MARKER = "_qualibug_upload_scenario_semantic_authority_installed"
 _ORIGINAL_MARKER = "_qualibug_upload_scenario_builder_before_semantic_authority"
@@ -75,9 +72,11 @@ def _merged_rows(asset: dict[str, Any], *keys: str) -> list[dict[str, Any]]:
 
 
 def _knowledge_asset(project: str, root: Path) -> dict[str, Any]:
-    asset = load_enterprise_business_knowledge_asset(project, root=Path(root))
-    if not isinstance(asset, dict) or not asset:
-        asset = build_enterprise_business_knowledge_asset(project, root=Path(root))
+    # Semantic drift is only observable against the *current* source projection.
+    # The persisted asset is a cache that ingestion does not invalidate, so loading
+    # it first would compare an approved scenario against stale source facts and
+    # silently miss version/role changes. Always rebuild from the live source registry.
+    asset = build_enterprise_business_knowledge_asset(project, root=Path(root))
     if not isinstance(asset, dict) or not asset:
         raise RuntimeError("ui_upload_scenario_knowledge_asset_missing")
     return asset

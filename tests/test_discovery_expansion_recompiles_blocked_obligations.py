@@ -81,6 +81,7 @@ def _ir(*, with_address_resolver: bool) -> dict:
                     "id": "op_addresses",
                     "method": "GET",
                     "path": "/api/users/addresses",
+                    "entity_refs": ["ent_address"],
                     "source_refs": [
                         {
                             "source_id": "runtime-observed",
@@ -136,7 +137,23 @@ def _ir(*, with_address_resolver: bool) -> dict:
         ],
         "invariants": [],
         "states": [],
-        "entities": [],
+        "entities": [{"id": "ent_address", "name": "address"}],
+        # Explicit source-declared body-reference relation: the order body's
+        # ``addressId`` is a foreign key to the address entity, not an order.
+        "body_reference_relations": [
+            {
+                "operation_ref": "op_orders",
+                "body_path": "addressId",
+                "target_entity_ref": "ent_address",
+                "status": "RESOLVED",
+                "source_refs": [
+                    {
+                        "kind": "database_foreign_key",
+                        "locator": "orders.address_id -> addresses.id",
+                    }
+                ],
+            }
+        ],
     }
 
 
@@ -269,6 +286,7 @@ def test_body_placeholder_resolver_uses_entity_route_not_operation_collection() 
                 "id": "op_addresses",
                 "method": "GET",
                 "path": "/api/users/addresses",
+                "entity_refs": ["ent_address"],
             },
             {"id": "op_get_orders", "method": "GET", "path": "/api/orders"},
             {
@@ -279,6 +297,24 @@ def test_body_placeholder_resolver_uses_entity_route_not_operation_collection() 
         ],
         "actors": [],
         "relations": [],
+        "entities": [{"id": "ent_address", "name": "address"}],
+        # Source-declared body-reference relation so the ``addressId`` body
+        # field resolves through the entity route rather than the order's own
+        # collection reads.
+        "body_reference_relations": [
+            {
+                "operation_ref": "op_orders",
+                "body_path": "addressId",
+                "target_entity_ref": "ent_address",
+                "status": "RESOLVED",
+                "source_refs": [
+                    {
+                        "kind": "database_foreign_key",
+                        "locator": "orders.address_id -> addresses.id",
+                    }
+                ],
+            }
+        ],
     }
     plan = build_binding_plan(
         operation=operation,

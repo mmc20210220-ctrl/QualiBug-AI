@@ -94,8 +94,11 @@ def test_multi_row_case_is_grouped_without_losing_step_evidence() -> None:
 
 def test_conflicting_scalar_values_remain_fail_visible() -> None:
     document_ir = _document_ir()
-    document_ir["blocks"].append(_cell(3, 2, "订单审批改名"))
-    document_ir["tables"][0]["cell_block_ids"].append("cell:B3")
+    # Inject a conflicting scalar into a continuation row. A differing "用例标题"
+    # would split the row into a new title-identity case, so a non-identity scalar
+    # (前置条件/precondition) is used to exercise the fail-visible conflict path.
+    document_ir["blocks"].append(_cell(3, 3, "存在审批中订单"))
+    document_ir["tables"][0]["cell_block_ids"].append("cell:C3")
 
     result = extract_tabular_enterprise_semantics(
         document_ir,
@@ -107,5 +110,5 @@ def test_conflicting_scalar_values_remain_fail_visible() -> None:
     first = result["test_cases"][0]
     assert first["title"] == "订单审批"
     assert first["field_conflict_count"] == 1
-    assert first["field_conflicts"][0]["field"] == "title"
+    assert first["field_conflicts"][0]["field"] == "precondition"
     assert result["field_conflict_count"] == 1

@@ -208,7 +208,9 @@ def test_archive_with_only_system_junk_is_not_reported_as_success() -> None:
 
 
 def test_public_archive_ingestion_module_is_only_a_core_facade() -> None:
-    assert archive_ingestion.expand_archive_documents is archive_ingestion_core.expand_archive_documents
+    # The facade owns transport classification but shares the single atomic
+    # parser/transaction authority with core (no duplicate archive parser).
+    assert archive_ingestion._core is archive_ingestion_core
     assert (
         archive_ingestion.ingest_enterprise_knowledge_archives
         is archive_ingestion_core.ingest_enterprise_knowledge_archives

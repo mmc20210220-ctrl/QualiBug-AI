@@ -1277,14 +1277,18 @@ def compile_experiment_for_obligation(
 
     for gap in _list(ir.get("conflicts")):
         if isinstance(gap, dict) and _text(gap.get("status")) == "conflicting":
-            # Only block if this obligation references the conflicting operation
-            _conflict_op = _text(gap.get("operation_ref"))
-            if _conflict_op and _conflict_op in _list(obl.get("subject_refs") or obl.get("required_operations") or []):
-                return blocked_experiment(
-                    oid,
-                    "BLOCKED_CONFLICTING_SOURCE",
-                    _text(gap.get("id")),
-                )
+            # Conflict relevance is decided upstream by `_scoped_behavior_ir`
+            # (experiment_compiler.py): only conflicts relevant to this
+            # obligation survive into `ir["conflicts"]`. That rule covers
+            # operation-scoped, actor/role-scoped, and global conflicts.
+            # Re-deriving relevance here with an operation_ref-only check
+            # silently passes role-only and global conflicts, so any surviving
+            # conflicting row is a fail-closed block.
+            return blocked_experiment(
+                oid,
+                "BLOCKED_CONFLICTING_SOURCE",
+                _text(gap.get("id")),
+            )
 
     if not primary_op_id or primary_op_id not in ops:
         # ── Fallback: resolve primary operation from source_refs locators ──
@@ -2704,6 +2708,10 @@ def compile_experiment_for_obligation(
         and family in {"authorization", "isolation", "visibility"}
         and not permit_only
         and not _is_ephemeral_session_path(primary_path_early)
+        # Single-arm credential-gated guard: the anonymous write's rejection is
+        # the property (http_status_class 4xx), so no state change occurs and a
+        # before/after business_effect observer is neither possible nor needed.
+        and _text(prop.get("template")) != "credential_gated_write"
     ):
         observer_requirements.append("business_effect")
     observers, observer_reason, observer_detail = compile_observer_requirements(
@@ -3907,6 +3915,11 @@ SCHEMA_VERSION = "qualibug.experiment.v1"
 BLOCK_REASONS = (
     "BLOCKED_MISSING_OPERATION",
     "BLOCKED_MISSING_ACTOR",
+    # Control/treatment resolve to the same real principal (shared account,
+    # credential secret, or anonymous runtime context): a false contrast, not a
+    # capability gap. Distinct from BLOCKED_MISSING_ACTOR so the batch compiler
+    # keeps it a hard BLOCKED instead of promoting it to ABSTRACT intent.
+    "BLOCKED_RUNTIME_ACTOR_PAIR_NOT_DISTINCT",
     "BLOCKED_MISSING_FIXTURE",
     "BLOCKED_MISSING_BINDING",
     "BLOCKED_MISSING_OBSERVER",

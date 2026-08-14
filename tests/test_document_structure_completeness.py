@@ -38,6 +38,16 @@ def test_unparsed_document_content_prevents_complete_understanding() -> None:
                     }
                 ],
                 "structure_receipt": {"status": "PARTIAL"},
+                # The unparsed-content gate is tested in isolation: the source
+                # already passed the ingestion pipeline and evidence-closure
+                # gates, so the only remaining gap is the partial content.
+                "ingestion_pipeline_receipt": {"final_status": "COMPLETE"},
+                "evidence_closure_receipt": {
+                    "status": "PASS",
+                    "untraceable_authority_block_count": 0,
+                    "weak_address_authority_block_count": 0,
+                    "locator_conflict_count": 0,
+                },
             }
         ],
     }

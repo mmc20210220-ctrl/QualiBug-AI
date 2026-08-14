@@ -181,8 +181,12 @@ def enrich_api_spec_text(root: Path, project: str, api_spec_text: str) -> str:
         return primary
     note = f"Merged sources: {', '.join(sources[:8])}" + (" …" if len(sources) > 8 else "")
     rendered = _render_merged_markdown(merged, header_note=note)
-    if primary and len(merged) <= len(_catalog_from_markdown(primary)):
-        # Primary already covers the catalog — still append only if OpenAPI added paths.
+    if primary:
+        # Primary already covers the catalog — return it verbatim so request
+        # schemas, examples, and role constraints survive (the markdown render
+        # drops them). Compare the normalized (method, path) sets only: merged
+        # rows may outnumber primary rows when several sources describe the
+        # same endpoints, and that must never force a lossy markdown downgrade.
         primary_paths = {( _text(e.get("method")).upper(), _normalize_path_param(_text(e.get("path")))) for e in _catalog_from_markdown(primary)}
         merged_paths = {( _text(e.get("method")).upper(), _normalize_path_param(_text(e.get("path")))) for e in merged}
         if merged_paths <= primary_paths:

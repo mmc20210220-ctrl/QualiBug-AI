@@ -12,8 +12,12 @@ from ai_test_asset_center.enterprise_knowledge_center import (
 def test_rule_projection_runs_after_fact_conflicts_and_before_model(monkeypatch):
     order = []
 
+    # The integration package facade loads its implementation into
+    # ``integration._legacy`` (a distinct module instance). Patching the facade
+    # itself is a silent no-op; the observable call sites must be patched there.
+    legacy = integration._legacy
     monkeypatch.setattr(
-        integration,
+        legacy,
         "_attach_document_structure_assets",
         lambda asset, rows: order.append("structure"),
     )
@@ -68,14 +72,14 @@ def test_rule_projection_runs_after_fact_conflicts_and_before_model(monkeypatch)
             "unknowns": [],
         }
 
-    monkeypatch.setattr(integration, "build_enterprise_understanding_model", build_model)
+    monkeypatch.setattr(legacy, "build_enterprise_understanding_model", build_model)
     monkeypatch.setattr(
-        integration,
+        legacy,
         "apply_minimum_understanding_closure",
         lambda model, asset: model,
     )
     monkeypatch.setattr(
-        integration,
+        legacy,
         "project_final_scenario_planning_gate",
         lambda asset, model: None,
     )

@@ -38,6 +38,17 @@ def _asset() -> dict:
                     "format": "pdf",
                     "blocks": [{"block_id": "table-1"}],
                     "unsupported_content": unsupported,
+                    # The table-semantic-summary gate is tested in isolation: the
+                    # source already passed the ingestion pipeline and
+                    # evidence-closure gates, leaving only the partial
+                    # table-semantic candidates as a non-blocking gap.
+                    "ingestion_pipeline_receipt": {"final_status": "COMPLETE"},
+                    "evidence_closure_receipt": {
+                        "status": "PASS",
+                        "untraceable_authority_block_count": 0,
+                        "weak_address_authority_block_count": 0,
+                        "locator_conflict_count": 0,
+                    },
                     "structure_receipt": {
                         "status": "PARTIAL",
                         "page_count": 2,

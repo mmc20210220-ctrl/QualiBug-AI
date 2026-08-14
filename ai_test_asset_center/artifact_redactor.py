@@ -36,6 +36,15 @@ SAFE_META_KEY_RE = re.compile(
     re.I,
 )
 JWT_RE = re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\b")
+# A JWT carried in an ``Authorization: Bearer`` header starts at the ``Bearer``
+# token, which the bearer branch would otherwise match at an earlier position
+# than the standalone jwt branch and swallow the JWT-type marker. Match this
+# specific shape first so ``Bearer eyJ...`` redacts to ``Bearer <REDACTED_JWT>``
+# (preserving the JWT specificity) instead of the generic ``Bearer <REDACTED>``.
+BEARER_JWT_RE = re.compile(
+    r"\bBearer\s+eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\b",
+    re.I,
+)
 BEARER_RE = re.compile(r"\bBearer\s+[A-Za-z0-9._\-+=/]{12,}\b", re.I)
 BASIC_RE = re.compile(r"\bBasic\s+[A-Za-z0-9+/=]{12,}\b", re.I)
 API_KEY_RE = re.compile(r"\b(?:sk|pk|rk|ak)-[A-Za-z0-9]{12,}\b")
@@ -82,6 +91,7 @@ _REDACT_COMBINED_RE = re.compile(
         for label, pattern in (
             ("private_key", PRIVATE_KEY_RE),
             ("jwt", JWT_RE),
+            ("bearer_jwt", BEARER_JWT_RE),
             ("bearer", BEARER_RE),
             ("basic", BASIC_RE),
             ("api_key", API_KEY_RE),
@@ -94,6 +104,7 @@ _REDACT_COMBINED_RE = re.compile(
 _REDACT_REPLACEMENTS: dict[str, str] = {
     "private_key": "<REDACTED_PRIVATE_KEY>",
     "jwt": "<REDACTED_JWT>",
+    "bearer_jwt": "Bearer <REDACTED_JWT>",
     "bearer": "Bearer <REDACTED>",
     "basic": "Basic <REDACTED>",
     "api_key": "<REDACTED_API_KEY>",

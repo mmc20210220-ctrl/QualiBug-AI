@@ -171,7 +171,7 @@ def compile_experiment_for_obligation(
         )
         return _base.blocked_experiment(
             obligation_id,
-            "BLOCKED_MISSING_ACTOR",
+            "BLOCKED_RUNTIME_ACTOR_PAIR_NOT_DISTINCT",
             f"runtime_actor_pair_not_distinct:{problem}",
         )
     return _original_compile_experiment(

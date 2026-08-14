@@ -205,7 +205,9 @@ def test_cross_source_identity_unresolved_without_term_alias() -> None:
     assert "CROSS_SOURCE_IDENTITY_UNRESOLVED" in kinds
     object_names = {row.get("name") for row in model.get("business_objects") or []}
     assert "订单" in object_names
-    assert "orders" in object_names
+    # Technical tables are not auto-promoted to business objects; without a term
+    # alias the "orders" table stays an unresolved CROSS_SOURCE_IDENTITY artifact.
+    assert "orders" not in object_names
 
 
 def test_fk_relation_attaches_when_both_tables_are_understood_objects() -> None:
@@ -227,6 +229,44 @@ def test_fk_relation_attaches_when_both_tables_are_understood_objects() -> None:
                     "derivation": "declared_foreign_key",
                 }
             ],
+            # Source-declared entity headings make the two tables understood
+            # business objects; the raw technical table inventory alone is not
+            # self-authorizing under the fail-closed identity gate.
+            "document_semantic_trees": {
+                "items": [
+                    {
+                        "source_id": "schema.sql",
+                        "nodes": [
+                            {
+                                "node_id": "node:orders",
+                                "semantic_heading": True,
+                                "raw_heading": "orders",
+                                "title": "orders",
+                                "path_titles": ["企业数据字典", "核心实体", "orders"],
+                                "evidence": {
+                                    "source_id": "schema.sql",
+                                    "source_locator": "schema.sql#orders",
+                                    "quote": "orders",
+                                    "quote_hash": "hash-orders",
+                                },
+                            },
+                            {
+                                "node_id": "node:customers",
+                                "semantic_heading": True,
+                                "raw_heading": "customers",
+                                "title": "customers",
+                                "path_titles": ["企业数据字典", "核心实体", "customers"],
+                                "evidence": {
+                                    "source_id": "schema.sql",
+                                    "source_locator": "schema.sql#customers",
+                                    "quote": "customers",
+                                    "quote_hash": "hash-customers",
+                                },
+                            },
+                        ],
+                    }
+                ]
+            },
         }
     )
 

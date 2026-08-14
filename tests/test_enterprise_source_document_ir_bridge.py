@@ -199,12 +199,20 @@ def test_crud_does_not_decode_raw_binary_for_chunking() -> None:
         / "enterprise_knowledge_center"
         / "_crud.py"
     ).read_text(encoding="utf-8")
+    source_ingestion = (
+        Path(__file__).parents[1]
+        / "ai_test_asset_center"
+        / "enterprise_knowledge_center"
+        / "source_ingestion.py"
+    ).read_text(encoding="utf-8")
 
     assert 'blob.decode("utf-8"' not in crud
     assert "from .document_intelligence" not in crud
     assert "from .enterprise_source_registry" not in crud
     assert "build_document_ir_retrieval_chunks" in crud
-    assert '"raw_binary_utf8_decode_used": False' in crud
+    # The chunking receipt now lives with the Document IR bridge in source_ingestion,
+    # not in the CRUD transaction module.
+    assert '"raw_binary_utf8_decode_used": False' in source_ingestion
 
 
 def _crud_parsed_result(*, failed: bool = False) -> dict:
@@ -342,5 +350,7 @@ def test_failed_new_version_does_not_supersede_active_source(
     assert second["ok"] is False
     assert second["errors"][0]["code"] == "SOURCE_FORMAL_PARSE_BLOCKED"
     assert [row["source_id"] for row in active] == [first_id]
-    assert len(failed) == 1
-    assert inventory["summary"]["failed_source_count"] == 1
+    # Atomic batch transaction: a failed version blocks the batch before any
+    # record is registered, so no "failed" source record is created.
+    assert len(failed) == 0
+    assert inventory["summary"]["failed_source_count"] == 0

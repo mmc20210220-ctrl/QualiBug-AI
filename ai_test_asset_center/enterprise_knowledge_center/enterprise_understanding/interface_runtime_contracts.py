@@ -271,13 +271,18 @@ def _operation_source_excerpt(
 ) -> str:
     """Preserve exact operation prose for the existing exact-source linker."""
 
-    parts = unique_text(
-        [
-            text(row.get("source_excerpt")),
-            text(operation.get("summary")),
-            text(operation.get("description")),
-        ]
-    )
+    # Keep source-declared document order (summary then description) rather than
+    # alphabetical order: the excerpt must remain verbatim prose, not a sorted set.
+    parts: list[str] = []
+    seen: set[str] = set()
+    for value in (
+        text(row.get("source_excerpt")),
+        text(operation.get("summary")),
+        text(operation.get("description")),
+    ):
+        if value and value not in seen:
+            seen.add(value)
+            parts.append(value)
     return "\n".join(parts)
 
 

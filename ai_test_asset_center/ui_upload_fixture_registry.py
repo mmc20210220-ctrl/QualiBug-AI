@@ -625,7 +625,7 @@ def approved_upload_fixture_binding(
         "status": "approved",
         "fixture_id": record["fixture_id"],
         "binding_ref": record["binding_ref"],
-        "file_path": str(relative),
+        "file_path": relative.as_posix(),
         "sha256": digest,
         "size_bytes": size,
         "content_type": record.get("content_type") or "application/octet-stream",

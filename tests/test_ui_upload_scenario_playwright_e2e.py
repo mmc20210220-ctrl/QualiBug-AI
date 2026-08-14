@@ -142,7 +142,7 @@ def _governed_scenario(tmp_path: Path) -> tuple[str, dict[str, Any]]:
         root=tmp_path,
         actor=actor,
     )
-    ui_source = next(row for row in ingested["created"] if row.get("filename") == "upload-ui.md")
+    ui_source = next(row for row in ingested["created"] if row.get("original_name") == "upload-ui.md")
     source = tmp_path / "platform_inputs" / project / "inbox" / "customers.csv"
     source.parent.mkdir(parents=True, exist_ok=True)
     source.write_text("id,name\n1,Alice\n", encoding="utf-8")

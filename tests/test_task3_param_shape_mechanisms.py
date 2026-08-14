@@ -272,13 +272,26 @@ def _merge_ir() -> dict:
     ir["entities"] = [
         {"id": "ent-carts", "name": "carts", "fields": ["id", "user_id"], "status": "accepted"},
     ]
-    ir["relations"] = [{
-        "id": "rel-obs", "relation_type": "observes", "from_ref": cart_get["id"],
-        "to_ref": "ent-carts", "operation_ref": cart_get["id"], "actor_ref": "",
-        "preconditions": [], "effects": [], "permission_decision": "",
-        "source_relationship_ref": "", "source_refs": [], "confidence": 0.9,
-        "derivation": "explicit", "status": "accepted",
-    }]
+    ir["relations"] = [
+        {
+            "id": "rel-obs", "relation_type": "observes", "from_ref": cart_get["id"],
+            "to_ref": "ent-carts", "operation_ref": cart_get["id"], "actor_ref": "",
+            "preconditions": [], "effects": [], "permission_decision": "",
+            "source_relationship_ref": "",
+            "source_refs": [{"source_id": "api_spec", "locator": "GET /api/cart/items -> carts", "kind": "relation"}],
+            "confidence": 0.9,
+            "derivation": "explicit", "status": "accepted",
+        },
+        {
+            "id": "rel-prod-merge", "relation_type": "produces", "from_ref": merge["id"],
+            "to_ref": "ent-carts", "operation_ref": merge["id"], "actor_ref": "",
+            "preconditions": [], "effects": [], "permission_decision": "",
+            "source_relationship_ref": "",
+            "source_refs": [{"source_id": "api_spec", "locator": "POST /api/cart/merge -> carts", "kind": "relation"}],
+            "confidence": 0.9,
+            "derivation": "explicit", "status": "accepted",
+        },
+    ]
     return ir
 
 

@@ -200,10 +200,14 @@ def prepare_scan_before_pipeline(
     # source_declared_request_body_missing. When the project input declares an
     # OpenAPI file, prefer its raw content for operation extraction (schemas
     # and examples survive); the composed corpus stays as the verification
-    # text for source grounding below.
-    if source_api_doc_text and not _api_doc_parseable(source_api_doc_text):
-        _openapi_text = _project_openapi_doc_text(root, project)
-        if _openapi_text:
+    # text for source grounding below. A markdown API_SPEC is *parseable* but
+    # still loses schemas — so the switch keys on format, not on parseability.
+    _openapi_text = _project_openapi_doc_text(root, project)
+    if _openapi_text:
+        from .universal_api_parser import detect_format
+
+        _src_format = detect_format(source_api_doc_text)
+        if _src_format not in {"openapi3", "swagger2", "postman", "graphql", "grpc"}:
             api_doc_text = _openapi_text
     try:
         from .api_doc_assets import enrich_api_spec_text

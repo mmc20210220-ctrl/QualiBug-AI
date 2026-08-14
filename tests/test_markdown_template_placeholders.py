@@ -63,7 +63,7 @@ def test_write_op_emits_request_schema_with_example_tokens() -> None:
     assert example.get("addressId") == "<address_id>"
 
 
-def test_body_placeholder_detected_and_resolvable() -> None:
+def test_body_placeholder_detected_and_fail_closed() -> None:
     ops = _ops(_SPEC)
     ir = build_behavior_ir_from_knowledge_asset(None, api_operations=list(ops.values()))
     plan = build_binding_plan(
@@ -73,11 +73,17 @@ def test_body_placeholder_detected_and_resolvable() -> None:
         available_values={},
     )
     entries = [p for p in plan if p.get("target") == "address_id"]
+    # The §8.5 regression guarantee: the placeholder is surfaced in the binding
+    # plan and never silently passed through as a literal token.
     assert entries, "address_id placeholder must be detected from request example"
     entry = entries[0]
-    assert entry.get("status") == "runtime_resolvable"
-    paths = [r.get("path") for r in (entry.get("resolver_operations") or [])]
-    assert "/api/users/addresses" in paths
+    # A request-body identity field is only resolvable from a source-declared
+    # FK/reference relation. The markdown example alone declares no such relation,
+    # so the body-identity authority must fail closed instead of inferring one
+    # from the field name.
+    assert entry.get("status") == "blocked"
+    assert entry.get("blocked_reason") == "BODY_IDENTITY_RELATION_NOT_SOURCE_DECLARED"
+    assert (entry.get("resolver_operations") or []) == []
 
 
 def test_path_placeholder_detected_for_collection_read() -> None:

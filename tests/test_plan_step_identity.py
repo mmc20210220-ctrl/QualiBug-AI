@@ -40,7 +40,10 @@ def registered() -> Iterator[Any]:
             "protocol_id": f"{FAMILY}:{TEMPLATE}",
             "compiler": compiler,
             "observers": [],
-            "assertion_kind": "",
+            # The protocol authority gate requires a real, producible Oracle
+            # assertion kind; a custom test family has no built-in mapping so
+            # the registration must declare one explicitly.
+            "assertion_kind": flags.get("assertion_kind", "http_status"),
             "emits_control": flags.get("emits_control", False),
             "per_step_evidence": flags.get("per_step_evidence", False),
         }
@@ -201,7 +204,7 @@ def test_executor_uses_the_step_id_authoritative_form() -> None:
 
     source = (
         Path(__file__).resolve().parents[1]
-        / "ai_test_asset_center" / "experiment_plan_executor.py"
+        / "ai_test_asset_center" / "experiment_plan_step_executor_core.py"
     ).read_text(encoding="utf-8")
     assert "declared_step_id" in source
     assert "declared_step_id and declared_step_id in planned_subjects" in source
