@@ -14,8 +14,9 @@ import json
 import logging
 import os
 import time
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from .sandbox_write_executor import _http_request
 
@@ -29,6 +30,89 @@ def _dict(value: Any) -> dict[str, Any]:
 
 def _text(value: Any) -> str:
     return str(value or "").strip()
+
+
+@contextmanager
+def _exclusive_file_lock(path: Path, *, timeout_seconds: float = 30.0) -> Iterator[None]:
+    """A cross-process advisory lock over ``path.lock`` (best-effort).
+
+    Concurrent scans refresh the same ``test_accounts.json``.  A plain
+    read-modify-write lets two processes interleave: each logs in (which the
+    target treats as single-session, invalidating the other's token) and each
+    overwrites the other's freshly written snapshot — the observed
+    ``declared_actor_tokens_expired`` ×85 thrash loop.  Serializing the
+    refresh closes the lost-update without any cross-process registry.
+
+    Uses ``msvcrt.locking`` on Windows and ``fcntl.flock`` elsewhere; a failure
+    to acquire the lock degrades to no locking rather than deadlocking a scan.
+    """
+    lock_path = Path(str(path) + ".lock")
+    deadline = time.monotonic() + timeout_seconds
+    handle = None
+    try:
+        handle = open(lock_path, "a+b")
+        try:
+            import msvcrt
+
+            while True:
+                try:
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+                    break
+                except OSError:
+                    if time.monotonic() >= deadline:
+                        yield
+                        return
+                    time.sleep(0.05)
+        except ImportError:
+            try:
+                import fcntl
+
+                while True:
+                    try:
+                        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        break
+                    except OSError:
+                        if time.monotonic() >= deadline:
+                            yield
+                            return
+                        time.sleep(0.05)
+            except ImportError:
+                pass
+        yield
+    except OSError:
+        yield
+    finally:
+        if handle is not None:
+            try:
+                try:
+                    import msvcrt
+
+                    handle.seek(0)
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+                except ImportError:
+                    try:
+                        import fcntl
+
+                        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                    except ImportError:
+                        pass
+            except OSError:
+                pass
+            handle.close()
+
+
+def _atomic_write_text(path: Path, text: str) -> None:
+    """Write ``text`` atomically via a same-directory temp file + replace.
+
+    A direct ``write_text`` is a torn-write hazard for concurrent readers: a
+    reader can observe a half-written JSON and drop every account as unparsable.
+    ``os.replace`` is atomic on the same volume, so readers see either the old
+    or the new snapshot, never a partial one.
+    """
+    tmp = Path(str(path) + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, path)
+
 
 
 def _jwt_expired(token: str, *, skew_seconds: int = 30) -> bool:
@@ -184,10 +268,54 @@ def _persist_refreshed_account_tokens(
                 changed = apply_row(row, source_key=_text(key)) or changed
     if not changed:
         return
-    path.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
+    # Serialize the read-modify-write across concurrent scans and write
+    # atomically: a torn or clobbered snapshot is what drives the token-thrash
+    # loop (each process overwrites the other's fresh token, then re-logs in
+    # and invalidates the sibling's in-memory token at the target).
+    with _exclusive_file_lock(path):
+        # Re-read under the lock so a sibling's fresh token is preserved rather
+        # than clobbered by this process's older payload.
+        current = payload
+        try:
+            on_disk = json.loads(path.read_text(encoding="utf-8") or "{}")
+        except (OSError, json.JSONDecodeError):
+            on_disk = None
+        if isinstance(on_disk, list) and isinstance(payload, list):
+            if len(on_disk) == len(payload):
+                current = on_disk
+        elif isinstance(on_disk, dict) and isinstance(payload, dict):
+            current = on_disk
+        # Apply this process's refreshed tokens onto the re-read snapshot so the
+        # write never reverts a sibling's refresh.
+        if current is not payload:
+            payload = current
+            changed = False
+            if isinstance(payload, list):
+                for row in payload:
+                    if isinstance(row, dict):
+                        changed = apply_row(row) or changed
+            elif isinstance(payload, dict):
+                matched_collection = False
+                for collection_key in ("accounts", "actors", "users"):
+                    collection = payload.get(collection_key)
+                    if not isinstance(collection, list):
+                        continue
+                    matched_collection = True
+                    for row in collection:
+                        if isinstance(row, dict):
+                            changed = apply_row(row) or changed
+                    break
+                if not matched_collection:
+                    for key, row in payload.items():
+                        if key in {"schema", "schema_version", "meta"} or not isinstance(row, dict):
+                            continue
+                        changed = apply_row(row, source_key=_text(key)) or changed
+            if not changed:
+                return
+        _atomic_write_text(
+            path,
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+        )
 
 
 def _credential_config_path(root: Path, project: str) -> Path | None:
