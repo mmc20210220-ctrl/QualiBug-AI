@@ -297,7 +297,7 @@ export function renderReportHTML(d: ReportData): string {
   ${d.dbFindings.length > 0 ? `
   <div class="section">
     <h2>数据一致性隐患 (${d.dbFindings.length} 项)</h2>
-    <p class="section-intro">直接从数据库检测到的数据异常，如负库存、重复记录、引用失效等</p>
+    <p class="section-intro">直接从数据库检测到的数据异常，如计数负值、重复记录、引用失效等</p>
     ${d.dbFindings.map(f=>`
     <div class="db-finding">
       <span class="tag">${h(f.id)}</span>

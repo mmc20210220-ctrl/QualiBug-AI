@@ -1,3 +1,5 @@
+import { asRecord, asString } from '../lib/value-guards';
+
 export type FindingHandlingStatus =
   | 'new'
   | 'triaged'
@@ -40,18 +42,8 @@ export type FindingCollaborationPatch = Partial<Pick<
   | 'external_issue_url'
 >>;
 
-function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : {};
-}
-
-function asText(value: unknown): string {
-  return typeof value === 'string' ? value : '';
-}
-
 function asHandlingStatus(value: unknown): FindingHandlingStatus {
-  const text = asText(value);
+  const text = asString(value);
   if (
     text === 'triaged'
     || text === 'in_progress'
@@ -63,7 +55,7 @@ function asHandlingStatus(value: unknown): FindingHandlingStatus {
 }
 
 function asDisposition(value: unknown): FindingDisposition {
-  const text = asText(value);
+  const text = asString(value);
   if (text === 'accepted_risk' || text === 'false_positive') return text;
   return 'none';
 }
@@ -71,18 +63,18 @@ function asDisposition(value: unknown): FindingDisposition {
 function parseItem(value: unknown): FindingCollaboration {
   const item = asRecord(value);
   return {
-    finding_persistence_id: asText(item.finding_persistence_id),
-    verification_status: asText(item.verification_status) || 'open',
+    finding_persistence_id: asString(item.finding_persistence_id),
+    verification_status: asString(item.verification_status) || 'open',
     handling_status: asHandlingStatus(item.handling_status),
-    assignee: asText(item.assignee),
-    fix_version: asText(item.fix_version),
-    developer_feedback: asText(item.developer_feedback),
+    assignee: asString(item.assignee),
+    fix_version: asString(item.fix_version),
+    developer_feedback: asString(item.developer_feedback),
     disposition: asDisposition(item.disposition),
-    disposition_note: asText(item.disposition_note),
-    external_issue_url: asText(item.external_issue_url),
-    updated_by: asText(item.updated_by),
-    created_at: asText(item.created_at),
-    updated_at: asText(item.updated_at),
+    disposition_note: asString(item.disposition_note),
+    external_issue_url: asString(item.external_issue_url),
+    updated_by: asString(item.updated_by),
+    created_at: asString(item.created_at),
+    updated_at: asString(item.updated_at),
   };
 }
 
@@ -111,8 +103,8 @@ export async function updateFindingCollaboration(
   const payload = asRecord(await response.json().catch(() => ({})));
   if (!response.ok || payload.ok !== true) {
     throw new Error(
-      asText(payload.message)
-      || asText(payload.error)
+      asString(payload.message)
+      || asString(payload.error)
       || `协作记录保存失败：HTTP ${response.status}`,
     );
   }

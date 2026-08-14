@@ -4,6 +4,7 @@ import { getKnowledgeAsset, getServiceCredentials, listConnectors, type Connecto
 import { listKnowledgeConnectors } from '../../api/knowledge-connectors';
 import { useProjectNavigation } from '../../lib/project-navigation';
 import { hasConfiguredAuthMaterial, hasConfiguredDbMaterial, type SavedServiceConfig } from '../../lib/settings-utils';
+import { asRecord } from '../../lib/value-guards';
 
 type SettingsOnboardingGuideProps = {
   project: string;
@@ -19,12 +20,6 @@ type SetupSnapshot = {
 };
 
 type MaterialStatus = Pick<SetupSnapshot, 'materialCount' | 'onlineMaterialCount' | 'uploadedMaterialCount'>;
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : {};
-}
 
 function extractServices(payload: unknown): SavedServiceConfig[] {
   const root = asRecord(payload);

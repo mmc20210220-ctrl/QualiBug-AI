@@ -191,6 +191,12 @@ export function deriveFindingVerification(finding: Finding): FindingVerification
   };
 }
 
+function isKnownVerificationOutcome(
+  outcome: FindingVerificationOutcome,
+): outcome is Exclude<FindingVerificationOutcome, 'unknown'> {
+  return outcome === 'fixed' || outcome === 'open';
+}
+
 function outcomeLabel(outcome: FindingVerificationOutcome): string {
   if (outcome === 'fixed') return '修复验证通过';
   if (outcome === 'open') return '问题仍成立';
@@ -217,7 +223,7 @@ export function buildFindingVerificationTimeline(finding: Finding): FindingVerif
 
   history.forEach((run, index) => {
     const presentation = deriveVerificationRunPresentation(run.status, run.gate_status, run.reason || '');
-    const isKnownOutcome = presentation.outcome === 'fixed' || presentation.outcome === 'open';
+    const isKnownOutcome = isKnownVerificationOutcome(presentation.outcome);
     const changedConclusion = isKnownOutcome && presentation.outcome !== lastKnownOutcome;
     const previousOutcome = lastKnownOutcome;
     const transitionLabel = changedConclusion
@@ -241,7 +247,9 @@ export function buildFindingVerificationTimeline(finding: Finding): FindingVerif
       run,
     });
 
-    if (isKnownOutcome) lastKnownOutcome = presentation.outcome;
+    if (isKnownVerificationOutcome(presentation.outcome)) {
+      lastKnownOutcome = presentation.outcome;
+    }
   });
 
   return timeline;

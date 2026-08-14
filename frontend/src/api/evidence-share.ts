@@ -1,3 +1,5 @@
+import { asRecord, asString, asStrictNumber } from '../lib/value-guards';
+
 export type EvidenceShareMetadata = {
   share_id: string;
   created_by: string;
@@ -46,26 +48,12 @@ export type ResolvedEvidenceShare = {
   snapshot: PublicEvidenceSnapshot;
 };
 
-function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : {};
-}
-
-function asText(value: unknown): string {
-  return typeof value === 'string' ? value : '';
-}
-
-function asNumber(value: unknown): number {
-  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
-}
-
 async function jsonPayload(response: Response): Promise<Record<string, unknown>> {
   return asRecord(await response.json().catch(() => ({})));
 }
 
 function apiError(response: Response, payload: Record<string, unknown>, fallback: string): Error {
-  return new Error(asText(payload.message) || asText(payload.error) || `${fallback}：HTTP ${response.status}`);
+  return new Error(asString(payload.message) || asString(payload.error) || `${fallback}：HTTP ${response.status}`);
 }
 
 export async function createEvidenceShare(
@@ -88,12 +76,12 @@ export async function createEvidenceShare(
   if (!response.ok || payload.ok !== true) throw apiError(response, payload, '分享链接创建失败');
   const share = asRecord(payload.share);
   const result: CreatedEvidenceShare = {
-    share_id: asText(share.share_id),
-    token: asText(share.token),
-    created_at: asText(share.created_at),
-    expires_at: asText(share.expires_at),
-    expires_unix: asNumber(share.expires_unix),
-    share_path: asText(share.share_path),
+    share_id: asString(share.share_id),
+    token: asString(share.token),
+    created_at: asString(share.created_at),
+    expires_at: asString(share.expires_at),
+    expires_unix: asStrictNumber(share.expires_unix),
+    share_path: asString(share.share_path),
   };
   if (!result.share_id || !result.token || !result.share_path) {
     throw new Error('分享接口未返回完整的一次性链接信息。');
@@ -120,10 +108,10 @@ export async function listEvidenceShares(
   return rows.map((value) => {
     const row = asRecord(value);
     return {
-      share_id: asText(row.share_id),
-      created_by: asText(row.created_by),
-      created_at: asText(row.created_at),
-      expires_at: asText(row.expires_at),
+      share_id: asString(row.share_id),
+      created_by: asString(row.created_by),
+      created_at: asString(row.created_at),
+      expires_at: asString(row.expires_at),
       revoked: row.revoked === true,
       active: row.active === true,
     };
@@ -156,33 +144,33 @@ export async function resolveEvidenceShare(token: string): Promise<ResolvedEvide
   const quality = asRecord(snapshot.evidence_quality);
   const chain = Array.isArray(snapshot.evidence_chain) ? snapshot.evidence_chain : [];
   return {
-    share_id: asText(payload.share_id),
-    expires_at: asText(payload.expires_at),
+    share_id: asString(payload.share_id),
+    expires_at: asString(payload.expires_at),
     snapshot: {
-      schema: asText(snapshot.schema),
-      generated_at_utc: asText(snapshot.generated_at_utc),
-      project_name: asText(snapshot.project_name),
-      severity: asText(snapshot.severity),
-      title: asText(snapshot.title),
-      module: asText(snapshot.module),
-      business_impact: asText(snapshot.business_impact),
-      expected: asText(snapshot.expected),
-      actual: asText(snapshot.actual),
-      evidence_quality: { label: asText(quality.label), score: asNumber(quality.score) },
-      repro_rate: asNumber(snapshot.repro_rate),
-      reproduction_steps: Array.isArray(snapshot.reproduction_steps) ? snapshot.reproduction_steps.map(asText).filter(Boolean) : [],
+      schema: asString(snapshot.schema),
+      generated_at_utc: asString(snapshot.generated_at_utc),
+      project_name: asString(snapshot.project_name),
+      severity: asString(snapshot.severity),
+      title: asString(snapshot.title),
+      module: asString(snapshot.module),
+      business_impact: asString(snapshot.business_impact),
+      expected: asString(snapshot.expected),
+      actual: asString(snapshot.actual),
+      evidence_quality: { label: asString(quality.label), score: asStrictNumber(quality.score) },
+      repro_rate: asStrictNumber(snapshot.repro_rate),
+      reproduction_steps: Array.isArray(snapshot.reproduction_steps) ? snapshot.reproduction_steps.map(asString).filter(Boolean) : [],
       evidence_chain: chain.map((value) => {
         const item = asRecord(value);
-        return { label: asText(item.label), content: asText(item.content), detail: asText(item.detail) };
+        return { label: asString(item.label), content: asString(item.content), detail: asString(item.detail) };
       }),
-      relevant_apis: Array.isArray(snapshot.relevant_apis) ? snapshot.relevant_apis.map(asText).filter(Boolean) : [],
-      relevant_tables: Array.isArray(snapshot.relevant_tables) ? snapshot.relevant_tables.map(asText).filter(Boolean) : [],
-      trace_id: asText(snapshot.trace_id),
-      regression_obligations: Array.isArray(snapshot.regression_obligations) ? snapshot.regression_obligations.map(asText).filter(Boolean) : [],
-      verification_status: asText(snapshot.verification_status),
-      handling_status: asText(snapshot.handling_status),
-      fix_version: asText(snapshot.fix_version),
-      notice: asText(snapshot.notice),
+      relevant_apis: Array.isArray(snapshot.relevant_apis) ? snapshot.relevant_apis.map(asString).filter(Boolean) : [],
+      relevant_tables: Array.isArray(snapshot.relevant_tables) ? snapshot.relevant_tables.map(asString).filter(Boolean) : [],
+      trace_id: asString(snapshot.trace_id),
+      regression_obligations: Array.isArray(snapshot.regression_obligations) ? snapshot.regression_obligations.map(asString).filter(Boolean) : [],
+      verification_status: asString(snapshot.verification_status),
+      handling_status: asString(snapshot.handling_status),
+      fix_version: asString(snapshot.fix_version),
+      notice: asString(snapshot.notice),
     },
   };
 }

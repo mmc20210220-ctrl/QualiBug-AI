@@ -25,6 +25,7 @@ export function FindingVerificationTimeline({ finding, compact = false, focusGen
     ? timeline.find((event) => event.kind === 'verification' && event.generatedAt === normalizedFocus) || null
     : null;
   const focusedRef = useRef<HTMLLIElement | null>(null);
+  const focusedEventKey = focusedEvent?.key ?? null;
 
   const hasCollapsedHistory = compact && timeline.length > 4;
   let visibleTimeline = timeline;
@@ -44,10 +45,10 @@ export function FindingVerificationTimeline({ finding, compact = false, focusGen
   const collapsedCount = hasCollapsedHistory ? Math.max(0, timeline.length - visibleTimeline.length) : 0;
 
   useEffect(() => {
-    if (!normalizedFocus || !focusedEvent || !focusedRef.current) return;
+    if (!normalizedFocus || !focusedEventKey || !focusedRef.current) return;
     focusedRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
     focusedRef.current.focus({ preventScroll: true });
-  }, [finding.id, focusedEvent?.key, normalizedFocus]);
+  }, [finding.id, focusedEventKey, normalizedFocus]);
 
   return (
     <section className="finding-verification-timeline" aria-label="真实验证历史时间线">

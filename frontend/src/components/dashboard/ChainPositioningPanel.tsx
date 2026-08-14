@@ -19,7 +19,10 @@ const STAGE_LABELS: Record<string, string> = {
 
 export function ChainPositioningPanel({ positioning }: Props) {
   const value = asRecord(positioning);
-  const stages = Array.isArray(value.stages) ? value.stages.map(asRecord) : [];
+  const stages = useMemo(
+    () => (Array.isArray(value.stages) ? value.stages.map(asRecord) : []),
+    [value.stages],
+  );
   const firstLoss = asRecord(value.first_loss);
   const summary = asRecord(value.chain_summary);
   const topBlockers = Array.isArray(summary.top_blocker_codes)

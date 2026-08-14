@@ -46,7 +46,7 @@ export function getEvidenceSqlHint(finding: EvidenceLike) {
   if (entity) {
     return `-- 企业核验目标：${entity}\n-- 1. 导出请求前业务主键、状态、金额、归属用户\n-- 2. 执行复现动作后再次导出相同字段\n-- 3. 对比状态流转、金额正负、权限归属与 PRD / API 规则是否一致`;
   }
-  return '-- 当前缺少业务主键或表字段，无法形成可审计 SQL 证据\n-- 请补充订单号 / 用户号 / 退款号等主键，并导出请求前后 DB 快照';
+  return '-- 当前缺少业务主键或表字段，无法形成可审计 SQL 证据\n-- 请补充业务主键 / 关联字段，并导出请求前后 DB 快照';
 }
 
 export function getEvidenceLogHint(finding: EvidenceLike) {

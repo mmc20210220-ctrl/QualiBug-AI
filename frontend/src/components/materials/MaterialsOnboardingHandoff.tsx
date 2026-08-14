@@ -4,6 +4,7 @@ import { getKnowledgeAsset } from '../../api/client';
 import { listKnowledgeConnectors, type KnowledgeConnectorRecord } from '../../api/knowledge-connectors';
 import { materialSourceTypeLabel, normalizeMaterialSourceType } from '../../lib/material-type-presentation';
 import { useProjectNavigation } from '../../lib/project-navigation';
+import { asRecord } from '../../lib/value-guards';
 
 const AUTHORIZATION_HEALTH = new Set([
   'REAUTHORIZATION_REQUIRED',
@@ -43,12 +44,6 @@ type MaterialBlocker = {
   actionLabel: string;
   tone: 'success' | 'warning' | 'danger';
 };
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : {};
-}
 
 function isOnlineSource(source: Record<string, unknown>): boolean {
   return String(source.source_origin || '').toUpperCase() === 'ONLINE_CONNECTOR'

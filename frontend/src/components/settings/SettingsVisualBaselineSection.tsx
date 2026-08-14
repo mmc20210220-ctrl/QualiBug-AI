@@ -313,7 +313,7 @@ export function SettingsVisualBaselineSection({ project }: SettingsVisualBaselin
             className="form-input"
             value={baselineName}
             disabled={!project || busyKey !== ''}
-            placeholder="如：订单列表-桌面端"
+            placeholder="如：列表页-桌面端"
             onChange={(event) => setBaselineName(event.target.value)}
           />
         </div>

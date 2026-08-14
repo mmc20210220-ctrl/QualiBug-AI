@@ -162,7 +162,7 @@ export function SystemJobs() {
             </label>
             <label>
               <span>显示名称</span>
-              <input value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder="例如：订单中心调度平台" />
+              <input value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder="例如：任务调度平台" />
             </label>
             <label>
               <span>平台地址</span>

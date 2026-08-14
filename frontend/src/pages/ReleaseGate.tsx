@@ -291,7 +291,7 @@ export function ReleaseGate() {
         onNextAction={handleNextAction}
       />
 
-      {requestedFindingId && pipelineData && (
+      {Boolean(requestedFindingId && pipelineData) && (
         <section className={`card mb-4 status-card status-${requestedFinding ? 'warning' : 'neutral'}`} aria-label="当前发布评审问题上下文">
           <span className="panel-kicker">当前评审问题</span>
           {requestedFinding && requestedVerification ? (
