@@ -44,45 +44,53 @@ def _exclusive_file_lock(path: Path, *, timeout_seconds: float = 30.0) -> Iterat
     refresh closes the lost-update without any cross-process registry.
 
     Uses ``msvcrt.locking`` on Windows and ``fcntl.flock`` elsewhere; a failure
-    to acquire the lock degrades to no locking rather than deadlocking a scan.
+    to acquire the lock (or an unavailable primitive) degrades to no locking
+    rather than deadlocking a scan.  Single-yield by construction: acquisition
+    completes before ``yield`` and release runs in ``finally``, so a write
+    exception inside the block can never re-enter the generator.
     """
     lock_path = Path(str(path) + ".lock")
-    deadline = time.monotonic() + timeout_seconds
     handle = None
+    locked = False
     try:
-        handle = open(lock_path, "a+b")
         try:
-            import msvcrt
-
-            while True:
-                try:
-                    msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
-                    break
-                except OSError:
-                    if time.monotonic() >= deadline:
-                        yield
-                        return
-                    time.sleep(0.05)
-        except ImportError:
+            handle = open(lock_path, "a+b")
+        except OSError:
+            handle = None
+        if handle is not None:
+            deadline = time.monotonic() + timeout_seconds
+            try:
+                import msvcrt
+            except ImportError:
+                msvcrt = None
             try:
                 import fcntl
-
-                while True:
-                    try:
-                        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                        break
-                    except OSError:
-                        if time.monotonic() >= deadline:
-                            yield
-                            return
-                        time.sleep(0.05)
             except ImportError:
-                pass
-        yield
-    except OSError:
+                fcntl = None
+            while True:
+                acquired = False
+                try:
+                    if msvcrt is not None:
+                        msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+                        acquired = True
+                    elif fcntl is not None:
+                        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        acquired = True
+                except OSError:
+                    acquired = False
+                if acquired:
+                    locked = True
+                    break
+                if msvcrt is None and fcntl is None:
+                    # No locking primitive: proceed without an advisory lock.
+                    break
+                if time.monotonic() >= deadline:
+                    # Timeout: proceed without the lock rather than block a scan.
+                    break
+                time.sleep(0.05)
         yield
     finally:
-        if handle is not None:
+        if locked and handle is not None:
             try:
                 try:
                     import msvcrt
@@ -98,7 +106,11 @@ def _exclusive_file_lock(path: Path, *, timeout_seconds: float = 30.0) -> Iterat
                         pass
             except OSError:
                 pass
-            handle.close()
+        if handle is not None:
+            try:
+                handle.close()
+            except OSError:
+                pass
 
 
 def _atomic_write_text(path: Path, text: str) -> None:
@@ -108,10 +120,25 @@ def _atomic_write_text(path: Path, text: str) -> None:
     reader can observe a half-written JSON and drop every account as unparsable.
     ``os.replace`` is atomic on the same volume, so readers see either the old
     or the new snapshot, never a partial one.
+
+    Windows: ``os.replace`` onto an existing file fails with PermissionError
+    when the target is briefly held open by a concurrent reader.  Fall back to
+    a direct write then — a token refresh must never crash the scan — while
+    still cleaning up the temp file.
     """
     tmp = Path(str(path) + ".tmp")
-    tmp.write_text(text, encoding="utf-8")
-    os.replace(tmp, path)
+    try:
+        tmp.write_text(text, encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError:
+        try:
+            path.write_text(text, encoding="utf-8")
+        finally:
+            try:
+                if tmp.exists():
+                    tmp.unlink()
+            except OSError:
+                pass
 
 
 
@@ -162,22 +189,71 @@ def _login_declared_account(
     login_path: str,
     email: str,
     password: str,
+    identity_field: str = "",
 ) -> tuple[str, int]:
     """Acquire a live bearer token from a source-declared account password.
+
+    Neither the login body's identity key nor the login path is hardcoded: an
+    enterprise target may declare ``username``/``account``/``loginName``/``mobile``
+    and serve login at ``/api/v1/auth/login`` instead of ``/api/auth/login``.
+    Hardcoding either fabricated an authorization defect where the real gap was
+    the harness's own login shape. Identity keys are probed via the same
+    ``_identity_field_candidates`` authority the enterprise credential manager
+    uses, and login paths are probed over the same candidate list that manager
+    uses; an explicitly declared ``identity_field`` wins alone. The first
+    (path, identity-key) pair that returns a token is authoritative.
 
     Returns ``(token, http_status)``. An empty token means login did not yield
     usable credentials; callers must not fall back to an orphan snapshot when a
     password was declared for this account.
     """
-    resp = _http_request(
-        "POST",
-        base_url.rstrip("/") + login_path,
-        body={"email": email, "password": password},
-        timeout=8.0,
-    )
-    status = int(resp.get("status") or 0)
-    token = _token_from_login_response(resp.get("body"))
-    return token, status
+    identity = str(email or "").strip()
+    if identity_field:
+        fields = [identity_field]
+    else:
+        try:
+            from .enterprise_credential_manager import _identity_field_candidates
+
+            fields = _identity_field_candidates(identity)
+        except Exception:
+            fields = ["email", "username", "account", "loginName", "mobile"]
+
+    # Probe login paths most-likely-first: the declared path, then the same
+    # common-path safety net the enterprise credential manager already uses.
+    declared = str(login_path or "").strip().strip("/")
+    paths: list[str] = []
+    if declared:
+        paths.append(declared)
+    paths.extend([
+        "/api/auth/login", "/api/v1/auth/login", "/auth/login",
+        "/login", "/api/login", "/api/v1/login", "/auth/token", "/oauth/token",
+    ])
+    seen: set[str] = set()
+    unique_paths: list[str] = []
+    for p in paths:
+        p = p.strip().strip("/")
+        if p and p not in seen:
+            seen.add(p)
+            unique_paths.append(p)
+
+    last_status = 0
+    for path in unique_paths:
+        url = base_url.rstrip("/") + "/" + path
+        for field in fields:
+            resp = _http_request(
+                "POST",
+                url,
+                body={field: identity, "password": password},
+                timeout=8.0,
+            )
+            status = int(resp.get("status") or 0)
+            last_status = status
+            token = _token_from_login_response(resp.get("body"))
+            if status == 200 and token:
+                return token, status
+            # A 4xx on a probe is a shape/path mismatch, not a transport error;
+            # keep probing the remaining identity fields and paths.
+    return "", last_status
 
 
 def _register_actor_token_aliases(
@@ -715,7 +791,7 @@ def _parse_test_accounts_text(text: str) -> list[dict[str, str]]:
         if not cells:
             continue
         lower_cells = [c.lower() for c in cells]
-        if any(h in lower_cells for h in ("角色", "role", "邮箱", "email")):
+        if any(h in lower_cells for h in ("角色", "role", "邮箱", "email", "用户名", "username", "账号", "account", "密码", "password")):
             header_cols = lower_cells
             continue
         if all(set(c) <= set("-| ") for c in cells):
@@ -727,7 +803,10 @@ def _parse_test_accounts_text(text: str) -> list[dict[str, str]]:
             val = cells[i] if i < len(cells) else ""
             if col in ("角色", "role"):
                 row["role"] = val
-            elif col in ("邮箱", "email"):
+            elif col in ("邮箱", "email", "用户名", "username", "账号", "account"):
+                # The login identity is not always an email address; a Chinese
+                # account table uses a 用户名/账号 column. Carry it as the
+                # identity key so downstream login probes the right body field.
                 row["email"] = val
             elif col in ("密码", "password"):
                 row["password"] = val
