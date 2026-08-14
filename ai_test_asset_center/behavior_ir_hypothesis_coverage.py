@@ -1505,14 +1505,12 @@ def _risk_family_for_matrix_invariant(inv_kind: str) -> str:
             "balance",
             "amount",
             "quantity",
-            "库存",
-            "金额",
         )
     ):
         return "conservation"
-    if any(token in kind for token in ("privacy", "pii", "mask", "隐私")):
+    if any(token in kind for token in ("privacy", "pii", "mask")):
         return "privacy"
-    if any(token in kind for token in ("time", "expir", "temporal", "过期")):
+    if any(token in kind for token in ("time", "expir", "temporal")):
         return "temporal"
     if any(
         token in kind
@@ -1526,15 +1524,14 @@ def _risk_family_for_matrix_invariant(inv_kind: str) -> str:
             "rbac",
             "visib",
             "scope",
-            "可见",
         )
     ):
         return "visibility"
-    if any(token in kind for token in ("state_machine", "state", "状态", "status_")):
+    if any(token in kind for token in ("state_machine", "state", "status_")):
         return "state"
     if any(
         token in kind
-        for token in ("postcondition", "must_become", "must_create", "因果", "后置")
+        for token in ("postcondition", "must_become", "must_create")
     ):
         return "state"
     return "validation"

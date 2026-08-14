@@ -257,8 +257,12 @@ class AnalyzersAdapter:
         normalized: List[str] = []
         seen: set[str] = set()
         for raw in candidates:
+            # Any structured HTTP path (>=2 segments) is a candidate, regardless
+            # of the first segment name.  Restricting the first segment to a
+            # fixed ERP/service vocabulary silently dropped foreign systems'
+            # routes (/v1/patients, /rest/resources, /tenant/objects, …).
             match = re.search(
-                r"(?:(GET|POST|PUT|DELETE|PATCH)\s+)?(\/(?:api|master|production|inventory|quality|planning|sales|purchase|warehouse|report|system|admin)\/[\w\-\/{}]+)",
+                r"(?:(GET|POST|PUT|DELETE|PATCH)\s+)?(/[A-Za-z0-9][A-Za-z0-9_\-]*(?:/[A-Za-z0-9_{}\-.]+)+)",
                 raw,
                 re.IGNORECASE,
             )
@@ -347,8 +351,10 @@ class AnalyzersAdapter:
         """从 verification_method 中提取实体名，帮助执行器做 observer 绑定。"""
         for key in ("path", "step1", "step2", "step3"):
             value = str(verification_method.get(key, "") or "")
+            # The entity is the segment after the first path segment — source
+            # route naming, never a fixed service/industry vocabulary.
             match = re.search(
-                r"/(?:api|master|production|inventory|quality|planning|sales|purchase|warehouse|report|system|admin)/([\w\-]+)",
+                r"/[A-Za-z0-9_\-]+/([A-Za-z0-9_\-]+)",
                 value,
                 re.IGNORECASE,
             )

@@ -30,41 +30,63 @@ def _text(value: Any) -> str:
     return str(value or "").strip()
 
 
-# Entity type keywords → canonical entity names (industry-neutral)
-_ENTITY_KEYWORDS: dict[str, str] = {
-    # English
-    "order": "order",
-    "orders": "order",
-    "payment": "payment",
-    "payments": "payment",
-    "refund": "refund",
-    "refunds": "refund",
-    "product": "product",
-    "products": "product",
-    "inventory": "inventory",
-    "stock": "inventory",
-    "cart": "cart",
-    "carts": "cart",
-    "coupon": "coupon",
-    "coupons": "coupon",
-    "user": "user",
-    "users": "user",
-    "address": "address",
-    "addresses": "address",
-    "report": "report",
-    "reports": "report",
-    # Chinese
-    "订单": "order",
-    "支付": "payment",
-    "退款": "refund",
-    "商品": "product",
-    "库存": "inventory",
-    "购物车": "cart",
-    "优惠券": "coupon",
-    "用户": "user",
-    "地址": "address",
-    "报表": "report",
-}
+def _entity_token(value: Any) -> str:
+    """ASCII-normalize an entity reference for structural matching.
+
+    Joins ``[a-z0-9]+`` runs with ``_`` so ``order_items`` / ``OrderItems`` /
+    ``order-items`` compare equal.  This is structural normalization only —
+    it never maps a business noun to another noun (no translation table).
+    """
+    return "_".join(re.findall(r"[a-z0-9]+", _text(value).lower()))
+
+
+def _field_entity_stem(field_ref: Any) -> str:
+    """Extract the entity stem from a ``field:entity.field`` reference.
+
+    The entity prefix is source-declared relational naming (``orders`` in
+    ``field:orders.id``), never an industry vocabulary lookup.  A bare field
+    name with no ``entity.field`` structure carries no entity and resolves to
+    nothing.
+    """
+    ref = _text(field_ref)
+    if not ref:
+        return ""
+    body = ref.split(":", 1)[-1] if ":" in ref else ref
+    if "." not in body:
+        return ""
+    return body.split(".", 1)[0]
+
+
+def _entity_vocabulary(entities: list[dict[str, Any]]) -> dict[str, str]:
+    """Map source-declared entity identities to their canonical name.
+
+    The entity type an invariant references must come from the IR's own
+    declared entities — never from a fixed industry noun table.  Each declared
+    entity contributes its canonical name, its node id, its source-declared
+    names, and its physical storage table, so an operand ``entity_ref`` (node
+    id), a ``field:entity.field`` stem, or a prose/description mention resolves
+    only to an entity the source actually declared.
+    """
+    vocabulary: dict[str, str] = {}
+    for ent in entities:
+        if not isinstance(ent, dict):
+            continue
+        canonical = _entity_token(ent.get("name"))
+        if not canonical:
+            continue
+        raw_names = [
+            canonical,
+            ent.get("id"),
+            ent.get("name"),
+            ent.get("table"),
+            ent.get("entity"),
+        ]
+        raw_names.extend(_text(n) for n in _list(ent.get("source_entity_names")))
+        for raw in raw_names:
+            key = _entity_token(raw)
+            if key and key not in vocabulary:
+                vocabulary[key] = canonical
+    return vocabulary
 
 # State-related keywords that indicate a state machine invariant
 _STATE_KEYWORDS = frozenset({
@@ -80,36 +102,52 @@ _AMOUNT_KEYWORDS = frozenset({
 })
 
 
-def _extract_entity_type(invariant: dict[str, Any]) -> str:
-    """Extract the entity type referenced by an invariant."""
-    # Check expression operands first
+def _extract_entity_type(
+    invariant: dict[str, Any],
+    *,
+    vocabulary: dict[str, str],
+) -> str:
+    """Extract the source-declared entity type referenced by an invariant.
+
+    Resolution order is source-grounded, never a fixed noun table:
+
+    1. ``subject_entity_refs`` — the invariant's declared subject entities.
+    2. Operand ``entity_ref`` / ``entity`` — the expression's declared entity.
+    3. Operand ``field_ref`` / ``field_id`` stem — structural relational naming.
+    4. Description / invariant-id mention that matches a *declared* entity name,
+       alias, or storage table (ASCII only; Chinese prose has no structural
+       equivalent and is left unresolvable rather than guessed).
+
+    The returned value is the declared entity's canonical name when it matches
+    the IR vocabulary, otherwise the raw source-declared token.
+    """
+    for raw in _list(invariant.get("subject_entity_refs")):
+        token = _entity_token(raw)
+        if token:
+            return vocabulary.get(token, token)
+
     expr = _dict(invariant.get("expression"))
-    operands = _list(expr.get("operands"))
-    for operand in operands:
+    for operand in _list(expr.get("operands")):
         if not isinstance(operand, dict):
             continue
-        entity = _text(operand.get("entity")).lower()
-        if entity in _ENTITY_KEYWORDS:
-            return _ENTITY_KEYWORDS[entity]
-        # Table names routinely embed the entity noun (order_items,
-        # inventory_locks, cart_lines). Match a keyword against the table name
-        # token-by-token so cart_items -> cart, inventory_locks -> inventory —
-        # generic relational naming, never industry vocabulary.
-        for token in re.split(r"[^a-z\u4e00-\u9fff]+", entity):
-            if token in _ENTITY_KEYWORDS:
-                return _ENTITY_KEYWORDS[token]
+        raw = _text(operand.get("entity_ref") or operand.get("entity"))
+        token = _entity_token(raw)
+        if token:
+            return vocabulary.get(token, token)
+        field = _text(
+            operand.get("field_ref")
+            or operand.get("field_id")
+            or operand.get("field")
+        )
+        stem = _entity_token(_field_entity_stem(field))
+        if stem:
+            return vocabulary.get(stem, stem)
 
-    # Check description text
     desc = _text(invariant.get("description") or expr.get("description")).lower()
-    for keyword, entity in _ENTITY_KEYWORDS.items():
-        if keyword in desc:
-            return entity
-
-    # Check invariant ID
     inv_id = _text(invariant.get("id")).lower()
-    for keyword, entity in _ENTITY_KEYWORDS.items():
-        if keyword in inv_id:
-            return entity
+    for token, canonical in vocabulary.items():
+        if token and (token in desc or token in inv_id):
+            return canonical
 
     return ""
 
@@ -277,6 +315,7 @@ def build_readonly_state_audit_obligations(
     operations = _list(ir.get("operations"))
     relations = _list(ir.get("relations"))
     actors = _list(ir.get("actors"))
+    entity_vocabulary = _entity_vocabulary(_list(ir.get("entities")))
 
     # Build operation ID set for quick lookup
     operations_by_id = {
@@ -340,7 +379,7 @@ def build_readonly_state_audit_obligations(
             continue
 
         # Extract entity type
-        entity = _extract_entity_type(inv)
+        entity = _extract_entity_type(inv, vocabulary=entity_vocabulary)
         if not entity:
             continue
 
