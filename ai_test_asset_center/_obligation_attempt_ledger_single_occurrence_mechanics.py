@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections import Counter
 from typing import Any, Mapping
 
@@ -60,6 +61,52 @@ class ObligationAttemptLedgerError(ValueError):
 
 def _text(value: Any) -> str:
     return str(value or "").strip()
+
+
+_VARIANT_OBLIGATION_RE = re.compile(r"^(.+?)__v_[a-f0-9]+$")
+
+
+def _base_obligation_id(obligation_id: str) -> str:
+    """Collapse a compiler-expanded variant id to its base obligation id.
+
+    Validation field-constraint expansion and coverage-unit arm derivation
+    compile experiments under variant ids (``obl_x__v_<digest>``). The ledger
+    account scope selects the base obligation, so the variant is one executable
+    face of that base — never a separate, foreign obligation.
+    """
+    match = _VARIANT_OBLIGATION_RE.match(_text(obligation_id))
+    return match.group(1) if match else _text(obligation_id)
+
+
+def _collapse_variant_receipts(
+    by_id: dict[str, dict[str, Any]],
+    *,
+    selected_ids: set[str],
+) -> dict[str, dict[str, Any]]:
+    """Fold compiler-expanded variant receipts into their selected base.
+
+    Validation field-constraint expansion compiles and executes experiments
+    under variant obligation ids while the accounting scope selects the base
+    obligation. A variant receipt is therefore one face of the selected base,
+    not a foreign row. Fold each selected-base variant into its base (the
+    base's own receipt wins; otherwise the first variant in insertion order).
+    A variant whose base is not selected is left untouched so the fail-closed
+    foreign check still rejects genuinely foreign receipts.
+    """
+    collapsed: dict[str, dict[str, Any]] = {}
+    variants: dict[str, list[dict[str, Any]]] = {}
+    for obligation_id, receipt in by_id.items():
+        base = _base_obligation_id(obligation_id)
+        if base == obligation_id:
+            collapsed[obligation_id] = receipt
+        elif base in selected_ids:
+            variants.setdefault(base, []).append(receipt)
+        else:
+            collapsed[obligation_id] = receipt
+    for base, receipts in variants.items():
+        if base not in collapsed:
+            collapsed[base] = dict(receipts[0])
+    return collapsed
 
 
 def _object(value: Any, *, field: str) -> dict[str, Any]:
@@ -798,15 +845,25 @@ def build_obligation_attempt_ledger(
         raise ObligationAttemptLedgerError("campaign_id_missing")
 
     selected_ids, selected_by_id = _selected_rows(selected)
+    selected_set = set(selected_ids)
     selected_execution_ids = {
         obligation_id
         for obligation_id, row in selected_by_id.items()
         if _text(row.get("selection_status")).upper()
         in {"", "SELECTED"}
     }
-    compile_by_id = _receipt_map(compile_results, field="compile_results")
-    execution_by_id = _receipt_map(execution_results, field="execution_results")
-    gate_by_id = _receipt_map(gate_results, field="gate_results")
+    compile_by_id = _collapse_variant_receipts(
+        _receipt_map(compile_results, field="compile_results"),
+        selected_ids=selected_set,
+    )
+    execution_by_id = _collapse_variant_receipts(
+        _receipt_map(execution_results, field="execution_results"),
+        selected_ids=selected_set,
+    )
+    gate_by_id = _collapse_variant_receipts(
+        _receipt_map(gate_results, field="gate_results"),
+        selected_ids=selected_set,
+    )
     foreign_ids = sorted(
         (set(compile_by_id) | set(execution_by_id) | set(gate_by_id))
         - set(selected_ids)

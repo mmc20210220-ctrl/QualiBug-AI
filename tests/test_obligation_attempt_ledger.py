@@ -217,6 +217,49 @@ def test_stage_receipts_must_follow_compile_execution_gate_order() -> None:
         )
 
 
+def test_variant_receipt_collapses_to_selected_base() -> None:
+    # Validation field-constraint expansion compiles experiments under variant
+    # ids (``obl_x__v_<digest>``) while the accounting scope selects the base.
+    # A variant receipt is one face of the selected base, not a foreign row.
+    ledger = build_obligation_attempt_ledger(
+        mainline_run=_mainline_run(),
+        selected=[{"obligation_id": "obl-1", "candidate_id": "cand-1"}],
+        compile_results={
+            "obl-1__v_abcdef123456": {
+                "status": "BLOCKED",
+                "reason_code": "BLOCKED_MISSING_BINDING",
+                "receipt_id": "compile-receipt-1",
+            },
+        },
+        execution_results={},
+        gate_results={},
+    )
+    assert ledger["selected_count"] == 1
+    assert ledger["terminal_count"] == 1
+    assert ledger["attempts"][0]["obligation_id"] == "obl-1"
+    assert ledger["attempts"][0]["terminal_status"] == "BLOCKED"
+
+
+def test_variant_receipt_with_unselected_base_stays_foreign() -> None:
+    with pytest.raises(
+        ObligationAttemptLedgerError,
+        match="foreign_obligation_receipt:obl-1__v_abcdef123456",
+    ):
+        build_obligation_attempt_ledger(
+            mainline_run=_mainline_run(),
+            selected=[{"obligation_id": "obl-other", "candidate_id": "cand-other"}],
+            compile_results={
+                "obl-1__v_abcdef123456": {
+                    "status": "BLOCKED",
+                    "reason_code": "BLOCKED_MISSING_BINDING",
+                    "receipt_id": "compile-receipt-1",
+                },
+            },
+            execution_results={},
+            gate_results={},
+        )
+
+
 def test_selected_identity_and_foreign_receipts_fail_fast() -> None:
     with pytest.raises(ObligationAttemptLedgerError, match="selected_obligation_identity_invalid"):
         build_obligation_attempt_ledger(
