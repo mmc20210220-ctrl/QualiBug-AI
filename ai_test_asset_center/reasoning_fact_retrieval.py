@@ -23,10 +23,10 @@ from typing import Any
 
 FACT_BLOCK_HEADER = "\n\n[GROUNDED BUSINESS FACTS (source-anchored)]\n"
 
-MAX_FACTS = 24
-MAX_BLOCK_CHARS = 3000
+MAX_FACTS = 48
+MAX_BLOCK_CHARS = 8000
 MAX_FACT_CHARS = 220
-_MAX_ITEMS_PER_SECTION = 12
+_MAX_ITEMS_PER_SECTION = 24
 
 _SECRET_RE = re.compile(
     r"(?i)(?:bearer\s+[a-z0-9._~+\-/=]+|(?:api[_\s-]?key|token|secret|password|credential)\s*[:=]\s*[^\s,;]+|sk-[a-z0-9_-]{8,})"
@@ -68,9 +68,17 @@ def _source_ref(fact: dict[str, Any]) -> str:
 
 
 def _extract_rules(payload: dict[str, Any]) -> list[str]:
-    """Business rules / invariants with source refs. Only verbatim text."""
+    """Business rules / invariants with source refs. Only verbatim text.
+
+    Accepts both the Behavior-IR-shaped model dict (``business_rules`` /
+    ``rules`` / ``invariants`` / ``rule_library``) and the world-model
+    projection (``documented_rules``, whose verbatim field is ``rule``).
+    Without the ``documented_rules`` key the reasoner's world-model bridge
+    silently starved the source-anchored fact block — the two layers used
+    different key names for the same declared rules.
+    """
     lines: list[str] = []
-    for key in ("business_rules", "rules", "invariants", "rule_library"):
+    for key in ("business_rules", "rules", "invariants", "rule_library", "documented_rules"):
         for item in _list(payload.get(key)):
             item_dict = _dict(item)
             if not item_dict:
@@ -133,15 +141,30 @@ def _extract_state_machines(payload: dict[str, Any]) -> list[str]:
 
 
 def _extract_relations(payload: dict[str, Any]) -> list[str]:
-    """Entity relations: from/to/type only, verbatim."""
+    """Entity relations: from/to/type only, verbatim.
+
+    Accepts both the model-dict shape (``relations`` / ``dependencies`` with
+    ``from_object``/``to_object`` or ``from``/``to``) and the world-model
+    projection (``relationships`` with ``from_entity``/``to_entity``).
+    """
     lines: list[str] = []
-    for key in ("relations", "dependencies"):
+    for key in ("relations", "dependencies", "relationships"):
         for item in _list(payload.get(key)):
             item_dict = _dict(item)
             if not item_dict:
                 continue
-            source = _text(item_dict.get("from_object") or item_dict.get("source") or item_dict.get("from"))
-            target = _text(item_dict.get("to_object") or item_dict.get("target") or item_dict.get("to"))
+            source = _text(
+                item_dict.get("from_object")
+                or item_dict.get("source")
+                or item_dict.get("from")
+                or item_dict.get("from_entity")
+            )
+            target = _text(
+                item_dict.get("to_object")
+                or item_dict.get("target")
+                or item_dict.get("to")
+                or item_dict.get("to_entity")
+            )
             rel_type = _text(item_dict.get("relationship_type") or item_dict.get("type") or item_dict.get("relation"))
             if not source and not target:
                 continue

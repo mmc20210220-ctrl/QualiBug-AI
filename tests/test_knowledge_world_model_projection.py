@@ -8,11 +8,19 @@ output, and never any content the asset does not carry.
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
 from typing import Any
+from unittest import mock
 
 from ai_test_asset_center.enterprise_knowledge_center import (
     project_knowledge_world_model,
 )
+
+
+@contextmanager
+def _env_patch(key: str, value: str) -> Any:
+    with mock.patch.dict("os.environ", {key: value}):
+        yield
 
 
 def _asset() -> dict[str, Any]:
@@ -121,3 +129,45 @@ def test_projection_is_bounded_and_empty_safe() -> None:
     assert empty["entities"] == []
     assert empty["state_machines"] == []
     assert empty["gaps"] == {}
+
+
+def test_projection_receipt_reports_truncation_instead_of_silent_cap() -> None:
+    # A caller-supplied explicit bound is used exactly; the truncation is
+    # receipted with a named reason code, never silently discarded.
+    world = project_knowledge_world_model(
+        _asset(), max_rules=1, max_relationships=1, max_roles=1
+    )
+    receipt = world["projection_receipt"]
+    assert receipt["schema_version"] == "qualibug.world-model-projection-receipt.v1"
+    assert receipt["budgets"]["max_rules"] == 1
+    assert receipt["budgets"]["max_relationships"] == 1
+    assert receipt["budgets"]["max_roles"] == 1
+    # 2 unique rules, 1 relationship, 2 unique roles in the fixture.
+    assert receipt["counts"]["rules_total"] == 2
+    assert receipt["counts"]["rules_projected"] == 1
+    assert receipt["counts"]["relationships_total"] == 1
+    assert receipt["counts"]["roles_total"] == 2
+    assert receipt["counts"]["roles_projected"] == 1
+    assert "world_model_rules_truncated:1/2" in receipt["reason_codes"]
+    assert "world_model_roles_truncated:1/2" in receipt["reason_codes"]
+
+
+def test_projection_default_budget_raises_breadth_floor_over_legacy_cap() -> None:
+    # The historical default (40 rules) was the measured hypothesis-generation
+    # first-loss.  The default now projects a strictly larger rule set, and the
+    # receipt carries no truncation reason for this fixture.
+    world = project_knowledge_world_model(_asset())
+    receipt = world["projection_receipt"]
+    assert receipt["budgets"]["max_rules"] >= 200
+    assert receipt["counts"]["rules_projected"] == 2
+    assert "world_model_rules_truncated" not in receipt["reason_codes"]
+
+
+def test_projection_env_budget_cannot_narrow_below_floor() -> None:
+    # An operator env override that would collapse comprehension below the
+    # legacy baseline is floored, so breadth can never be silently narrowed.
+    with _env_patch("QUALIBUG_WORLD_MODEL_MAX_RULES", "5"):
+        world = project_knowledge_world_model(_asset())
+    receipt = world["projection_receipt"]
+    assert receipt["budgets"]["max_rules"] >= 40
+    assert receipt["counts"]["rules_projected"] == 2

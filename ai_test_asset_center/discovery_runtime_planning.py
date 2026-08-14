@@ -1029,6 +1029,11 @@ def build_discovery_plan(
                 "state_machines": len(_reasoner_world.get("state_machines") or []),
                 "roles": len(_reasoner_world.get("roles") or []),
                 "relationships": len(_reasoner_world.get("relationships") or []),
+                # Comprehension-bridge truncation must stay visible: the
+                # projection receipt records budgets + projected-vs-total
+                # counts + named reason codes, so a rule set larger than the
+                # bridge budget is never silently dropped from the scan receipt.
+                "projection_receipt": _reasoner_world.get("projection_receipt") or {},
             }
             mainline_reasoner_report = {
                 "schema_version": "qualibug.mainline-reasoner-receipt.v1",

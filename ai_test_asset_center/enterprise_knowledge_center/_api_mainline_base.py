@@ -1410,19 +1410,57 @@ def build_enterprise_business_knowledge_asset(
 # the discovery mainline owns a strictly richer, source-derived knowledge
 # asset.  This projection adapts the asset to the Reasoner's reader_output
 # contract without adding any subsystem: every value is read from the asset
-# (visible enterprise materials only), nothing is inferred, and sizes are
-# bounded so the declared prompt budget (prompt_truncation_chars/reader_json)
-# governs instead of a silent code-side cap.
+# (visible enterprise materials only), nothing is inferred.
+#
+# Budgets are operator-visible and receipted: an explicit caller argument is
+# exact; otherwise the environment variable / default applies with a
+# comprehension floor.  Every truncation is surfaced in ``projection_receipt``
+# with a named reason code — never a silent code-side cap (the historical
+# hard-coded 40/30/24/200 was the measured hypothesis-generation first-loss).
 _SEVERITY_RANK = {"P0": 0, "P1": 1, "P2": 2}
+
+_DEFAULT_WORLD_MODEL_MAX_RULES = 200
+_DEFAULT_WORLD_MODEL_MAX_RELATIONSHIPS = 120
+_DEFAULT_WORLD_MODEL_MAX_ROLES = 60
+_DEFAULT_WORLD_MODEL_RULE_STATEMENT_CHARS = 300
+
+_WORLD_MODEL_FLOOR_RULES = 40
+_WORLD_MODEL_FLOOR_RELATIONSHIPS = 30
+_WORLD_MODEL_FLOOR_ROLES = 24
+_WORLD_MODEL_FLOOR_STATEMENT_CHARS = 200
+
+
+def _world_model_budget(
+    kw: int | None,
+    env_key: str,
+    default: int,
+    floor: int,
+) -> int:
+    """Resolve an operator-visible projection budget with a breadth floor.
+
+    An explicit caller argument is used exactly (callers control bounding for
+    tests and narrow projections).  Otherwise the environment variable is read,
+    then the default; the floor guarantees an operator override can never
+    narrow comprehension below the historical baseline — a bound is a floor
+    for breadth, never a silent ceiling.
+    """
+    if kw is not None:
+        return max(int(kw), 0)
+    raw = (os.environ.get(env_key) or "").strip()
+    value = int(raw) if raw else default
+    try:
+        return max(int(value), int(floor))
+    except (TypeError, ValueError):
+        return int(default)
 
 
 def project_knowledge_world_model(
     asset: dict[str, Any] | None,
     *,
-    max_rules: int = 40,
-    max_relationships: int = 30,
-    max_roles: int = 24,
-    rule_statement_chars: int = 200,
+    max_rules: int | None = None,
+    max_relationships: int | None = None,
+    max_roles: int | None = None,
+    rule_statement_chars: int | None = None,
 ) -> dict[str, Any]:
     """Project the knowledge asset into the Reasoner's ``reader_output`` shape.
 
@@ -1432,8 +1470,31 @@ def project_knowledge_world_model(
     The world model is the comprehension bridge between the deterministic
     knowledge asset and LLM reasoning; when it is empty the Reasoner only sees
     truncated raw PRD/API text and every prompt slot degrades to ``{}``.
+
+    Sizes are receipted, not silently capped: ``projection_receipt`` records
+    the budgets, per-dimension projected-vs-total counts, and a named reason
+    code for each truncated dimension.
     """
     asset = asset or {}
+
+    max_rules = _world_model_budget(
+        max_rules, "QUALIBUG_WORLD_MODEL_MAX_RULES",
+        _DEFAULT_WORLD_MODEL_MAX_RULES, _WORLD_MODEL_FLOOR_RULES,
+    )
+    max_relationships = _world_model_budget(
+        max_relationships, "QUALIBUG_WORLD_MODEL_MAX_RELATIONSHIPS",
+        _DEFAULT_WORLD_MODEL_MAX_RELATIONSHIPS, _WORLD_MODEL_FLOOR_RELATIONSHIPS,
+    )
+    max_roles = _world_model_budget(
+        max_roles, "QUALIBUG_WORLD_MODEL_MAX_ROLES",
+        _DEFAULT_WORLD_MODEL_MAX_ROLES, _WORLD_MODEL_FLOOR_ROLES,
+    )
+    rule_statement_chars = _world_model_budget(
+        rule_statement_chars, "QUALIBUG_WORLD_MODEL_RULE_STATEMENT_CHARS",
+        _DEFAULT_WORLD_MODEL_RULE_STATEMENT_CHARS, _WORLD_MODEL_FLOOR_STATEMENT_CHARS,
+    )
+
+    reason_codes: list[str] = []
 
     entities: list[dict[str, Any]] = []
     for row in asset.get("business_objects") or []:
@@ -1459,6 +1520,7 @@ def project_knowledge_world_model(
 
     seen_statements: set[str] = set()
     rules: list[dict[str, Any]] = []
+    rules_total = 0
     for row in sorted(
         (asset.get("rule_library") or []),
         key=lambda r: (_SEVERITY_RANK.get(str((r or {}).get("severity") or ""), 9),),
@@ -1468,9 +1530,10 @@ def project_knowledge_world_model(
         statement = str(row.get("statement") or "").strip()
         if not statement or statement in seen_statements:
             continue
-        if len(rules) >= max_rules:
-            break
         seen_statements.add(statement)
+        rules_total += 1
+        if len(rules) >= max_rules:
+            continue
         locator = str(row.get("source_locator") or "").strip()
         source = str(row.get("source_id") or "")
         rules.append({
@@ -1480,6 +1543,8 @@ def project_knowledge_world_model(
             "is_verifiable": True,
             "severity": str(row.get("severity") or ""),
         })
+    if rules_total > len(rules):
+        reason_codes.append(f"world_model_rules_truncated:{len(rules)}/{rules_total}")
 
     state_machines: list[dict[str, Any]] = []
     for row in asset.get("state_machines") or []:
@@ -1504,18 +1569,23 @@ def project_knowledge_world_model(
 
     seen_roles: set[str] = set()
     roles: list[dict[str, Any]] = []
+    roles_total = 0
     for row in asset.get("roles") or []:
         if not isinstance(row, dict):
             continue
         name = str(row.get("role") or row.get("name") or "").strip()
         if not name or name in seen_roles:
             continue
-        if len(roles) >= max_roles:
-            break
         seen_roles.add(name)
+        roles_total += 1
+        if len(roles) >= max_roles:
+            continue
         roles.append({"name": name, "permissions": [], "source": str(row.get("source_id") or "")})
+    if roles_total > len(roles):
+        reason_codes.append(f"world_model_roles_truncated:{len(roles)}/{roles_total}")
 
     relationships: list[dict[str, Any]] = []
+    relationships_total = 0
     for row in asset.get("entity_relations") or []:
         if not isinstance(row, dict):
             continue
@@ -1524,16 +1594,17 @@ def project_knowledge_world_model(
         relation = str(row.get("relation_type") or "").strip()
         if not (from_entity and to_entity and relation):
             continue
+        relationships_total += 1
         if len(relationships) >= max_relationships:
-            break
+            continue
         relationships.append({
             "from_entity": from_entity,
             "to_entity": to_entity,
             "relationship_type": relation,
             "source": str(row.get("source_id") or row.get("source") or ""),
         })
-        if len(relationships) >= max_relationships:
-            break
+    if relationships_total > len(relationships):
+        reason_codes.append(f"world_model_relationships_truncated:{len(relationships)}/{relationships_total}")
 
     return {
         "documented_rules": rules,
@@ -1543,6 +1614,24 @@ def project_knowledge_world_model(
         "relationships": relationships,
         "gaps": {},
         "insufficient_evidence": not (rules or entities or state_machines),
+        "projection_receipt": {
+            "schema_version": "qualibug.world-model-projection-receipt.v1",
+            "budgets": {
+                "max_rules": max_rules,
+                "max_relationships": max_relationships,
+                "max_roles": max_roles,
+                "rule_statement_chars": rule_statement_chars,
+            },
+            "counts": {
+                "rules_total": rules_total,
+                "rules_projected": len(rules),
+                "relationships_total": relationships_total,
+                "relationships_projected": len(relationships),
+                "roles_total": roles_total,
+                "roles_projected": len(roles),
+            },
+            "reason_codes": reason_codes,
+        },
     }
 
 

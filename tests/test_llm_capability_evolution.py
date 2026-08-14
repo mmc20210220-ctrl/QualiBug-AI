@@ -7,7 +7,10 @@ All paths under test are deterministic; LLM transports are mocked or avoided.
 from __future__ import annotations
 
 from ai_test_asset_center import llm_reasoning as L
-from ai_test_asset_center.reasoning_fact_retrieval import retrieve_grounded_facts
+from ai_test_asset_center.reasoning_fact_retrieval import (
+    MAX_BLOCK_CHARS,
+    retrieve_grounded_facts,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -86,7 +89,34 @@ def test_retrieval_fail_soft_and_bounded() -> None:
         ]
     }
     block, receipt = retrieve_grounded_facts(big)
-    assert receipt["chars"] <= 3000
+    assert receipt["chars"] <= MAX_BLOCK_CHARS
+
+
+def test_retrieval_reads_world_model_documented_rules_and_relationships() -> None:
+    # The world-model projection emits ``documented_rules`` (verbatim field
+    # ``rule``) and ``relationships`` (``from_entity``/``to_entity``), which
+    # differ from the model-dict keys.  The source-anchored fact block must
+    # consume both, or the comprehension bridge silently starves the reasoner
+    # of its declared rules and relations.
+    payload = {
+        "documented_rules": [
+            {
+                "rule": "订单支付前不得发货",
+                "source": "src:prd@PRD.md#订单",
+                "entities_involved": ["订单", "支付", "发货"],
+                "is_verifiable": True,
+                "severity": "P0",
+            },
+        ],
+        "relationships": [
+            {"from_entity": "orders", "to_entity": "users", "relationship_type": "belongs_to"},
+        ],
+    }
+    block, receipt = retrieve_grounded_facts(payload)
+    assert receipt["status"] == "CONSUMED"
+    assert "订单支付前不得发货" in block
+    assert "(source: src:prd@PRD.md#订单)" in block
+    assert "orders -belongs_to-> users" in block
 
 
 def test_retrieval_redacts_credentials() -> None:
