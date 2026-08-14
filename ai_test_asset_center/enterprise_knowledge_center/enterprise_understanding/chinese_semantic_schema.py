@@ -69,6 +69,7 @@ FRAME_TYPES = frozenset(
         "POSTCONDITION",
         "COMPENSATION_RULE",
         "PROCESS_ORDERING",
+        "CONSERVATION_LINKAGE",
         "DATA_VISIBILITY_RULE",
     }
 )
@@ -250,6 +251,8 @@ def empty_frame(
         "quantity_constraints": [],
         "time_constraints": [],
         "formula_constraints": [],
+        "conservation_linkages": [],
+        "process_ordering": [],
         "postconditions": [],
         "compensations": [],
         "technical_grounding": {
@@ -356,6 +359,8 @@ def semantic_signature_payload(frame: dict[str, Any]) -> dict[str, Any]:
         "quantity_constraints": _constraint_signatures(_list(frame.get("quantity_constraints"))),
         "time_constraints": _constraint_signatures(_list(frame.get("time_constraints"))),
         "formula_constraints": _constraint_signatures(_list(frame.get("formula_constraints"))),
+        "conservation_linkages": _constraint_signatures(_list(frame.get("conservation_linkages"))),
+        "process_ordering": _constraint_signatures(_list(frame.get("process_ordering"))),
         "postconditions": _norm_refs(_list(frame.get("postconditions"))),
         "compensations": _norm_refs(_list(frame.get("compensations"))),
     }

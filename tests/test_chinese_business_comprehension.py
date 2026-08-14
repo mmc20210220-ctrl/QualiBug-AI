@@ -817,3 +817,21 @@ def test_action_nouns_qualifiers_and_prohibitions_do_not_emit_fake_effects() -> 
     assert formula["data_effects"] == []
     assert formula["compensation"] == []
     assert formula["formula_constraints"][0]["lhs"] == "退款金额"
+
+
+def test_lifecycle_implied_process_ordering_is_action_pair_only() -> None:
+    _, facts, _ = analyze_chinese_business_source(
+        {
+            "source_id": "process-order-1",
+            "filename": "lifecycle.md",
+            "text": "发货后应可确认收货",
+        },
+        asset=_asset(),
+    )
+    rule = next(fact for fact in facts if fact.get("kind") == "RULE")
+    ordering = rule.get("process_ordering") or []
+    assert len(ordering) == 1
+    assert ordering[0]["kind"] == "PROCESS_ORDERING"
+    assert ordering[0]["from_action"] == "发货"
+    assert ordering[0]["to_action"] == "收货"
+    assert ordering[0]["source_backed"] is True

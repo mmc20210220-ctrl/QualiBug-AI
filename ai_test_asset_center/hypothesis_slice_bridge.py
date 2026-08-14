@@ -902,4 +902,6 @@ def hypotheses_to_obligations(
         **funnel,
         "adapted_obligation_count": len(adapted["obligations"]),
         "adapter_coverage_gap_count": len(adapted["coverage_gaps"]),
+        "depth_carried_count": int(adapted.get("depth_carried_count") or 0),
+        "depth_uncompiled_count": int(adapted.get("depth_uncompiled_count") or 0),
     }

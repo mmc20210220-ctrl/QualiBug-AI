@@ -671,6 +671,58 @@ def _conservation_linkages(text: str) -> list[dict[str, Any]]:
     return rows
 
 
+def _lifecycle_implied_transitions(text: str) -> list[dict[str, Any]]:
+    """Extract action-pair ordering ("发货后应可确认收货") as process ordering.
+
+    A lifecycle-ordering edge is any pair of actions from the language-form
+    whitelist (``_ACTION_PATTERNS``) separated by an explicit ordering marker
+    (``后``/``之后``/``以后``/``前``/``之前``). The trigger action must precede
+    the effect action in the same lifecycle.
+
+    No state name is invented: only the source's own action verbs become the
+    edge endpoints. This is an ordering relation between actions, not a
+    from-state→to-state transition, so it never guesses a state value.
+    """
+    # Collect every whitelist action with its position.
+    actions: list[tuple[int, int, str, str]] = []
+    for canonical, pattern in _ACTION_REGEXES:
+        for match in pattern.finditer(text):
+            if _ACTION_NOUN_SUFFIX_RE.match(text[match.end() :]):
+                continue
+            actions.append((match.start(), match.end(), canonical, match.group(0)))
+    actions.sort(key=lambda row: row[0])
+    if len(actions) < 2:
+        return []
+
+    rows: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for sep_match in re.finditer(r"之后|以后|之后|之前|之前|后|前", text):
+        sep_start = sep_match.start()
+        sep_end = sep_match.end()
+        before = [row for row in actions if row[1] <= sep_start]
+        after = [row for row in actions if row[0] >= sep_end]
+        if not before or not after:
+            continue
+        from_action = before[-1][2]
+        to_action = after[0][2]
+        if not from_action or not to_action or from_action == to_action:
+            continue
+        key = (from_action, to_action)
+        if key in seen:
+            continue
+        seen.add(key)
+        rows.append({
+            "kind": "PROCESS_ORDERING",
+            "from_action": from_action,
+            "to_action": to_action,
+            "statement": _text(
+                text[before[-1][0] : after[0][1]]
+            ),
+            "source_backed": True,
+        })
+    return rows
+
+
 def _postconditions(text: str, *, data_effects: list[dict[str, Any]], compensations: list[str]) -> list[str]:
     rows: list[str] = []
     for match in _TRIGGER_THEN_EFFECT_RE.finditer(text):
@@ -1408,6 +1460,7 @@ def _fact_from_unit(
     compensation = _compensations(raw)
     postconditions = _postconditions(raw, data_effects=data_effects, compensations=compensation)
     conservation_linkages = _conservation_linkages(raw)
+    process_ordering = _lifecycle_implied_transitions(raw)
     scope = _scope(raw)
 
     # When source states "trigger后 effect", prefer the trigger action as the operation
@@ -1519,6 +1572,7 @@ def _fact_from_unit(
         "state_effects": states,
         "data_effects": data_effects,
         "conservation_linkages": conservation_linkages,
+        "process_ordering": process_ordering,
         "temporal_constraints": temporal,
         "quantity_constraints": quantity_constraints,
         "time_window_constraints": time_window_constraints,

@@ -133,6 +133,10 @@ def _frame_type_for_fact(fact: dict[str, Any]) -> str:
         return "STATE_TRANSITION"
     if _list(fact.get("formula_constraints")) and not _dict(fact.get("action")):
         return "FORMULA_CONSTRAINT"
+    if _list(fact.get("conservation_linkages")):
+        return "CONSERVATION_LINKAGE"
+    if _list(fact.get("process_ordering")):
+        return "PROCESS_ORDERING"
     subject = _dict(fact.get("subject"))
     scope = _dict(fact.get("scope"))
     if (
@@ -488,6 +492,16 @@ def project_fact_to_semantic_frame(
     ]
     frame["formula_constraints"] = [
         dict(row) for row in _list(fact.get("formula_constraints")) if isinstance(row, dict)
+    ]
+    frame["conservation_linkages"] = [
+        dict(row)
+        for row in _list(fact.get("conservation_linkages"))
+        if isinstance(row, dict)
+    ]
+    frame["process_ordering"] = [
+        dict(row)
+        for row in _list(fact.get("process_ordering"))
+        if isinstance(row, dict)
     ]
     postconditions = [
         _norm(row) for row in _list(fact.get("postconditions")) if _norm(row)

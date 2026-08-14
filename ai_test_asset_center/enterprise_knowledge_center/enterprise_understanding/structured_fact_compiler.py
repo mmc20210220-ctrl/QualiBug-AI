@@ -415,6 +415,16 @@ def _semantic_signature_payload(fact: dict[str, Any]) -> dict[str, Any]:
             for row in _list(fact.get("formula_constraints"))
             if isinstance(row, dict)
         ),
+        "conservation_linkages": sorted(
+            json.dumps(row, ensure_ascii=False, sort_keys=True, default=str)
+            for row in _list(fact.get("conservation_linkages"))
+            if isinstance(row, dict)
+        ),
+        "process_ordering": sorted(
+            json.dumps(row, ensure_ascii=False, sort_keys=True, default=str)
+            for row in _list(fact.get("process_ordering"))
+            if isinstance(row, dict)
+        ),
     }
 
 
@@ -541,6 +551,8 @@ def _atomize_existing_fact(fact: dict[str, Any]) -> dict[str, Any]:
         ("quantity_constraints", "QUANTITY_CONSTRAINT"),
         ("time_window_constraints", "TIME_WINDOW_CONSTRAINT"),
         ("formula_constraints", "FORMULA_CONSTRAINT"),
+        ("conservation_linkages", "CONSERVATION_LINKAGE"),
+        ("process_ordering", "PROCESS_ORDERING"),
     ):
         for value in _list(row.get(field)):
             if isinstance(value, dict):

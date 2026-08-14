@@ -180,6 +180,28 @@ def _candidate_id(candidate: dict[str, Any]) -> str:
     return f"candidate_{hashlib.sha256(canonical.encode('utf-8')).hexdigest()[:20]}"
 
 
+def _depth_uncompiled_detail(candidate: dict[str, Any]) -> str:
+    """Name the reason deep comprehension cannot compile to a single operation.
+
+    Returns "" when the candidate carries no cross-entity / multi-step depth,
+    otherwise a short reason code. Used to emit an explicit coverage gap so the
+    uncompiled depth is countable, never silently dropped.
+    """
+    depth = candidate.get("depth")
+    if not isinstance(depth, dict) or not depth:
+        return ""
+    if depth.get("cascade_chain"):
+        return "cascade_chain_uncompiled"
+    steps = depth.get("verification_steps")
+    if isinstance(steps, dict) and len(steps) > 1:
+        return "multi_step_verification_uncompiled"
+    if depth.get("target_entity") and depth.get("target_entity") != _text(
+        candidate.get("entity")
+    ):
+        return "cross_entity_uncompiled"
+    return ""
+
+
 def _operation_matches(
     candidate: dict[str, Any],
     operations: list[dict[str, Any]],
@@ -251,6 +273,15 @@ def _planning_property(
     )
     if intent:
         property_spec.setdefault("source_intent", intent[:500])
+    # Carry the reasoner's deep-comprehension fields (cascade_chain /
+    # source_state / multi-step verification) into the obligation identity so
+    # they are observable end-to-end instead of being dropped at the bridge.
+    # The single-operation compiler ignores unknown property keys, so carrying
+    # depth does not disturb execution and does not cross the execution-layer
+    # boundary; it makes the uncompilable remainder traceable.
+    depth = candidate.get("depth")
+    if isinstance(depth, dict) and depth:
+        property_spec.setdefault("depth", depth)
     return property_spec
 
 
@@ -471,6 +502,8 @@ def adapt_source_candidates_to_obligations(
     items = [row for row in (candidates or []) if isinstance(row, dict)]
     obligations: list[dict[str, Any]] = []
     coverage_gaps: list[dict[str, Any]] = []
+    depth_carried_count = 0
+    depth_uncompiled_count = 0
 
     for candidate in items:
         _assert_source_only(candidate)
@@ -562,6 +595,22 @@ def adapt_source_candidates_to_obligations(
             ))
             continue
         obligations.extend(grounded)
+        # Deep comprehension that the single-operation model cannot compile
+        # (a cross-entity cascade chain, a multi-step verification plan, or a
+        # target entity distinct from the bound operation's subject) is
+        # recorded as an explicit gap rather than silently dropped. The
+        # single-operation obligation is still emitted above, so no source
+        # grounding is lost; the gap names exactly what remains uncompiled.
+        if isinstance(candidate.get("depth"), dict) and candidate["depth"]:
+            depth_carried_count += 1
+        _uncompiled = _depth_uncompiled_detail(candidate)
+        if _uncompiled:
+            depth_uncompiled_count += 1
+            coverage_gaps.append(_stable_gap(
+                candidate_id=candidate_id,
+                code="BLOCKED_DEEP_COMPREHENSION_UNCOMPILED",
+                detail=_uncompiled,
+            ))
 
     deduped = dedupe_obligations(obligations)
     return {
@@ -569,4 +618,6 @@ def adapt_source_candidates_to_obligations(
         "input_count": len(items),
         "obligations": deduped,
         "coverage_gaps": coverage_gaps,
+        "depth_carried_count": depth_carried_count,
+        "depth_uncompiled_count": depth_uncompiled_count,
     }

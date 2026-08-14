@@ -603,3 +603,54 @@ def test_adapter_obligation_uses_executable_actors() -> None:
     assert set(obl["required_actors"]) == {"bir_admin_account", "bir_finance_account"}
     assert obl["property"]["control_actor_ref"] == "bir_admin_account"
     assert obl["property"]["treatment_actor_ref"] == "bir_finance_account"
+
+
+def test_adapter_carries_depth_and_flags_uncompiled_cascade() -> None:
+    result = adapt_source_candidates_to_obligations(
+        [{
+            "candidate_id": "candidate-deep",
+            "risk_family": "idempotency",
+            "method": "POST",
+            "path": "/resources",
+            "entity": "resource",
+            "source_refs": [{"source_id": "SRC-1"}],
+            "depth": {
+                "cascade_chain": [{"from": "order", "to": "settlement"}],
+                "source_state": "OVERDUE",
+            },
+        }],
+        _adapter_ir(),
+    )
+
+    # Depth is carried into the obligation identity (observable end-to-end).
+    assert result["depth_carried_count"] == 1
+    obligation = result["obligations"][0]
+    assert obligation["property"]["depth"]["cascade_chain"]
+    assert obligation["property"]["depth"]["source_state"] == "OVERDUE"
+    # The cross-entity cascade cannot compile to one operation → explicit gap.
+    assert result["depth_uncompiled_count"] == 1
+    assert any(
+        gap["code"] == "BLOCKED_DEEP_COMPREHENSION_UNCOMPILED"
+        and gap["detail"] == "cascade_chain_uncompiled"
+        for gap in result["coverage_gaps"]
+    )
+
+
+def test_adapter_flat_candidate_has_no_depth_counters() -> None:
+    result = adapt_source_candidates_to_obligations(
+        [{
+            "candidate_id": "candidate-flat",
+            "risk_family": "idempotency",
+            "method": "POST",
+            "path": "/resources",
+            "source_refs": [{"source_id": "SRC-1"}],
+        }],
+        _adapter_ir(),
+    )
+
+    assert result["depth_carried_count"] == 0
+    assert result["depth_uncompiled_count"] == 0
+    assert not any(
+        gap["code"] == "BLOCKED_DEEP_COMPREHENSION_UNCOMPILED"
+        for gap in result["coverage_gaps"]
+    )
