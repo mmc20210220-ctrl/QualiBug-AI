@@ -401,7 +401,12 @@ def test_deep_families_require_observers(family):
 
 
 def test_no_second_dispatcher_in_contract_oracles_module():
-    import ai_test_asset_center.contract_oracles as mod
+    # The single oracle dispatcher now lives in the outcome mechanics module;
+    # the public facade re-exports it. The check that no alternate dispatcher
+    # (field_oracle_v2 / alternate_oracle) sneaks back in, and that
+    # evaluate_assertion remains the single assertion entry, applies to the
+    # module that actually evaluates.
+    import ai_test_asset_center._contract_oracles_mechanics as mod
 
     src = open(mod.__file__, encoding="utf-8").read()
     assert "field_oracle_v2" not in src

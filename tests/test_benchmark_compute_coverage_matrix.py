@@ -87,9 +87,12 @@ def test_product_coverage_never_reads_ground_truth(
 
 
 def test_product_scan_source_does_not_invoke_private_benchmark_evaluator() -> None:
-    from ai_test_asset_center.__main__ import scan
+    # The scan body lives in _scan_impl (scan() is the post-hook wrapper). The
+    # product-side coverage projection must run there, never the evaluator-
+    # private compute_benchmark scorer.
+    from ai_test_asset_center.__main__ import _scan_impl
 
-    source = inspect.getsource(scan)
+    source = inspect.getsource(_scan_impl)
     assert "compute_benchmark" not in source
     assert "compute_product_coverage_projection" in source
 

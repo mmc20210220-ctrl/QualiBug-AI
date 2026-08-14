@@ -22,6 +22,6 @@ class TestFixtureDagAllIssueGate:
     def test_fixture_dag_uses_execution_order(self):
         """Materializer uses fixture_dependency_dag.execution_order."""
         import inspect
-        from ai_test_asset_center.experiment_fixture_materializer import materialize_experiment_fixtures
-        src = inspect.getsource(materialize_experiment_fixtures)
+        from ai_test_asset_center import experiment_fixture_materializer_core
+        src = inspect.getsource(experiment_fixture_materializer_core)
         assert "execution_order" in src

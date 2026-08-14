@@ -135,4 +135,6 @@ def test_public_runtime_exports_full_quality_projection_chain() -> None:
         run_experiment_candidate,
     )
 
-    assert discovery_runtime.run_experiment_candidate is run_experiment_candidate
+    # discovery_runtime adds scan-stage progress marking around the quality
+    # projection entry, so it is a distinct wrapper, not a raw re-export.
+    assert discovery_runtime.run_experiment_candidate is not run_experiment_candidate

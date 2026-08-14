@@ -61,7 +61,8 @@ def test_private_pilot_http_routing_serves_spa_not_legacy_html() -> None:
     )
 
     assert "_serve_frontend(parsed, root)" in source
-    assert "_spa_aliases = {" in source
+    assert "def _serve_public_frontend" in source
+    assert 'aliases = {' in source
     assert '"/knowledge": "/materials"' in source
     assert "render_enterprise_business_knowledge_center" not in source
     assert "render_multi_industry_benchmark_report" not in source

@@ -182,7 +182,7 @@ def test_scan_handler_binds_the_whole_corpus() -> None:
         / "ai_test_asset_center" / "private_pilot_scan_handlers.py"
     ).read_text(encoding="utf-8")
 
-    marker = "if not _manifest_ok:"
+    marker = "if not manifest_valid:"
     assert marker in source
     block = source[source.index(marker): source.index(marker) + 1400]
 
