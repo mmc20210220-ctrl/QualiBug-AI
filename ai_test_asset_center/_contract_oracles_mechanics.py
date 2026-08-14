@@ -585,7 +585,25 @@ def build_contract_oracle_activation_receipt(
                 # An HTTP status line does not exist on this surface and must
                 # never be fabricated.
                 if _text(receipt_evidence.get("surface")) != "ui_browser":
-                    blockers.append(f"CONTROL_SUCCESS_NOT_PROVEN:{subject}")
+                    # The control arm failed before it could prove success.  The
+                    # receipt carries the observed status_code / response_observed
+                    # / control_succeeded; surface them so a 401 (auth), 404
+                    # (subject not established), 5xx (target error) and a
+                    # pre-transport block are distinguishable in run data instead
+                    # of collapsing into one anonymous blocker.
+                    _control_status = int(receipt_evidence.get("status_code") or 0)
+                    _control_observed = (
+                        receipt_evidence.get("response_observed") is True
+                    )
+                    _control_succeeded = (
+                        receipt_evidence.get("control_succeeded") is True
+                    )
+                    blockers.append(
+                        f"CONTROL_SUCCESS_NOT_PROVEN:{subject}"
+                        f":status={_control_status}"
+                        f":observed={_control_observed}"
+                        f":succeeded={_control_succeeded}"
+                    )
                     continue
                 _ui_rendered = any(
                     _dict(_dict(row).get("evidence")).get("ui_browser") is True
