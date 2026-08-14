@@ -71,17 +71,30 @@ function emptyFindingsSnapshot(projectId: string): JsonRecord {
   };
 }
 
+// command-center 结果 in-flight 单飞缓存：同一 project 的并发请求合并为一次
+// 网络往返（Sidebar + Topbar + 页面 hook 会同时触发 getFindings）。结果只在
+// 请求 in-flight 期间共享，落地后立即释放，不引入跨轮询的陈旧数据。
+const _findingsInflight = new Map<string, Promise<JsonRecord>>();
+
 export async function getFindings(projectId: string): Promise<JsonRecord> {
   const resolvedProjectId = await resolveProjectId(projectId);
   if (!resolvedProjectId) return emptyFindingsSnapshot('');
-  try {
-    const envelope = await fetchJSON<unknown>(`${API_V1_BASE}/projects/${encodeURIComponent(resolvedProjectId)}/command-center`);
-    return { resolvedProjectId, projectId: resolvedProjectId, ...asRecord(asRecord(envelope).data) };
-  } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (message.includes('404')) return emptyFindingsSnapshot(resolvedProjectId);
-    throw error;
-  }
+  const inFlight = _findingsInflight.get(resolvedProjectId);
+  if (inFlight) return inFlight;
+  const request = (async () => {
+    try {
+      const envelope = await fetchJSON<unknown>(`${API_V1_BASE}/projects/${encodeURIComponent(resolvedProjectId)}/command-center`);
+      return { resolvedProjectId, projectId: resolvedProjectId, ...asRecord(asRecord(envelope).data) };
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.includes('404')) return emptyFindingsSnapshot(resolvedProjectId);
+      throw error;
+    } finally {
+      _findingsInflight.delete(resolvedProjectId);
+    }
+  })();
+  _findingsInflight.set(resolvedProjectId, request);
+  return request;
 }
 
 export async function replayFinding(projectId: string, findingId: string, baseUrl = ''): Promise<unknown> {

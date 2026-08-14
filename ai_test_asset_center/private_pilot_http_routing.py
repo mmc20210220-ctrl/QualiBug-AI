@@ -7,6 +7,7 @@ routes, and logout revokes every outstanding JWT/cookie version for the tenant.
 from __future__ import annotations
 
 import os
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -22,7 +23,10 @@ from .private_pilot_command_center_envelope import normalize_command_center_enve
 from .private_pilot_continuous import _get_continuous_state
 from .private_pilot_debug_client import _dbg_report
 from .private_pilot_project_assets import _knowledge_asset_sources
+from .product_logging import get_logger
 from .real_project_onboarding import _safe_project_id
+
+_http_logger = get_logger("qualibug.http")
 
 
 def _svc():
@@ -33,6 +37,72 @@ def _svc():
 
 def _normalize_command_center_envelope(payload: dict[str, Any]) -> dict[str, Any]:
     return normalize_command_center_envelope(payload)
+
+
+# ── command-center 结果缓存 ─────────────────────────────────────────────────
+# command-center 每次请求都要重新组装分片 store（实测 40MB scan_result.json
+# 分片组装 ~10s，knowledge_asset.json ~2s）并全量重算投影，且同一页面会并发
+# 触发多次。这里按「项目数据指纹」缓存最终脱敏后的 payload：指纹只在底层
+# 数据文件（scan_result / evidence bundle / knowledge asset）发生变化时才变，
+# 因此不会返回陈旧数据；指纹变化即失效，无需 TTL 猜测。
+#
+# 缓存只存「脱敏后、交付前」的最终 payload —— 它是纯只读、无共享可变子树的
+# 结果，绝不缓存中间可被调用方就地修改的对象。
+_COMMAND_CENTER_CACHE: dict[str, tuple[str, float, dict[str, Any]]] = {}
+_COMMAND_CENTER_CACHE_LOCK = threading.Lock()
+_COMMAND_CENTER_CACHE_MAX_ENTRIES = 64
+# 文件指纹覆盖了最重的 scan_result / evidence bundle / knowledge asset，但
+# command-center 还会读 SQLite（累积 finding 修复状态、knowledge_docs），其变化
+# 不体现在文件 mtime 上。TTL 作为兜底：DB 变化最迟在该时间后生效，避免返回
+# 长期陈旧数据。
+_COMMAND_CENTER_CACHE_TTL_SECONDS = 30.0
+# per-key 单飞锁：同一 project 的并发请求只允许一个真正构建，其余等待后命中缓存，
+# 避免并发 miss 时多线程同时重组分片 store 造成磁盘争抢（实测并发时单请求
+# 会从 ~10s 恶化到数百秒）。
+_COMMAND_CENTER_BUILD_LOCKS: dict[str, threading.Lock] = {}
+_COMMAND_CENTER_BUILD_LOCKS_GUARD = threading.Lock()
+
+
+def _command_center_build_lock(cache_key: str) -> threading.Lock:
+    with _COMMAND_CENTER_BUILD_LOCKS_GUARD:
+        lock = _COMMAND_CENTER_BUILD_LOCKS.get(cache_key)
+        if lock is None:
+            lock = threading.Lock()
+            _COMMAND_CENTER_BUILD_LOCKS[cache_key] = lock
+        return lock
+
+
+def _project_data_fingerprint(root: Path, project: str) -> str:
+    """项目数据指纹：由 command-center 读取目录的最新 mtime + 文件数 + 大小构成。
+
+    只统计真正的数据源（scan_result / intelligence_report / knowledge asset /
+    evidence bundle），不扫描 delivery_packages 等无关大目录，避免指纹计算
+    本身变成瓶颈（实测 660 文件全量 walk ~0.1s，可接受）。
+    """
+    latest_mtime_ns = 0
+    file_count = 0
+    total_bytes = 0
+    scan_roots = [
+        root / "platform_outputs" / project,
+        root / "platform_workspace" / project,
+    ]
+    for base in scan_roots:
+        if not base.is_dir():
+            continue
+        for dirpath, dirnames, filenames in os.walk(base):
+            # 跳过明显与 command-center 数据无关的重量级目录。
+            dirnames[:] = [d for d in dirnames if d not in {"delivery_packages"}]
+            for filename in filenames:
+                path = Path(dirpath) / filename
+                try:
+                    st = path.stat()
+                except OSError:
+                    continue
+                file_count += 1
+                total_bytes += st.st_size
+                if st.st_mtime_ns > latest_mtime_ns:
+                    latest_mtime_ns = st.st_mtime_ns
+    return f"{latest_mtime_ns}:{file_count}:{total_bytes}"
 
 
 def _text(value: Any) -> str:
@@ -222,44 +292,105 @@ class HttpRoutingMixin:
     def _handle_command_center(self, project: str, root: Path) -> Any:
         trace_id = uuid.uuid4().hex
         started = time.perf_counter()
-        try:
-            payload = self._build_command_center(project, root)
-            if not isinstance(payload, dict):
-                raise TypeError("command-center payload must be an object")
-            from .display_ready_formatter import sanitize_customer_evidence_payload
+        # 缓存 key 含租户：结果经过 actor/ACL 过滤，必须按租户隔离。
+        tenant_id = self._request_tenant()
+        cache_key = f"{tenant_id}:{project}"
 
-            sanitized = sanitize_customer_evidence_payload(payload)
-            if not isinstance(sanitized, dict):
-                raise TypeError("sanitized command-center payload must be an object")
-            normalized = _normalize_command_center_envelope(sanitized)
+        def _cache_hit(fingerprint: str) -> dict[str, Any] | None:
+            with _COMMAND_CENTER_CACHE_LOCK:
+                cached = _COMMAND_CENTER_CACHE.get(cache_key)
+            if (
+                cached is not None
+                and cached[0] == fingerprint
+                and (time.monotonic() - cached[1]) < _COMMAND_CENTER_CACHE_TTL_SECONDS
+            ):
+                return cached[2]
+            return None
+
+        fingerprint = _project_data_fingerprint(root, project)
+        cached_payload = _cache_hit(fingerprint)
+        if cached_payload is not None:
             _dbg_report(
                 hypothesis_id="COMMAND_CENTER",
-                msg="[DEBUG] command-center customer payload ready",
+                msg="[DEBUG] command-center cache hit",
                 data={
                     "project_id": project,
                     "elapsed_ms": int((time.perf_counter() - started) * 1000),
                 },
                 trace_id=trace_id,
             )
-            return self._json(normalized)
-        except Exception as exc:
-            _dbg_report(
-                hypothesis_id="COMMAND_CENTER",
-                msg="[ERROR] command-center blocked before delivery",
-                data={
-                    "project_id": project,
-                    "exc_type": type(exc).__name__,
-                },
-                trace_id=trace_id,
-            )
-            return self._json(
-                {
-                    "ok": False,
-                    "error": "COMMAND_CENTER_DELIVERY_BLOCKED",
-                    "message": "客户证据脱敏或交付格式校验失败，原始数据未返回。",
-                },
-                500,
-            )
+            return self._json(cached_payload)
+
+        # 单飞：同一 project 并发请求只有一个构建，其余在锁外自旋等待缓存。
+        build_lock = _command_center_build_lock(cache_key)
+        with build_lock:
+            # 获取锁后二次检查：上一个持有锁的请求可能已写入缓存。
+            cached_payload = _cache_hit(fingerprint)
+            if cached_payload is not None:
+                _dbg_report(
+                    hypothesis_id="COMMAND_CENTER",
+                    msg="[DEBUG] command-center cache hit (after build lock)",
+                    data={
+                        "project_id": project,
+                        "elapsed_ms": int((time.perf_counter() - started) * 1000),
+                    },
+                    trace_id=trace_id,
+                )
+                return self._json(cached_payload)
+            try:
+                payload = self._build_command_center(project, root)
+                if not isinstance(payload, dict):
+                    raise TypeError("command-center payload must be an object")
+                from .display_ready_formatter import sanitize_customer_evidence_payload
+
+                sanitized = sanitize_customer_evidence_payload(payload)
+                if not isinstance(sanitized, dict):
+                    raise TypeError("sanitized command-center payload must be an object")
+                normalized = _normalize_command_center_envelope(sanitized)
+                _dbg_report(
+                    hypothesis_id="COMMAND_CENTER",
+                    msg="[DEBUG] command-center customer payload ready",
+                    data={
+                        "project_id": project,
+                        "elapsed_ms": int((time.perf_counter() - started) * 1000),
+                    },
+                    trace_id=trace_id,
+                )
+                with _COMMAND_CENTER_CACHE_LOCK:
+                    if len(_COMMAND_CENTER_CACHE) >= _COMMAND_CENTER_CACHE_MAX_ENTRIES:
+                        _COMMAND_CENTER_CACHE.clear()
+                    _COMMAND_CENTER_CACHE[cache_key] = (
+                        fingerprint,
+                        time.monotonic(),
+                        normalized,
+                    )
+                return self._json(normalized)
+            except Exception as exc:
+                _dbg_report(
+                    hypothesis_id="COMMAND_CENTER",
+                    msg="[ERROR] command-center blocked before delivery",
+                    data={
+                        "project_id": project,
+                        "exc_type": type(exc).__name__,
+                    },
+                    trace_id=trace_id,
+                )
+                import traceback as _traceback
+                _http_logger.error(
+                    "command-center delivery blocked: project=%s exc=%s %s",
+                    project,
+                    type(exc).__name__,
+                    exc,
+                    exc_info=True,
+                )
+                return self._json(
+                    {
+                        "ok": False,
+                        "error": "COMMAND_CENTER_DELIVERY_BLOCKED",
+                        "message": "客户证据脱敏或交付格式校验失败，原始数据未返回。",
+                    },
+                    500,
+                )
 
     def do_GET(self) -> None:  # noqa: N802
         self._init_request_context()
