@@ -284,10 +284,16 @@ def bind_observer_receipt_lineage(
 # ``implemented`` means the current candidate runtime emits a typed receipt for
 # this observer. Declaring a surface in Behavior IR is not implementation.
 #
-# RESIDUAL BREADTH CEILING (V1.6.2): every built-in observer below still uses
-# adapter ``http_api``. DB / UI / message-queue / timing observers are not on the
-# executor → observer → assertion-DSL → contract-oracle chain. Do not claim those
-# defect classes are supported until a real non-HTTP observer is wired end-to-end.
+# The 13 built-in observers below all use adapter ``http_api``. Non-HTTP
+# surfaces (db_sql, ui_browser, event_observer_http, process_ledger, and the
+# message-chain/performance/stability observers) are NOT built-in — they are
+# wired end-to-end through the additive ``register_observer`` extension and the
+# ``_REGISTERED_OBSERVER_HANDLERS`` dispatch (observers registered there are
+# consulted where this built-in chain would otherwise return UNSUPPORTED, and
+# their OBSERVED evidence is merged into observations). Those defect classes are
+# therefore reachable only when the customer declares the surface and the source
+# material declares the contract (AGENTS.md measured-breadth-ceiling note), and
+# their absence from findings is never evidence that a target is clean.
 OBSERVER_REGISTRY: dict[str, dict[str, Any]] = {
     "http_response": {
         "surface": "http_api",
