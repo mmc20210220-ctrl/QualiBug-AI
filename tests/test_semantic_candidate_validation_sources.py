@@ -103,3 +103,36 @@ def test_only_validated_entity_candidate_can_enter_entity_space() -> None:
     assert entries[1]["_cannot_enter_entity_space"] is True
     assert "object" not in entries[2]
     assert entries[2]["behavior_ir_promotion_status"] == "PENDING_DIAGNOSTIC_ONLY"
+
+
+def test_incremental_projection_recomputes_multi_source_entity_validation() -> None:
+    from ai_test_asset_center.enterprise_knowledge_center.composition import (
+        _incremental_refresh_semantic_candidate_projection,
+    )
+
+    asset = {
+        "semantic_candidates": [
+            _candidate(name="陌生业务对象", source_id="prd-1"),
+            _candidate(name="陌生业务对象", source_id="api-1"),
+        ],
+        "interfaces": [],
+        "data_tables": [],
+        "rule_library": [],
+        "state_machines": [],
+        "business_objects": [
+            {
+                "object": "过期候选",
+                "source": "semantic_extraction_validated",
+            }
+        ],
+    }
+
+    added = _incremental_refresh_semantic_candidate_projection(asset)
+
+    assert added == 1
+    assert [row["object"] for row in asset["business_objects"]] == [
+        "陌生业务对象"
+    ]
+    receipt = asset["candidate_validation_receipt"]
+    assert receipt["validated_count"] == 2
+    assert receipt["pending_count"] == 0

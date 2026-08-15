@@ -16,16 +16,10 @@ import tempfile
 import time
 import zipfile
 from collections import Counter, defaultdict
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Iterable
 
 logger = logging.getLogger(__name__)
-
-# Semantic extraction budget: one provider round-trip per zero-output source.
-_MAX_LLM_SOURCES_PER_BUILD = 12
-# Matches the project-wide parallel LLM worker default; higher hits rate limits.
-_LLM_EXTRACTION_WORKERS = 4
 
 try:
     import docx2txt
@@ -979,7 +973,7 @@ def build_enterprise_business_knowledge_asset(
     from ._semantic_extraction import (
         provider_status,
         resolve_semantic_rule_extraction_mode,
-        run_semantic_extraction,
+        run_semantic_extraction_batch,
         semantic_extraction_availability,
     )
     _sem_requested = bool(
@@ -1025,32 +1019,15 @@ def build_enterprise_business_knowledge_asset(
                     _sem_targets.append((source, _src_text))
             elif _src_structured == 0 and _src_text.strip():
                 _sem_targets.append((source, _src_text))
-    # Each target costs one provider round-trip, so the layer is both capped and
-    # run concurrently — otherwise a document-heavy project serializes minutes of
-    # latency into asset construction.
-    if len(_sem_targets) > _MAX_LLM_SOURCES_PER_BUILD:
-        for _skipped_source, _ in _sem_targets[_MAX_LLM_SOURCES_PER_BUILD:]:
-            parse_coverage_gaps.append({
-                "kind": "SEMANTIC_EXTRACTION_SKIPPED",
-                "gap_type": "semantic_extraction_budget_exhausted",
-                "source_id": _skipped_source.get("source_id"),
-                "operator_action": (
-                    f"per-build semantic extraction budget is "
-                    f"{_MAX_LLM_SOURCES_PER_BUILD} sources; this source was not attempted"
-                ),
-            })
-        _sem_targets = _sem_targets[:_MAX_LLM_SOURCES_PER_BUILD]
     if _sem_targets:
-        def _run_one(target: tuple[dict[str, Any], str]) -> tuple[dict[str, Any], Any]:
-            _source, _text = target
-            return _source, run_semantic_extraction(
-                _text,
-                source_id=str(_source.get("source_id") or ""),
-                filename=str(_source.get("original_name") or ""),
-            )
-
-        with ThreadPoolExecutor(max_workers=_LLM_EXTRACTION_WORKERS) as _pool:
-            _sem_results = list(_pool.map(_run_one, _sem_targets))
+        _max_chunks = options.get("semantic_max_chunks_per_source")
+        if _max_chunks in (None, ""):
+            _max_chunks = None
+        _sem_results, _batch_receipt = run_semantic_extraction_batch(
+            _sem_targets,
+            max_chunks_per_source=_max_chunks,
+        )
+        semantic_receipts.append(_batch_receipt)
         for _source, _sem_receipt in _sem_results:
             semantic_receipts.append(_sem_receipt.to_dict())
             semantic_candidates.extend(_sem_receipt.candidates_validated)
@@ -1060,6 +1037,17 @@ def build_enterprise_business_knowledge_asset(
                     "gap_type": "semantic_extraction_error",
                     "source_id": _source.get("source_id"),
                     "operator_action": _sem_receipt.error[:200],
+                })
+            if _sem_receipt.unprocessed_ranges:
+                parse_coverage_gaps.append({
+                    "kind": "SEMANTIC_EXTRACTION_INCOMPLETE",
+                    "gap_type": "semantic_extraction_operator_budget_exhausted",
+                    "source_id": _source.get("source_id"),
+                    "unprocessed_ranges": list(_sem_receipt.unprocessed_ranges),
+                    "operator_action": (
+                        "increase or remove semantic_max_chunks_per_source; "
+                        "the product does not impose a default source-length cap"
+                    ),
                 })
     source_texts = {f"{source.get('source_type')}:{source.get('original_name')}": parsed.get("text") or "" for source, parsed in parsed_rows if parsed.get("text")}
     openapi_parts = [parsed.get("openapi") for _, parsed in parsed_rows if isinstance(parsed.get("openapi"), dict) and parsed.get("openapi")]
@@ -1117,6 +1105,7 @@ def build_enterprise_business_knowledge_asset(
     # candidates enter rule_library when the mode receipt resolved to augment,
     # then flow through the existing governance chain. Shadow keeps them as
     # candidates only.
+    _rule_candidate_ledgers: list[dict[str, Any]] = []
     if _rule_mode_receipt["effective_mode"] == "augment":
         _llm_rule_candidates = [
             dict(row)
@@ -1142,12 +1131,15 @@ def build_enterprise_business_knowledge_asset(
                             str(_span.get("source_id") or "").strip(), []
                         ).append(_r)
                         break
-            _promoted_all: list[dict[str, Any]] = []
-            _promo_receipts: list[dict[str, Any]] = []
+            _llm_rules_by_source: dict[str, list[dict[str, Any]]] = {}
             for _cand in _llm_rule_candidates:
                 _src = str(_cand.get("source_id") or "").strip()
                 if not _src:
                     continue
+                _llm_rules_by_source.setdefault(_src, []).append(_cand)
+            _promoted_all: list[dict[str, Any]] = []
+            _promo_receipts: list[dict[str, Any]] = []
+            for _src, _source_candidates in _llm_rules_by_source.items():
                 _src_text = next(
                     (p.get("text") or "" for _, p in parsed_rows
                      if str(_.get("source_id") or "").strip() == _src),
@@ -1155,10 +1147,11 @@ def build_enterprise_business_knowledge_asset(
                 )
                 _ledger = build_rule_candidate_ledger(
                     _regex_rules_by_source.get(_src, []),
-                    [_cand],
+                    _source_candidates,
                     source_id=_src,
                     source_text=_src_text,
                 )
+                _rule_candidate_ledgers.append(_ledger)
                 _promoted, _promo_receipt = promote_rule_candidates_to_rules(
                     _ledger.get("entries", []),
                     source_id=_src,
@@ -1343,6 +1336,7 @@ def build_enterprise_business_knowledge_asset(
         "entity_relations": entity_relations,
         "cross_document_conflicts": cross_doc_conflicts,
         "semantic_candidates": semantic_candidates,
+        "rule_candidate_ledger": _rule_candidate_ledgers,
         "semantic_extraction_availability": _sem_availability,
         "semantic_extraction_receipts": semantic_receipts,
         "rule_promotion_receipts": _rule_promotion_receipts,

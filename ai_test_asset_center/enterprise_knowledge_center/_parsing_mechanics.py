@@ -2675,12 +2675,33 @@ def _parse_source(blob: bytes, filename: str, source_type: str, source_id: str) 
     for _fn_table in _doc_struct.tables:
         _fn_headers = _fn_table.get("headers") or []
         if _is_field_definition_table(_fn_headers):
-            # This table is a field definition — extract field records
-            # Derive table name from the section heading in effect for this table,
-            # through the same canonicalization every other declaration path uses.
+            # This table is a field definition — extract field records. A row's
+            # explicit Table/数据表 column is the source authority; the section or
+            # container locator is only the fallback. The historical locator-first
+            # path fabricated format-specific entities (fields.md,
+            # fields.xlsx:Sheet, fields.docx:table_0) and made identical material
+            # produce different business models across formats.
             _section = str(_fn_table.get("source_locator") or "")
-            _derived_table = _canonical_entity_name(_section_table_label(_section))[0] or "default"
+            _section_table = (
+                _canonical_entity_name(_section_table_label(_section))[0]
+                or "default"
+            )
             for _fn_row in _fn_table.get("rows") or []:
+                _explicit_table = _pick_first(
+                    _fn_row,
+                    (
+                        "table",
+                        "table_name",
+                        "tablename",
+                        "table name",
+                        "表",
+                        "数据表",
+                    ),
+                )
+                _derived_table = (
+                    _canonical_entity_name(_explicit_table)[0]
+                    or _section_table
+                )
                 _f_name = _pick_first(_fn_row, ("field", "field_name", "fieldname", "column", "column_name", "name", "attribute", "字段", "字段名", "列名", "属性", "名称"))
                 if not _f_name:
                     continue

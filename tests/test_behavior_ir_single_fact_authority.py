@@ -134,7 +134,12 @@ def test_matrix_candidate_cannot_conflict_with_accepted_fact_authority() -> None
     candidates = [row for row in behaviors if row["source_kind"] == "DECISION_MATRIX_ROW"]
 
     assert len(confirmed) == 1
-    assert confirmed[0]["permission_decision"] == "ALLOW"
+    # "可以发货" without an actor is a business eligibility rule, not an
+    # actor authorization grant. Preserve the modality without fabricating an
+    # ALLOW permission coordinate.
+    assert confirmed[0]["permission_decision"] == "UNSPECIFIED"
+    assert confirmed[0]["business_modality"] == "MAY"
+    assert confirmed[0]["authorization_semantics_status"] == "NOT_DECLARED"
     assert confirmed[0]["status"] == "CONFIRMED"
     assert confirmed[0]["formal_business_rule"] is True
     assert len(candidates) == 1

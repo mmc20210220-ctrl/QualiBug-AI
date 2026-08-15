@@ -15,6 +15,7 @@ import json
 import logging
 import os
 import re
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +28,7 @@ __all__ = [
     "validate_rule_candidates",
     "resolve_semantic_rule_extraction_mode",
     "provider_status",
+    "run_semantic_extraction_batch",
     "build_rule_candidate_ledger",
     "promote_rule_candidates_to_rules",
     "rule_promotion_gates_met",
@@ -39,11 +41,13 @@ _MAX_CHUNK_CHARS = 6000
 # Backward-compatible name: one model request still sees at most 6000 chars.
 _MAX_SOURCE_CHARS = _MAX_CHUNK_CHARS
 _CHUNK_OVERLAP_CHARS = 400
-_MAX_CHUNKS_PER_SOURCE = 8
-# Backward-compatible per-call candidate ceiling.
-_MAX_CANDIDATES_PER_SOURCE = 50
-_MAX_CANDIDATES_PER_CHUNK = _MAX_CANDIDATES_PER_SOURCE
-_MAX_TOTAL_CANDIDATES_PER_SOURCE = 240
+# One process-wide provider gate is shared by source-level and chunk-level pools.
+# Without this gate, the historical 4-source x 4-chunk nested executors issued up
+# to 16 concurrent calls while each layer independently claimed a 4-call ceiling.
+_SEMANTIC_PROVIDER_CONCURRENCY_LIMIT = 4
+_SEMANTIC_PROVIDER_SLOTS = threading.BoundedSemaphore(
+    _SEMANTIC_PROVIDER_CONCURRENCY_LIMIT
+)
 _VALID_KINDS = {"entity", "field", "relation", "state", "actor", "rule"}
 _VALID_RULE_ORIGINS = {"explicit", "inferred"}
 _VALID_RULE_FAMILIES = {
@@ -179,6 +183,7 @@ def resolve_semantic_rule_extraction_mode(
         fallback_reason = "invalid_requested_mode"
 
     return {
+        "receipt_id": "semantic-rule-extraction-mode",
         "schema_version": _RULE_MODE_RECEIPT_SCHEMA,
         "requested_mode": requested,
         "effective_mode": effective,
@@ -770,15 +775,26 @@ def _list(value: Any) -> list[Any]:
     return value if isinstance(value, list) else []
 
 
-def _source_chunks(text: str) -> tuple[list[dict[str, Any]], list[dict[str, int]]]:
-    """Return bounded overlapping chunks plus explicit budget-skipped ranges."""
+def _source_chunks(
+    text: str,
+    *,
+    max_chunks: int | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, int]]]:
+    """Return overlapping chunks and any operator-budget-skipped range.
+
+    The default has no product-side source-length ceiling. A caller may declare
+    a positive per-source chunk budget; that explicit choice is bound into the
+    extraction receipt and cache identity.
+    """
     source = str(text or "")
     if not source:
         return [], []
     step = max(1, _MAX_CHUNK_CHARS - _CHUNK_OVERLAP_CHARS)
     chunks: list[dict[str, Any]] = []
     start = 0
-    while start < len(source) and len(chunks) < _MAX_CHUNKS_PER_SOURCE:
+    while start < len(source) and (
+        max_chunks is None or len(chunks) < max_chunks
+    ):
         end = min(len(source), start + _MAX_CHUNK_CHARS)
         chunks.append(
             {
@@ -861,6 +877,7 @@ class SemanticExtractionReceipt:
 
     def __init__(self, source_id: str) -> None:
         self.source_id = source_id
+        self.source_digest: str = ""
         self.triggered = False
         self.candidates_raw: list[dict[str, Any]] = []
         self.candidates_validated: list[dict[str, Any]] = []
@@ -873,6 +890,7 @@ class SemanticExtractionReceipt:
         self.chunks_completed: int = 0
         self.chunk_receipts: list[dict[str, Any]] = []
         self.unprocessed_ranges: list[dict[str, int]] = []
+        self.max_chunks: int | None = None
         # Rule-candidate funnel (SPEC §14). Every count is traceable to
         # candidate ids in candidates / rejected_candidates.
         self.rule_candidates_raw: list[dict[str, Any]] = []
@@ -880,7 +898,11 @@ class SemanticExtractionReceipt:
         self.rule_candidates_rejected: list[dict[str, Any]] = []
 
     def to_dict(self) -> dict[str, Any]:
+        receipt_id = "semantic-extraction:" + hashlib.sha256(
+            f"{self.source_id}|{self.source_digest}|{self.max_chunks}".encode("utf-8")
+        ).hexdigest()[:24]
         return {
+            "receipt_id": receipt_id,
             "schema_version": "qualibug.semantic-extraction-receipt.v1",
             "coverage_extension_schema": "qualibug.semantic-extraction-coverage.v1",
             "source_id": self.source_id,
@@ -892,9 +914,16 @@ class SemanticExtractionReceipt:
             "chunks_completed": self.chunks_completed,
             "chunk_receipts": self.chunk_receipts,
             "unprocessed_ranges": self.unprocessed_ranges,
+            "chunk_budget": {
+                "authority": "operator" if self.max_chunks is not None else "unbounded_default",
+                "max_chunks": self.max_chunks,
+                "unbounded": self.max_chunks is None,
+            },
             "candidate_budget": {
-                "per_chunk": _MAX_CANDIDATES_PER_CHUNK,
-                "per_source": _MAX_TOTAL_CANDIDATES_PER_SOURCE,
+                "per_chunk": None,
+                "per_source": None,
+                "product_side_limit": None,
+                "authority": "provider_response_token_limit",
             },
             "candidates_raw_count": len(self.candidates_raw),
             "candidates_validated_count": len(self.candidates_validated),
@@ -951,8 +980,9 @@ def run_semantic_extraction(
     existing_fields: int = 0,
     existing_permissions: int = 0,
     force: bool = False,
+    max_chunks: int | None = None,
 ) -> SemanticExtractionReceipt:
-    """Run bounded semantic extraction without silently truncating long sources.
+    """Run semantic extraction without a default product-side breadth ceiling.
 
     By default the legacy zero-structured-output trigger is preserved. ``force``
     is available to coverage-ledger callers that need semantic extraction for an
@@ -965,7 +995,19 @@ def run_semantic_extraction(
     until the environment changes). ``QUALIBUG_SEMANTIC_EXTRACTION_FORCE=1``
     bypasses the cache for diagnosis.
     """
+    if max_chunks is not None:
+        try:
+            max_chunks = int(max_chunks)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("semantic_max_chunks_must_be_a_positive_integer") from exc
+        if max_chunks <= 0:
+            raise ValueError("semantic_max_chunks_must_be_a_positive_integer")
+
     receipt = SemanticExtractionReceipt(source_id)
+    receipt.max_chunks = max_chunks
+    receipt.source_digest = hashlib.sha256(
+        str(text or "").encode("utf-8")
+    ).hexdigest()
     receipt.source_char_count = len(str(text or ""))
 
     if (
@@ -979,7 +1021,7 @@ def run_semantic_extraction(
         return receipt
 
     receipt.triggered = True
-    chunks, skipped = _source_chunks(text)
+    chunks, skipped = _source_chunks(text, max_chunks=max_chunks)
     receipt.chunks_total = len(chunks)
     receipt.unprocessed_ranges = skipped
 
@@ -991,7 +1033,7 @@ def run_semantic_extraction(
         in {"1", "true", "yes"}
     )
     if not _force_bypass:
-        _cached = _load_extraction_cache(source_id, text)
+        _cached = _load_extraction_cache(source_id, text, max_chunks=max_chunks)
         if _cached is not None:
             return _cached
 
@@ -1069,11 +1111,12 @@ def run_semantic_extraction(
             "rejected_count": 0,
         }
         try:
-            result = client.chat_json(
-                user_prompt,
-                system_prompt=_SYSTEM_PROMPT,
-                tier="light",
-            )
+            with _SEMANTIC_PROVIDER_SLOTS:
+                result = client.chat_json(
+                    user_prompt,
+                    system_prompt=_SYSTEM_PROMPT,
+                    tier="light",
+                )
         except Exception as exc:
             chunk_receipt["status"] = "FAILED_LLM_ERROR"
             chunk_receipt["error"] = f"{type(exc).__name__}: {str(exc)[:240]}"
@@ -1112,9 +1155,8 @@ def run_semantic_extraction(
                 "rejected": [],
             }
 
-        bounded_raw = raw_candidates[:_MAX_CANDIDATES_PER_CHUNK]
         enriched_raw: list[dict[str, Any]] = []
-        for candidate in bounded_raw:
+        for candidate in raw_candidates:
             if isinstance(candidate, dict):
                 copied = dict(candidate)
                 copied.setdefault("source_locator", locator)
@@ -1163,9 +1205,7 @@ def run_semantic_extraction(
                 "raw_count": len(enriched_raw),
                 "validated_count": len(validated),
                 "rejected_count": len(rejected),
-                "candidate_budget_truncated": (
-                    len(raw_candidates) > _MAX_CANDIDATES_PER_CHUNK
-                ),
+                "candidate_budget_truncated": False,
             }
         )
         return {
@@ -1226,10 +1266,8 @@ def run_semantic_extraction(
         seen_validated.add(key)
         deduped_validated.append(candidate)
 
-    receipt.candidates_raw = deduped_raw[:_MAX_TOTAL_CANDIDATES_PER_SOURCE]
-    receipt.candidates_validated = deduped_validated[
-        :_MAX_TOTAL_CANDIDATES_PER_SOURCE
-    ]
+    receipt.candidates_raw = deduped_raw
+    receipt.candidates_validated = deduped_validated
     receipt.rejected_candidates = rejected_all
     # Rule-candidate funnel separation (SPEC §14): same ledger, per-kind counts.
     receipt.rule_candidates_raw = [
@@ -1248,10 +1286,6 @@ def run_semantic_extraction(
         if _text(row.get("kind")).lower() == "rule"
     ]
 
-    source_budget_truncated = (
-        len(deduped_raw) > _MAX_TOTAL_CANDIDATES_PER_SOURCE
-        or len(deduped_validated) > _MAX_TOTAL_CANDIDATES_PER_SOURCE
-    )
     if receipt.chunks_completed == 0:
         first_failure = receipt.chunk_receipts[0] if receipt.chunk_receipts else {}
         receipt.status = (
@@ -1260,15 +1294,13 @@ def run_semantic_extraction(
             else "FAILED_ALL_CHUNKS"
         ) or "FAILED_ALL_CHUNKS"
         receipt.error = _text(first_failure.get("error")) or "all semantic extraction chunks failed"
-    elif chunk_failures or skipped or source_budget_truncated:
+    elif chunk_failures or skipped:
         receipt.status = "COMPLETED_WITH_GAPS"
         gap_reasons: list[str] = []
         if chunk_failures:
             gap_reasons.append(f"{chunk_failures}_chunk_failures")
         if skipped:
-            gap_reasons.append("source_chunk_budget_exhausted")
-        if source_budget_truncated:
-            gap_reasons.append("candidate_budget_exhausted")
+            gap_reasons.append("operator_chunk_budget_exhausted")
         receipt.error = ",".join(gap_reasons)
     else:
         receipt.status = "COMPLETED"
@@ -1285,11 +1317,107 @@ def run_semantic_extraction(
         receipt.status,
     )
     if not _force_bypass:
-        _store_extraction_cache(source_id, text, receipt)
+        _store_extraction_cache(
+            source_id,
+            text,
+            receipt,
+            max_chunks=max_chunks,
+        )
     return receipt
 
 
-def _extraction_cache_path(source_id: str, text: str) -> Path | None:
+def run_semantic_extraction_batch(
+    targets: list[tuple[dict[str, Any], str]],
+    *,
+    max_workers: int = _SEMANTIC_PROVIDER_CONCURRENCY_LIMIT,
+    max_chunks_per_source: int | None = None,
+) -> tuple[
+    list[tuple[dict[str, Any], SemanticExtractionReceipt]],
+    dict[str, Any],
+]:
+    """Extract every selected source with deterministic order and one call gate.
+
+    Source count is deliberately not capped. ``max_workers`` controls scheduling
+    latency only; the module-wide semaphore is the actual provider-concurrency
+    authority across nested source/chunk executors.
+    """
+    target_rows = [(dict(source), str(text or "")) for source, text in targets]
+    try:
+        worker_count = max(1, int(max_workers))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("semantic_extraction_workers_must_be_a_positive_integer") from exc
+    worker_count = min(worker_count, _SEMANTIC_PROVIDER_CONCURRENCY_LIMIT)
+
+    def _run_one(
+        target: tuple[dict[str, Any], str],
+    ) -> tuple[dict[str, Any], SemanticExtractionReceipt]:
+        source, source_text = target
+        return source, run_semantic_extraction(
+            source_text,
+            source_id=_text(source.get("source_id")),
+            filename=_text(source.get("original_name") or source.get("filename")),
+            max_chunks=max_chunks_per_source,
+        )
+
+    if not target_rows:
+        results: list[tuple[dict[str, Any], SemanticExtractionReceipt]] = []
+    elif len(target_rows) == 1:
+        results = [_run_one(target_rows[0])]
+    else:
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(max_workers=worker_count) as pool:
+            # map preserves source-registry order even when calls complete out of order.
+            results = list(pool.map(_run_one, target_rows))
+
+    gap_sources = [
+        receipt.source_id
+        for _, receipt in results
+        if receipt.status != "COMPLETED"
+    ]
+    batch_identity_rows = [
+        {
+            "source_id": receipt.source_id,
+            "source_digest": receipt.source_digest,
+            "max_chunks": receipt.max_chunks,
+        }
+        for _, receipt in results
+    ]
+    batch_receipt_id = "semantic-extraction-batch:" + hashlib.sha256(
+        json.dumps(
+            batch_identity_rows,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()[:24]
+    batch_receipt = {
+        "receipt_id": batch_receipt_id,
+        "schema_version": "qualibug.semantic-extraction-batch.v1",
+        "status": "COMPLETED_WITH_GAPS" if gap_sources else "COMPLETED",
+        "source_ids": [receipt.source_id for _, receipt in results],
+        "target_source_count": len(target_rows),
+        "attempted_source_count": len(results),
+        "completed_source_count": sum(
+            1 for _, receipt in results if receipt.status.startswith("COMPLETED")
+        ),
+        "skipped_source_count": len(target_rows) - len(results),
+        "gap_source_ids": gap_sources,
+        "source_limit": None,
+        "max_chunks_per_source": max_chunks_per_source,
+        "source_scheduling_workers": worker_count,
+        "provider_concurrency_limit": _SEMANTIC_PROVIDER_CONCURRENCY_LIMIT,
+        "contract": "every selected source receives a terminal extraction receipt",
+    }
+    return results, batch_receipt
+
+
+def _extraction_cache_path(
+    source_id: str,
+    text: str,
+    *,
+    max_chunks: int | None,
+) -> Path | None:
     """Cache file for (source_id, text digest, prompt fingerprint).
 
     The prompt is a first-class extraction variable: changing the system/user
@@ -1307,13 +1435,18 @@ def _extraction_cache_path(source_id: str, text: str) -> Path | None:
         f"{_SYSTEM_PROMPT}\n{_USER_PROMPT_TEMPLATE}".encode("utf-8")
     ).hexdigest()[:16]
     digest = _hashlib.sha256(
-        f"{source_id}\n{text}\n{prompt_fingerprint}".encode("utf-8")
+        f"{source_id}\n{text}\n{prompt_fingerprint}\nmax_chunks={max_chunks}".encode("utf-8")
     ).hexdigest()
     return Path(cache_root) / "semantic_extraction" / f"{digest}.json"
 
 
-def _load_extraction_cache(source_id: str, text: str) -> SemanticExtractionReceipt | None:
-    path = _extraction_cache_path(source_id, text)
+def _load_extraction_cache(
+    source_id: str,
+    text: str,
+    *,
+    max_chunks: int | None,
+) -> SemanticExtractionReceipt | None:
+    path = _extraction_cache_path(source_id, text, max_chunks=max_chunks)
     if path is None or not path.is_file():
         return None
     try:
@@ -1326,15 +1459,20 @@ def _load_extraction_cache(source_id: str, text: str) -> SemanticExtractionRecei
     for _field, _value in payload.items():
         if hasattr(receipt, _field):
             setattr(receipt, _field, _value)
+    receipt.max_chunks = max_chunks
     receipt.source_id = source_id
     logger.info("Semantic extraction cache hit for %s (status=%s)", source_id, receipt.status)
     return receipt
 
 
 def _store_extraction_cache(
-    source_id: str, text: str, receipt: SemanticExtractionReceipt
+    source_id: str,
+    text: str,
+    receipt: SemanticExtractionReceipt,
+    *,
+    max_chunks: int | None,
 ) -> None:
-    path = _extraction_cache_path(source_id, text)
+    path = _extraction_cache_path(source_id, text, max_chunks=max_chunks)
     if path is None:
         return
     try:

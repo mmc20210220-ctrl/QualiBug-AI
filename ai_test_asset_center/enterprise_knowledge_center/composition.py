@@ -1119,7 +1119,7 @@ def _incremental_run_semantic_extraction(
     from ._semantic_extraction import (
         provider_status,
         resolve_semantic_rule_extraction_mode,
-        run_semantic_extraction,
+        run_semantic_extraction_batch,
         semantic_extraction_availability,
     )
 
@@ -1161,17 +1161,14 @@ def _incremental_run_semantic_extraction(
         )
     candidates: list[dict[str, Any]] = []
     receipts: list[dict[str, Any]] = []
-    attempted = 0
-    max_sources = int(getattr(_base_api, "_MAX_LLM_SOURCES_PER_BUILD", 12))
     rule_mode_active = rule_mode_receipt["effective_mode"] in {
         "shadow",
         "augment",
         "required",
     }
+    targets: list[tuple[dict[str, Any], str]] = []
     for parsed in parsed_rows:
-        if attempted >= max_sources:
-            break
-        source_text = _incremental_text(parsed.get("text"), 2_000_000)
+        source_text = str(parsed.get("text") or "").strip()
         structured_count = sum(
             len(_incremental_list(parsed.get(key)))
             for key in ("tables", "field_dictionary", "permissions")
@@ -1184,16 +1181,137 @@ def _incremental_run_semantic_extraction(
         # signal vocabulary may have missed.
         if structured_count and not rule_mode_active:
             continue
-        attempted += 1
-        receipt = run_semantic_extraction(
+        targets.append((
+            {
+                "source_id": _incremental_text(parsed.get("source_id"), 300),
+                "original_name": _incremental_text(
+                    parsed.get("original_name"), 500
+                ),
+            },
             source_text,
-            source_id=_incremental_text(parsed.get("source_id"), 300),
-            filename=_incremental_text(parsed.get("original_name"), 500),
-        )
+        ))
+    max_chunks = options.get("semantic_max_chunks_per_source")
+    if max_chunks in (None, ""):
+        max_chunks = None
+    results, batch_receipt = run_semantic_extraction_batch(
+        targets,
+        max_chunks_per_source=max_chunks,
+    )
+    receipts.append(batch_receipt)
+    for _, receipt in results:
         receipts.append(receipt.to_dict())
         candidates.extend(receipt.candidates_validated)
     receipts.append(rule_mode_receipt)
     return candidates, receipts, "AVAILABLE"
+
+
+def _incremental_attach_promoted_rules(
+    parsed_rows: list[dict[str, Any]],
+    promoted_rows: list[dict[str, Any]],
+) -> int:
+    """Attach promoted rules to the changed-source rows before source replacement.
+
+    Incremental source replacement treats ``parsed_rows`` as the changed source
+    authority. Mutating ``asset['rule_library']`` before that replacement loses
+    the promoted rows immediately, so promotion must join the same source row
+    that will be merged.
+    """
+    promoted_by_source: dict[str, list[dict[str, Any]]] = {}
+    for row in promoted_rows:
+        if not isinstance(row, dict):
+            continue
+        source_id = _incremental_text(row.get("source_id"), 300)
+        rule_id = _incremental_text(row.get("rule_id"), 300)
+        if source_id and rule_id:
+            promoted_by_source.setdefault(source_id, []).append(dict(row))
+
+    attached = 0
+    for parsed in parsed_rows:
+        source_id = _incremental_text(parsed.get("source_id"), 300)
+        additions = promoted_by_source.get(source_id, [])
+        if not additions:
+            continue
+        existing = [
+            dict(row)
+            for row in _incremental_list(parsed.get("rules"))
+            if isinstance(row, dict)
+        ]
+        existing_ids = {
+            _incremental_text(row.get("rule_id"), 300) for row in existing
+        }
+        accepted = [
+            dict(row)
+            for row in additions
+            if _incremental_text(row.get("rule_id"), 300) not in existing_ids
+        ]
+        parsed["rules"] = [*existing, *accepted]
+        attached += len(accepted)
+    return attached
+
+
+def _incremental_refresh_semantic_candidate_projection(
+    asset: dict[str, Any],
+) -> int:
+    """Recompute the full semantic-candidate gate after changed rows are merged."""
+    from ._candidate_validation import (
+        candidates_to_behavior_ir_entries,
+        validate_and_promote_candidates,
+    )
+
+    candidates = [
+        dict(row)
+        for row in _incremental_list(asset.get("semantic_candidates"))
+        if isinstance(row, dict)
+    ]
+    receipt = validate_and_promote_candidates(
+        candidates,
+        interfaces=[
+            dict(row)
+            for row in _incremental_list(asset.get("interfaces"))
+            if isinstance(row, dict)
+        ],
+        tables=[
+            dict(row)
+            for row in _incremental_list(asset.get("data_tables"))
+            if isinstance(row, dict)
+        ],
+        rules=[
+            dict(row)
+            for row in _incremental_list(asset.get("rule_library"))
+            if isinstance(row, dict)
+        ],
+        state_machines=[
+            dict(row)
+            for row in _incremental_list(asset.get("state_machines"))
+            if isinstance(row, dict)
+        ],
+    )
+    asset["candidate_validation_receipt"] = receipt.to_dict()
+    projected = candidates_to_behavior_ir_entries(
+        receipt.validated,
+        receipt.pending,
+    )
+    objects = [
+        dict(row)
+        for row in _incremental_list(asset.get("business_objects"))
+        if isinstance(row, dict)
+        and _incremental_text(row.get("source"), 100)
+        != "semantic_extraction_validated"
+    ]
+    object_names = {
+        _incremental_text(row.get("object") or row.get("name"), 500)
+        for row in objects
+    }
+    added = 0
+    for row in projected:
+        name = _incremental_text(row.get("object"), 500)
+        if not name or name in object_names:
+            continue
+        objects.append(dict(row))
+        object_names.add(name)
+        added += 1
+    asset["business_objects"] = objects
+    return added
 
 
 def _incremental_asset_identity(
@@ -1491,17 +1609,11 @@ def refresh_enterprise_business_knowledge_asset_incremental(
 
     for parsed in parsed_rows:
         parsed_source_id = _incremental_text(parsed.get("source_id"), 300)
-        parsed_text = _incremental_text(parsed.get("text"), 2_000_000)
+        parsed_text = str(parsed.get("text") or "").strip()
         regex_rules = [
             dict(row)
-            for row in _incremental_list(asset.get("rule_library"))
+            for row in _incremental_list(parsed.get("rules"))
             if isinstance(row, dict)
-            and any(
-                isinstance(span, dict)
-                and _incremental_text(span.get("source_id"), 300)
-                == parsed_source_id
-                for span in _incremental_list(row.get("source_spans"))
-            )
         ]
         llm_rules = [
             dict(row)
@@ -1546,28 +1658,13 @@ def refresh_enterprise_business_knowledge_asset_incremental(
         and row.get("effective_mode") == "augment"
         for row in semantic_receipts
     )
-    if _augment_active and promoted_rows_all:
-        existing_rule_ids = {
-            _incremental_text(row.get("rule_id"), 300)
-            for row in _incremental_list(asset.get("rule_library"))
-            if isinstance(row, dict)
-        }
-        asset["rule_library"] = [
-            *[
-                dict(row)
-                for row in _incremental_list(asset.get("rule_library"))
-                if isinstance(row, dict)
-            ],
-            *[
-                dict(row)
-                for row in promoted_rows_all
-                if _incremental_text(row.get("rule_id"), 300)
-                not in existing_rule_ids
-            ],
-        ]
-        asset["rule_promotion_applied"] = True
-    else:
-        asset["rule_promotion_applied"] = False
+    attached_promoted_rules = (
+        _incremental_attach_promoted_rules(parsed_rows, promoted_rows_all)
+        if _augment_active and promoted_rows_all
+        else 0
+    )
+    asset["rule_promotion_applied"] = attached_promoted_rules > 0
+    asset["rule_promotion_applied_count"] = attached_promoted_rules
 
     asset["source_inventory"] = copy.deepcopy(active_sources)
     if content_sources:
@@ -1610,6 +1707,7 @@ def refresh_enterprise_business_knowledge_asset_incremental(
             replacements=semantic_receipts,
             identity_field="receipt_id",
         )
+        _incremental_refresh_semantic_candidate_projection(asset)
 
         asset = enrich_asset_with_openapi_schema_facts(asset, source_contexts)
         asset = enrich_asset_with_api_artifact_semantics(asset, source_contexts)

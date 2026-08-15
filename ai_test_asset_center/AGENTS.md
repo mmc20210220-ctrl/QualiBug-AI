@@ -997,6 +997,12 @@ Contract. This section pins only the package-local anchors:
   `enterprise_understanding_model`) through
   `schema.clone_asset_for_understanding_projection`; every mutable cognition
   branch remains deep-isolated.
+- Format-equivalent field dictionaries share one table-identity rule in
+  `_parsing_mechanics`: an explicit row-level `Table`/`数据表` declaration wins;
+  section, sheet and container locators are fallback provenance only and must
+  never become business entities when the row declares its table. The same
+  content in `.md`, `.csv`, `.xlsx` and `.docx` must project the same table and
+  field sets (`tests/test_enterprise_material_format_equivalence.py`).
 - Source-backed business-rule semantic extraction (shadow + augment phases):
   the regex extractor
   (`enterprise_knowledge_center/_chinese_business_comprehension_extractor_v1.py`)
@@ -1037,6 +1043,27 @@ Contract. This section pins only the package-local anchors:
   for fact_ref tracing, and `rule_promotion_gates_met` checks the §19 gates
   as data (no evidence-less promotion, no silent conflict resolution, full
   traceability) before augment may activate.
+  Source breadth has one shared execution authority:
+  `_semantic_extraction.run_semantic_extraction_batch`, consumed by both full
+  and incremental knowledge builds. It attempts every selected source in
+  deterministic registry order; there is no product-side source-count,
+  source-length, chunk-count, or candidate-count ceiling by default. A caller
+  may declare the positive operator budget
+  `semantic_max_chunks_per_source`; skipped ranges then remain explicit in the
+  per-source receipt and asset `coverage_gaps`, and the budget is part of the
+  cache identity so a bounded result can never poison a later unbounded build.
+  Source and chunk executors share one process-wide four-call provider
+  semaphore: nested pools must never multiply the declared concurrency limit.
+  `qualibug.semantic-extraction-batch.v1` receipts bind target, attempted,
+  completed, skipped and gap source counts plus scheduling/concurrency policy.
+  Incremental refresh must preserve the same downstream closure as a full
+  build: regex rules for the changed source come from its freshly parsed row;
+  eligible LLM rules attach to that row before source replacement (never to a
+  soon-to-be-replaced asset list); and the shared candidate-validation gate is
+  recomputed after semantic candidates merge so multi-source validated entity
+  candidates re-enter `business_objects`. Mode, batch and per-source receipts
+  carry stable `receipt_id` values so repeated refreshes replace prior state
+  instead of accumulating identity-less receipts.
 
 ## Self-Learning Closed Loop — Implementation Anchors
 

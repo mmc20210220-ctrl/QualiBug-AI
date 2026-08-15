@@ -35,6 +35,9 @@ class _Client:
 
 def _install_client(monkeypatch: pytest.MonkeyPatch, responder) -> _Client:
     client = _Client(responder)
+    # These tests install a deterministic provider explicitly; the suite-wide
+    # live-provider kill switch must not suppress that injected test authority.
+    monkeypatch.delenv("QUALIBUG_SEMANTIC_EXTRACTION_DISABLED", raising=False)
     monkeypatch.setattr(
         "ai_test_asset_center.llm_reasoning._get_client", lambda: client
     )
@@ -516,6 +519,58 @@ def test_integration_shadow_records_rule_candidates_without_formal_change(
     # shadow 不触碰正式规则：本函数不写 rule_library（正式产出由 base 构建，
     # 候选只进 semantic_candidates / receipts）
     assert mode_receipts[0]["canonical_rule_output_affected"] is False
+
+
+def test_incremental_mainline_attempts_all_sources_without_a_product_count_cap(
+    monkeypatch,
+) -> None:
+    from ai_test_asset_center.enterprise_knowledge_center.composition import (
+        _incremental_run_semantic_extraction,
+    )
+
+    client = _install_client(monkeypatch, lambda _prompt: {"candidates": []})
+    parsed_rows = [
+        _parsed_row(source_id=f"source-{index}", text=f"第{index}份资料必须保留原文语义。")
+        for index in range(13)
+    ]
+
+    _, receipts, status = _incremental_run_semantic_extraction(
+        parsed_rows,
+        options={"semantic_rule_extraction_mode": "shadow"},
+    )
+
+    batch = next(
+        row
+        for row in receipts
+        if row.get("schema_version") == "qualibug.semantic-extraction-batch.v1"
+    )
+    assert status == "AVAILABLE"
+    assert batch["target_source_count"] == 13
+    assert batch["attempted_source_count"] == 13
+    assert batch["skipped_source_count"] == 0
+    assert batch["source_limit"] is None
+    assert len(client.calls) == 13
+
+
+def test_incremental_promotion_joins_the_changed_source_before_replacement() -> None:
+    from ai_test_asset_center.enterprise_knowledge_center.composition import (
+        _incremental_attach_promoted_rules,
+    )
+
+    parsed = _parsed_row(source_id="source-promoted")
+    parsed["rules"] = []
+    promoted = {
+        "rule_id": "llmrule-1",
+        "source_id": "source-promoted",
+        "statement": "逾期记录不得进入后续流程",
+        "augment_promoted": True,
+    }
+
+    attached = _incremental_attach_promoted_rules([parsed], [promoted])
+
+    assert attached == 1
+    assert parsed["rules"] == [promoted]
+    assert _incremental_attach_promoted_rules([parsed], [promoted]) == 0
 
 
 def test_integration_shadow_without_provider_degrades_visibly(monkeypatch) -> None:
