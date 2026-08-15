@@ -1660,6 +1660,22 @@ def compile_experiment_for_obligation(
                 "value_fingerprint": "",
             })
     # ── Placeholder interception: block if any binding is unresolvable ──
+    # interface_contract presence probes are read-only existence checks: the
+    # protocol substitutes a probe sentinel for any declared path placeholder
+    # itself (an unregistered route returns "Cannot METHOD" for ANY concrete
+    # value, so no real entity identity is needed). The binding graph's
+    # placeholder resolution exists to aim a mutation/read at a real resource
+    # and must not block a route-existence probe on a placeholder it never
+    # needs to resolve.
+    if family == "interface_contract":
+        binding_plan = [
+            row for row in binding_plan
+            if not (
+                isinstance(row, dict)
+                and _text(row.get("status")) == "blocked"
+                and "PLACEHOLDER_PATH_PARAMETER" in _text(row.get("blocked_reason"))
+            )
+        ]
     _blocked_reasons = blocked_binding_reasons(binding_plan)
     if _blocked_reasons:
         # V1.8: Any write with path placeholders may resolve them through a

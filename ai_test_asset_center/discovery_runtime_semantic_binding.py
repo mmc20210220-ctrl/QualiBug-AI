@@ -45,6 +45,7 @@ from .effect_observer_binding import bind_source_effect_observers
 from .formal_event_capability_guard import install_formal_event_capability_guard
 from .formal_event_pre_cleanup import install_formal_event_pre_cleanup_observer
 from .formal_event_surface import install_formal_event_surface
+from .formal_interface_presence_surface import install_formal_interface_presence_surface
 from .formal_performance_attribution_guard import (
     install_formal_performance_attribution_guard,
 )
@@ -158,6 +159,9 @@ from .source_performance_contract_binding import bind_source_performance_contrac
 from .source_performance_obligation_binding import (
     install_source_performance_obligation_binding,
 )
+from .source_interface_presence_obligation_binding import (
+    install_source_interface_presence_obligation_binding,
+)
 from .formal_parameter_scale_surface import install_formal_parameter_scale_surface
 from .source_parameter_bound_contracts import (
     bind_source_parameter_contracts,
@@ -236,6 +240,11 @@ install_formal_performance_attribution_guard()
 # were structurally unreachable even when a source stability contract existed.
 # Idempotent registration only; activation still requires the source contract.
 install_formal_stability_surface()
+# Interface-presence (documentation/implementation drift on declared reads):
+# registers the interface_contract family, interface_presence assertion kind,
+# presence observer and protocol so a framework-level "route not registered" 404
+# becomes a first-class deliverable defect instead of a buried control-arm block.
+install_formal_interface_presence_surface()
 # Read-only state-audit protocol: consumes the state_audit_planner's
 # audit_mode=read_only obligations (template readonly_audit_validation) which
 # previously had no protocol consumer and blocked as
@@ -250,6 +259,7 @@ install_source_event_obligation_binding()
 install_message_chain_obligation_binding()
 install_source_performance_obligation_binding()
 install_source_stability_obligation_binding()
+install_source_interface_presence_obligation_binding()
 # Parameter-bound performance contracts (REPORT-008 class): the parameter-scale
 # surface registers a second protocol on the performance_latency family (one
 # observer, one assertion kind) and the obligation wrapper compiles
