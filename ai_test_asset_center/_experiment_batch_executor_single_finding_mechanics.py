@@ -652,13 +652,22 @@ def execute_selected_experiments(
                 actor_tokens=tokens,
             )
         eid = _text(outcome.get("experiment_id")) or eid
+        # The executor may run under a per-attempt execution identity (runtime
+        # actor exploration appends ``_a{attempt_index}``). The loop's
+        # ``execution_id`` is the pre-exploration identity; the outcome already
+        # carries the identity the evidence chain was ACTUALLY sealed under.
+        # Every delivery receipt below must bind that same identity — otherwise
+        # ``build_reproduction_receipt`` raises
+        # ``reproduction_oracle_lineage_mismatch`` and an already-found
+        # VIOLATION finding is discarded as a harness failure.
+        effective_execution_id = _text(outcome.get("execution_id") or execution_id)
         outcome.update({
             "candidate_id": candidate_id,
             "slice_id": slice_id,
             "selected_obligation_id": oid,
             "obligation_id": execution_oid,
             "experiment_id": eid,
-            "execution_id": execution_id,
+            "execution_id": effective_execution_id,
             "evidence_id": evidence_id,
             "campaign_id": campaign_id,
         })
@@ -669,7 +678,7 @@ def execute_selected_experiments(
             "selected_obligation_id": oid,
             "obligation_id": execution_oid,
             "experiment_id": eid,
-            "execution_id": execution_id,
+            "execution_id": effective_execution_id,
             "evidence_id": evidence_id,
             "campaign_id": campaign_id,
         })
@@ -857,7 +866,7 @@ def execute_selected_experiments(
                 slice_id=slice_id,
                 obligation_id=execution_oid,
                 experiment_id=eid,
-                execution_id=execution_id,
+                execution_id=effective_execution_id,
                 evidence_id=evidence_id,
                 operational_receipt=operational_receipt,
                 observation_receipt_ids=observation_receipt_ids,
@@ -938,7 +947,7 @@ def execute_selected_experiments(
                 "selected_obligation_id": oid,
                 "executed_obligation_id": execution_oid,
                 "experiment_id": eid,
-                "execution_id": execution_id,
+                "execution_id": effective_execution_id,
                 "receipt_id": _text(delivery_execution_receipt.get("receipt_id")),
                 "output_fingerprint": _text(
                     delivery_execution_receipt.get("receipt_fingerprint")
