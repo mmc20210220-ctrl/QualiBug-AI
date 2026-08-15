@@ -26,6 +26,7 @@ from .policy_registry import (
     StrategyBundle,
     VerificationPolicy,
 )
+from .policy_wiring import _REASONER_MAX_HYPOTHESES_PER_ENGINE
 
 
 HARNESS_PROPOSAL_SCHEMA = "qualibug.discovery-harness-proposals.v1"
@@ -129,7 +130,11 @@ def validate_strategy_guardrails(strategy: StrategyBundle) -> dict[str, Any]:
         ("reasoner_timeout_floor", strategy.reasoner.timeout_seconds >= 300),
         ("reasoner_token_floor", strategy.reasoner.max_tokens >= 32768),
         ("reasoner_worker_cap", strategy.reasoner.max_workers <= 4),
-        ("reasoner_hypothesis_cap", strategy.reasoner.max_hypotheses_per_engine <= 15),
+        (
+            "reasoner_hypothesis_guardrail",
+            strategy.reasoner.max_hypotheses_per_engine
+            == _REASONER_MAX_HYPOTHESES_PER_ENGINE,
+        ),
         ("verifier_not_relaxed", strategy.verification.verifier_relaxed is False),
         ("reject_non_execution_oracle_votes", strategy.verification.reject_non_execution_oracle_votes is True),
         ("valid_success_control_required", strategy.verification.require_valid_success_control_for_5xx is True),

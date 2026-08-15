@@ -124,7 +124,7 @@ def test_materialized_policy_remains_candidate_until_real_evaluation() -> None:
     assert candidate.strategy.reasoner.timeout_seconds >= 300
     assert candidate.strategy.reasoner.max_tokens >= 32768
     assert candidate.strategy.reasoner.max_workers <= 4
-    assert candidate.strategy.reasoner.max_hypotheses_per_engine <= 15
+    assert candidate.strategy.reasoner.max_hypotheses_per_engine == 40
 
 
 def test_tampered_candidate_strategy_cannot_be_materialized() -> None:

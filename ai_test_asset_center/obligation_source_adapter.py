@@ -184,7 +184,11 @@ def _candidate_id(candidate: dict[str, Any]) -> str:
     return f"candidate_{hashlib.sha256(canonical.encode('utf-8')).hexdigest()[:20]}"
 
 
-def _depth_uncompiled_detail(candidate: dict[str, Any]) -> str:
+def _depth_uncompiled_detail(
+    candidate: dict[str, Any],
+    *,
+    compiled_process_graph: bool = False,
+) -> str:
     """Name the reason deep comprehension cannot compile to a single operation.
 
     Returns "" when the candidate carries no cross-entity / multi-step depth,
@@ -193,6 +197,8 @@ def _depth_uncompiled_detail(candidate: dict[str, Any]) -> str:
     """
     depth = candidate.get("depth")
     if not isinstance(depth, dict) or not depth:
+        return ""
+    if compiled_process_graph:
         return ""
     if depth.get("cascade_chain"):
         return "cascade_chain_uncompiled"
@@ -204,6 +210,91 @@ def _depth_uncompiled_detail(candidate: dict[str, Any]) -> str:
     ):
         return "cross_entity_uncompiled"
     return ""
+
+
+def _depth_process_graph(
+    candidate: dict[str, Any],
+    *,
+    operations: list[dict[str, Any]],
+    process_graphs: list[dict[str, Any]],
+) -> tuple[list[str], dict[str, Any]]:
+    """Join reasoner step hints to one source-declared process graph.
+
+    Model-generated step order is never execution authority.  Every operation
+    hint must resolve uniquely through Behavior IR and the ordered sequence
+    must occur in exactly one graph carrying source evidence.  Missing or
+    ambiguous joins stay uncompiled and are reported by the existing depth
+    coverage gap.
+    """
+    depth = candidate.get("depth")
+    if not isinstance(depth, dict):
+        return [], {}
+    hints = [
+        _text(value)
+        for value in _list(depth.get("operation_refs"))
+        if _text(value)
+    ]
+    if len(hints) < 2:
+        return [], {}
+
+    resolved: list[str] = []
+    for hint in hints:
+        matches = [
+            operation
+            for operation in operations
+            if hint in {
+                _text(operation.get("id")),
+                _text(operation.get("operation_id") or operation.get("operationId")),
+            }
+        ]
+        if len(matches) != 1:
+            return [], {}
+        operation_ref = _text(matches[0].get("id"))
+        if not operation_ref or operation_ref in resolved:
+            return [], {}
+        resolved.append(operation_ref)
+
+    matching_graphs: list[dict[str, Any]] = []
+    for graph in process_graphs:
+        if not any(isinstance(ref, dict) and ref for ref in _list(graph.get("source_refs"))):
+            continue
+        nodes = [
+            row
+            for row in (_list(graph.get("nodes")) or _list(graph.get("steps")))
+            if isinstance(row, dict)
+        ]
+        if not nodes:
+            continue
+        nodes_by_id = {
+            _text(node.get("node_id") or node.get("step_id") or node.get("id")): node
+            for node in nodes
+            if _text(node.get("node_id") or node.get("step_id") or node.get("id"))
+        }
+        ordered_node_ids = [
+            _text(value)
+            for value in _list(graph.get("topological_order"))
+            if _text(value)
+        ]
+        ordered_nodes = (
+            [nodes_by_id[node_id] for node_id in ordered_node_ids if node_id in nodes_by_id]
+            if ordered_node_ids
+            else nodes
+        )
+        graph_operations = [
+            _text(node.get("operation_ref") or node.get("operation_id"))
+            for node in ordered_nodes
+            if _text(node.get("operation_ref") or node.get("operation_id"))
+        ]
+        cursor = 0
+        for operation_ref in graph_operations:
+            if cursor < len(resolved) and operation_ref == resolved[cursor]:
+                cursor += 1
+        if cursor == len(resolved):
+            matching_graphs.append(graph)
+
+    if len(matching_graphs) != 1:
+        return [], {}
+    return resolved, dict(matching_graphs[0])
 
 
 def _operation_matches(
@@ -264,11 +355,17 @@ def _planning_property(
     *,
     family: str,
     operation_ref: str,
+    required_operations: list[str] | None = None,
+    process_graph: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     supplied = candidate.get("property")
     property_spec = dict(supplied) if isinstance(supplied, dict) else {}
     property_spec.setdefault("template", _TEMPLATE_BY_FAMILY[family])
     property_spec["operation_ref"] = operation_ref
+    if required_operations:
+        property_spec["required_operations"] = list(required_operations)
+    if process_graph:
+        property_spec["process_graph"] = dict(process_graph)
     intent = _text(
         candidate.get("intent")
         or candidate.get("expected_behavior")
@@ -348,12 +445,19 @@ def _make_grounded_obligations(
     relations: list[dict[str, Any]],
     actors_by_id: dict[str, dict[str, Any]],
     states_by_id: dict[str, dict[str, Any]],
+    required_operations: list[str] | None = None,
+    required_operation_rows: list[dict[str, Any]] | None = None,
+    process_graph: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     operation_ref = _text(operation.get("id"))
+    operation_refs = list(required_operations or [operation_ref])
+    operation_rows = list(required_operation_rows or [operation])
     property_spec = _planning_property(
         candidate,
         family=family,
         operation_ref=operation_ref,
+        required_operations=operation_refs,
+        process_graph=process_graph,
     )
     if family == "state":
         transition_relations = [
@@ -384,12 +488,14 @@ def _make_grounded_obligations(
     })
     source_refs = _dedupe_source_refs(
         _list(candidate.get("source_refs")),
-        _list(operation.get("source_refs")),
+        *[_list(row.get("source_refs")) for row in operation_rows],
+        _list((process_graph or {}).get("source_refs")),
         *[_list(relation.get("source_refs")) for relation in relations],
     )
-    operation_is_write = (
-        _text(operation.get("read_write") or operation.get("side_effect_class")) == "write"
-        or _text(operation.get("method")).upper() in {"POST", "PUT", "PATCH", "DELETE"}
+    operation_is_write = any(
+        _text(row.get("read_write") or row.get("side_effect_class")) == "write"
+        or _text(row.get("method")).upper() in {"POST", "PUT", "PATCH", "DELETE"}
+        for row in operation_rows
     )
     cleanup: dict[str, Any] = {
         "required": operation_is_write,
@@ -466,10 +572,10 @@ def _make_grounded_obligations(
             })
         obligations.append(make_obligation(
             risk_family=declared_family,
-            subject_refs=[candidate_id, operation_ref, *actor_refs],
+            subject_refs=[candidate_id, *operation_refs, *actor_refs],
             property_spec=candidate_property,
             required_actors=actor_refs,
-            required_operations=[operation_ref],
+            required_operations=operation_refs,
             required_observers=_OBSERVERS_BY_FAMILY[family],
             cleanup_requirement=cleanup,
             source_refs=source_refs,
@@ -493,6 +599,16 @@ def adapt_source_candidates_to_obligations(
     if not isinstance(raw_operations, list) or not isinstance(raw_relations, list) or not isinstance(raw_actors, list):
         raise ObligationSourceAdapterError("behavior_ir_adapter_collections_invalid")
     operations = [row for row in raw_operations if isinstance(row, dict)]
+    operations_by_id = {
+        _text(row.get("id")): row
+        for row in operations
+        if _text(row.get("id"))
+    }
+    process_graphs = [
+        row
+        for row in _list(behavior_ir.get("process_graphs"))
+        if isinstance(row, dict)
+    ]
     relations = [row for row in raw_relations if isinstance(row, dict)]
     actors_by_id = {
         _text(row.get("id")): row
@@ -538,6 +654,22 @@ def adapt_source_candidates_to_obligations(
             continue
         operation = matches[0]
         operation_ref = _text(operation.get("id"))
+        depth_operation_refs, depth_graph = _depth_process_graph(
+            candidate,
+            operations=operations,
+            process_graphs=process_graphs,
+        )
+        if depth_operation_refs and depth_operation_refs[0] != operation_ref:
+            # The candidate is bound to ``operation_ref``. A sequence whose
+            # first step is another operation is an ambiguous model hint, not
+            # authority to silently retarget the obligation.
+            depth_operation_refs, depth_graph = [], {}
+        required_operation_refs = depth_operation_refs or [operation_ref]
+        required_operation_rows = [
+            operations_by_id[ref]
+            for ref in required_operation_refs
+            if ref in operations_by_id
+        ]
         family_resolution = _risk_family(candidate)
         family = family_resolution["canonical"]
         declared_family = family_resolution["declared"] or family
@@ -548,8 +680,8 @@ def adapt_source_candidates_to_obligations(
             # with a named reason code -- never allowed to KeyError the whole
             # adaptation loop.  A single unregistered family used to abort the
             # bridge for every engine's hypotheses at once, silently discarding
-            # the entire mainline reasoner augmentation (the measured first-loss
-            # stage).  The drop is visible and countable; nothing is rewritten
+            # the entire mainline reasoner augmentation. This is a code-level
+            # funnel break; the drop is visible and countable. Nothing is rewritten
             # into a wrong family, so "visibly blocked beats wrongly compiled".
             coverage_gaps.append(_stable_gap(
                 candidate_id=candidate_id,
@@ -594,6 +726,9 @@ def adapt_source_candidates_to_obligations(
             relations=joined_relations,
             actors_by_id=actors_by_id,
             states_by_id=states_by_id,
+            required_operations=required_operation_refs,
+            required_operation_rows=required_operation_rows,
+            process_graph=depth_graph,
         )
         if not grounded:
             coverage_gaps.append(_stable_gap(
@@ -611,7 +746,10 @@ def adapt_source_candidates_to_obligations(
         # grounding is lost; the gap names exactly what remains uncompiled.
         if isinstance(candidate.get("depth"), dict) and candidate["depth"]:
             depth_carried_count += 1
-        _uncompiled = _depth_uncompiled_detail(candidate)
+        _uncompiled = _depth_uncompiled_detail(
+            candidate,
+            compiled_process_graph=bool(depth_graph),
+        )
         if _uncompiled:
             depth_uncompiled_count += 1
             coverage_gaps.append(_stable_gap(

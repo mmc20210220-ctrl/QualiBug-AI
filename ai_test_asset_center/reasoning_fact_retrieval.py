@@ -35,8 +35,6 @@ FACT_BLOCK_HEADER = "\n\n[GROUNDED BUSINESS FACTS (source-anchored)]\n"
 MAX_FACTS = 96
 MAX_BLOCK_CHARS = 24000
 MAX_FACT_CHARS = 220
-_MAX_ITEMS_PER_SECTION = 64
-
 _MAX_RULES_DEFAULT = 64
 _MAX_RULES_FLOOR = 24
 
@@ -87,7 +85,13 @@ def _source_ref(fact: dict[str, Any]) -> str:
             ref_dict = _dict(ref)
             if ref_dict:
                 kind = _text(ref_dict.get("kind"))
-                locator = _text(ref_dict.get("locator") or ref_dict.get("location") or ref_dict.get("source") or ref_dict.get("document"))
+                locator = _text(
+                    ref_dict.get("locator")
+                    or ref_dict.get("location")
+                    or ref_dict.get("source_id")
+                    or ref_dict.get("source")
+                    or ref_dict.get("document")
+                )
                 parts.append(f"{kind}:{locator}" if kind and locator else (kind or locator))
             else:
                 parts.append(_text(ref))
@@ -139,7 +143,7 @@ def _extract_state_machines(payload: dict[str, Any]) -> list[str]:
     machines = _list(payload.get("state_machines"))
     if not machines:
         return lines
-    for machine in machines[:4]:
+    for machine in machines:
         machine_dict = _dict(machine)
         if not machine_dict:
             continue
@@ -171,8 +175,6 @@ def _extract_state_machines(payload: dict[str, Any]) -> list[str]:
                 parts.append("transitions=" + ",".join(rendered))
         if parts:
             lines.append(f"- [state_machine] {'; '.join(parts)}")
-        if len(lines) >= _MAX_ITEMS_PER_SECTION:
-            return lines
     return lines
 
 
@@ -191,9 +193,9 @@ def _extract_relations(payload: dict[str, Any]) -> list[str]:
                 continue
             source = _text(
                 item_dict.get("from_object")
-                or item_dict.get("source")
                 or item_dict.get("from")
                 or item_dict.get("from_entity")
+                or item_dict.get("source")
             )
             target = _text(
                 item_dict.get("to_object")
@@ -205,8 +207,6 @@ def _extract_relations(payload: dict[str, Any]) -> list[str]:
             if not source and not target:
                 continue
             lines.append(f"- [relation] {source or '?'} -{rel_type or '?'}-> {target or '?'}")
-            if len(lines) >= _MAX_ITEMS_PER_SECTION:
-                return lines
     return lines
 
 
@@ -220,16 +220,125 @@ def _extract_entities(payload: dict[str, Any]) -> list[str]:
         name = _text(item_dict.get("name") or item_dict.get("entity_alias"))
         if not name:
             continue
-        fields = _list(item_dict.get("fields") or item_dict.get("attributes"))
+        fields = _list(
+            item_dict.get("key_business_fields")
+            or item_dict.get("fields")
+            or item_dict.get("attributes")
+        )
         field_names = [f.get("name") if isinstance(f, dict) else f for f in fields]
         field_names = [_text(f) for f in field_names if _text(f)]
         parts = [f"entity={_bounded(name, 80)}"]
+        aliases = _list(item_dict.get("aliases"))
+        identifiers = _list(item_dict.get("key_identifiers"))
+        if aliases:
+            parts.append("aliases=" + ",".join(_bounded(value, 60) for value in aliases))
+        if identifiers:
+            parts.append(
+                "identifiers=" + ",".join(_bounded(value, 60) for value in identifiers)
+            )
         if field_names:
             parts.append("fields=" + ",".join(field_names[:16]))
         lines.append(f"- [entity] {'; '.join(parts)}")
-        if len(lines) >= _MAX_ITEMS_PER_SECTION:
-            return lines
     return lines
+
+
+def _extract_permissions(payload: dict[str, Any]) -> list[str]:
+    """Role permissions projected from explicit source rows only."""
+    lines: list[str] = []
+    for role in _list(payload.get("roles")):
+        role_dict = _dict(role)
+        role_name = _text(role_dict.get("name") or role_dict.get("role"))
+        for permission in _list(role_dict.get("permissions")):
+            item = _dict(permission)
+            if not item:
+                continue
+            parts = []
+            for label, key in (
+                ("role", None),
+                ("operation", "operation_ref"),
+                ("action", "action"),
+                ("resource", "resource"),
+                ("decision", "decision"),
+                ("scope", "scope"),
+            ):
+                value = role_name if key is None else _text(item.get(key))
+                if value:
+                    parts.append(f"{label}={_bounded(value, 100)}")
+            if not parts:
+                continue
+            ref = _source_ref(item)
+            lines.append(
+                f"- [permission] {'; '.join(parts)}"
+                + (f" (source: {ref})" if ref else "")
+            )
+    return lines
+
+
+def _extract_conflicts(payload: dict[str, Any]) -> list[str]:
+    """Cross-source contradictions remain contradictions, never merged rules."""
+    lines: list[str] = []
+    for raw in _list(payload.get("contradictions") or payload.get("cross_document_conflicts")):
+        item = _dict(raw)
+        if not item:
+            continue
+        kind = _text(item.get("kind") or item.get("conflict_type"))
+        summary = _text(item.get("summary") or item.get("detail") or item.get("statement"))
+        conflict_id = _text(item.get("conflict_id") or item.get("id"))
+        parts = [part for part in (
+            f"id={_bounded(conflict_id, 100)}" if conflict_id else "",
+            f"kind={_bounded(kind, 100)}" if kind else "",
+            f"summary={_bounded(summary)}" if summary else "",
+        ) if part]
+        if not parts:
+            continue
+        ref = _source_ref(item)
+        lines.append(
+            f"- [conflict] {'; '.join(parts)}"
+            + (f" (source: {ref})" if ref else "")
+        )
+    return lines
+
+
+def _extract_gaps(payload: dict[str, Any]) -> list[str]:
+    """Explicit parse/coverage gaps prevent missing evidence looking complete."""
+    lines: list[str] = []
+    raw_gaps = payload.get("gaps")
+    if isinstance(raw_gaps, dict):
+        gap_rows = [raw_gaps] if raw_gaps else []
+    else:
+        gap_rows = _list(raw_gaps)
+    for raw in gap_rows:
+        item = _dict(raw)
+        if not item:
+            continue
+        kind = _text(item.get("kind") or item.get("gap_type") or item.get("code"))
+        gap_type = _text(item.get("gap_type") or item.get("reason") or item.get("detail"))
+        source_id = _text(item.get("source_id"))
+        parts = [part for part in (
+            f"kind={_bounded(kind, 100)}" if kind else "",
+            f"gap_type={_bounded(gap_type, 140)}" if gap_type and gap_type != kind else "",
+            f"source_id={_bounded(source_id, 100)}" if source_id else "",
+        ) if part]
+        if parts:
+            lines.append(f"- [gap] {'; '.join(parts)}")
+    return lines
+
+
+def _fair_fact_rows(
+    sections: list[tuple[str, list[str]]],
+) -> list[tuple[str, str]]:
+    """Deterministic round-robin so a large rule list cannot starve a surface."""
+    rows: list[tuple[str, str]] = []
+    index = 0
+    while True:
+        emitted = False
+        for name, lines in sections:
+            if index < len(lines):
+                rows.append((name, lines[index]))
+                emitted = True
+        if not emitted:
+            return rows
+        index += 1
 
 
 def retrieve_grounded_facts(
@@ -247,35 +356,59 @@ def retrieve_grounded_facts(
     if not isinstance(payload, dict) or not payload:
         return "", receipt
     try:
-        lines: list[str] = []
         rule_lines, rules_total = _extract_rules(payload)
-        lines.extend(rule_lines)
-        lines.extend(_extract_state_machines(payload))
-        lines.extend(_extract_relations(payload))
-        lines.extend(_extract_entities(payload))
+        sections = [
+            ("rules", rule_lines),
+            ("state_machines", _extract_state_machines(payload)),
+            ("relations", _extract_relations(payload)),
+            ("entities", _extract_entities(payload)),
+            ("permissions", _extract_permissions(payload)),
+            ("conflicts", _extract_conflicts(payload)),
+            ("gaps", _extract_gaps(payload)),
+        ]
+        section_totals = {
+            name: (rules_total if name == "rules" else len(lines))
+            for name, lines in sections
+        }
+        emitted_by_section = {name: 0 for name, _ in sections}
         bounded_lines: list[str] = []
         chars = 0
-        for line in lines:
+        fact_limit = max(1, min(int(max_facts or MAX_FACTS), 128))
+        for section_name, line in _fair_fact_rows(sections):
             line = line[:max_chars - chars]
             if len(line) <= 0:
                 break
             bounded_lines.append(line)
+            emitted_by_section[section_name] += 1
             chars += len(line) + 1
-            if len(bounded_lines) >= max(1, min(int(max_facts or MAX_FACTS), 128)):
+            if len(bounded_lines) >= fact_limit:
                 break
             if chars >= max_chars:
                 break
         block = FACT_BLOCK_HEADER + "\n".join(bounded_lines) if bounded_lines else ""
+        section_receipts = {
+            name: {
+                "total": section_totals[name],
+                "emitted": emitted_by_section[name],
+                "truncated": max(0, section_totals[name] - emitted_by_section[name]),
+            }
+            for name, _ in sections
+        }
+        facts_total = sum(section_totals.values())
         receipt = {
             "status": "CONSUMED" if block else "EMPTY",
             "reason": "source_anchored_fact_retrieval",
             "facts": len(bounded_lines),
+            "facts_total": facts_total,
+            "facts_truncated": max(0, facts_total - len(bounded_lines)),
             "chars": len(block),
+            "budgets": {"max_facts": fact_limit, "max_chars": max_chars, "max_rules": _max_rules()},
+            "sections": section_receipts,
             # The source-rule budget is operator-visible: emitted-vs-total makes
             # any truncation countable instead of silently dropping the overflow.
             "rules_total": rules_total,
-            "rules_emitted": len(rule_lines),
-            "rules_truncated": max(0, rules_total - len(rule_lines)),
+            "rules_emitted": emitted_by_section["rules"],
+            "rules_truncated": max(0, rules_total - emitted_by_section["rules"]),
             "max_rules": _max_rules(),
         }
         return block, receipt

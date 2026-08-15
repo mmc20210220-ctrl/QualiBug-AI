@@ -67,8 +67,8 @@ def test_stage_reasoner_source_caps_are_enterprise_safe() -> None:
     ]
     assert not missing, f"reasoner guardrail constants missing from source: {missing}"
 
-    # Hypothesis breadth: the authenticated benchmark run attributed 104 of 131
-    # missed defects to the hypothesis-generation stage, so this is a floor.
+    # Hypothesis breadth: the package contract declares 40 as the static floor;
+    # historical evaluator attribution is not required to prove this invariant.
     assert constants["MAX_HYPOTHESES"] >= REQUIRED_HYPOTHESIS_CAP
     assert constants["MAX_HYPOTHESES_HARD_LIMIT"] >= constants["MAX_HYPOTHESES"], (
         "the hard limit must not sit below the working cap, or the cap is unreachable"

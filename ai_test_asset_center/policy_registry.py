@@ -21,6 +21,7 @@ from .discovery_evaluation_contract import (
     POLICY_COMPARISON_SCHEMA,
     validate_authenticated_policy_comparison,
 )
+from .policy_wiring import _REASONER_MAX_HYPOTHESES_PER_ENGINE
 
 
 POLICY_REGISTRY_SCHEMA = "qualibug.policy-registry.v2"
@@ -67,7 +68,7 @@ class ReasonerPolicy:
     retry_count: int = 1
     timeout_seconds: int = 300
     max_tokens: int = 32768
-    max_hypotheses_per_engine: int = 15
+    max_hypotheses_per_engine: int = _REASONER_MAX_HYPOTHESES_PER_ENGINE
     max_hypothesis_chars: int = 500
     retry_delay_seconds: float = 2.0
     prompt_truncation_chars: dict[str, int] = field(default_factory=lambda: {
@@ -94,7 +95,20 @@ class ReasonerPolicy:
         self.max_tokens = max(32768, min(int(self.max_tokens or 32768), 100000))
         self.max_workers = max(1, min(int(self.max_workers or 1), 4))
         self.retry_count = max(0, min(int(self.retry_count or 0), 1))
-        self.max_hypotheses_per_engine = max(1, min(int(self.max_hypotheses_per_engine or 1), 15))
+        # Persisted policies created under the legacy default of 15 must not
+        # silently keep production below the package guardrail of 40. A lower
+        # per-run operator budget remains available through the explicit,
+        # receipted environment override in policy_wiring.
+        self.max_hypotheses_per_engine = max(
+            _REASONER_MAX_HYPOTHESES_PER_ENGINE,
+            min(
+                int(
+                    self.max_hypotheses_per_engine
+                    or _REASONER_MAX_HYPOTHESES_PER_ENGINE
+                ),
+                _REASONER_MAX_HYPOTHESES_PER_ENGINE,
+            ),
+        )
         self.max_hypothesis_chars = max(120, min(int(self.max_hypothesis_chars or 120), 500))
         canonical = [
             "causality", "invariant", "reconciliation", "counterexample",

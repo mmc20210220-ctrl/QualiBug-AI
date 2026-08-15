@@ -137,6 +137,49 @@ def test_retrieval_receipts_rule_truncation_instead_of_silent_drop() -> None:
     assert receipt["max_rules"] >= 64
 
 
+def test_retrieval_fairly_preserves_permissions_conflicts_and_gaps() -> None:
+    payload = {
+        "documented_rules": [
+            {"rule": f"规则 {index}", "source": f"src:{index}"}
+            for index in range(100)
+        ],
+        "roles": [
+            {
+                "name": "operator",
+                "permissions": [{
+                    "operation_ref": "op:approve",
+                    "decision": "allow",
+                    "scope": "tenant",
+                    "source": "src:permission",
+                }],
+                "source": "src:roles",
+            }
+        ],
+        "contradictions": [{
+            "conflict_id": "conflict:1",
+            "kind": "STATE_CONTRADICTION",
+            "summary": "状态定义不一致",
+            "source_refs": [{"source_id": "src:a"}, {"source_id": "src:b"}],
+        }],
+        "gaps": [{
+            "kind": "UNPARSED_VISUAL",
+            "gap_type": "visual_semantics_unavailable",
+            "source_id": "src:diagram",
+        }],
+    }
+
+    block, receipt = retrieve_grounded_facts(payload, max_facts=8)
+
+    assert "[permission]" in block
+    assert "[conflict]" in block
+    assert "[gap]" in block
+    assert receipt["sections"]["rules"]["total"] == 100
+    assert receipt["sections"]["permissions"]["emitted"] == 1
+    assert receipt["sections"]["conflicts"]["emitted"] == 1
+    assert receipt["sections"]["gaps"]["emitted"] == 1
+    assert receipt["facts_truncated"] > 0
+
+
 def test_retrieval_redacts_credentials() -> None:
     block, _ = retrieve_grounded_facts(
         {"business_rules": [{"normalized_text": "用 bearer sk-abc12345 连接", "source_refs": []}]}

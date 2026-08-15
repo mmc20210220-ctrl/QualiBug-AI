@@ -3,7 +3,7 @@
 The reasoner emits cross-entity cascade chains, lifecycle source states and
 multi-step verification intent. The single-operation obligation model cannot
 express all of it, but the bridge must preserve it observably instead of
-silently dropping it (the measured comprehension-loss root cause).
+silently dropping it (a directly observable comprehension-path break).
 """
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ def _endpoints() -> list[dict]:
             "operation_id": "getResource",
             "entity": "resource",
             "action": "read",
-            "path": "/resources",
+            "path": "/resources/{id}",
             "method": "GET",
         },
     ]
@@ -69,6 +69,8 @@ def test_bridge_preserves_depth_fields_on_candidate() -> None:
     assert depth["cascade_check"] == "settlement must not proceed for an overdue order"
     assert "step1" in depth["verification_steps"]
     assert "step2" in depth["verification_steps"]
+    assert depth["operation_refs"] == ["createResource", "getResource"]
+    assert depth["operation_paths"] == ["/resources", "/resources/{id}"]
 
 
 def test_bridge_omits_depth_key_when_no_depth_fields() -> None:

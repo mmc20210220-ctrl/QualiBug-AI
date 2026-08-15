@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from ai_test_asset_center.policy_registry import ReasonerPolicy
+from ai_test_asset_center.policy_wiring import _REASONER_MAX_HYPOTHESES_PER_ENGINE
 from ai_test_asset_center.stage_reason_all_v2 import SIDE_PATH_REASONER_ENGINES
 
 
@@ -21,9 +22,15 @@ def test_reasoner_policy_keeps_side_path_engines_enabled() -> None:
     assert len(SIDE_PATH_REASONER_ENGINES) == 6
     assert expected.issubset(set(policy.enabled_engines))
     assert policy.max_workers == 4
-    assert policy.max_hypotheses_per_engine == 15
+    assert policy.max_hypotheses_per_engine == _REASONER_MAX_HYPOTHESES_PER_ENGINE
     assert policy.timeout_seconds >= 300
     assert policy.max_tokens == 32768
+
+
+def test_reasoner_policy_upgrades_legacy_persisted_hypothesis_cap() -> None:
+    policy = ReasonerPolicy(max_hypotheses_per_engine=15)
+
+    assert policy.max_hypotheses_per_engine == _REASONER_MAX_HYPOTHESES_PER_ENGINE
 
 
 def test_reasoner_policy_clamps_max_tokens() -> None:

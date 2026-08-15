@@ -26,7 +26,16 @@ def _env_patch(key: str, value: str) -> Any:
 def _asset() -> dict[str, Any]:
     return {
         "business_objects": [
-            {"object": "orders", "source": "database_schema", "confidence": 0.9},
+            {
+                "object": "orders",
+                "source": "database_schema",
+                "source_id": "src:db",
+                "confidence": 0.9,
+                "aliases": ["sales_orders"],
+                "key_identifiers": ["order_id"],
+                "key_business_fields": ["status", "amount"],
+                "source_refs": [{"source_id": "src:db", "locator": "schema.orders"}],
+            },
             {"object": "", "source": "database_schema", "confidence": 0.5},
             {"object": "users", "source": "api_spec", "confidence": 0.3},
             {"object": "balance", "source": "database_schema", "confidence": 0.7},
@@ -39,6 +48,8 @@ def _asset() -> dict[str, Any]:
                 "statement": "订单支付前不得发货",
                 "severity": "P0",
                 "tokens": ["订单", "支付", "发货"],
+                "operation_refs": ["op:ship-order"],
+                "binding_readiness": "READY",
             },
             {
                 "rule_id": "rule:src:2",
@@ -73,6 +84,37 @@ def _asset() -> dict[str, Any]:
             {"role_id": "role:src:2", "source_id": "src:prd", "role": "buyer"},
             {"role_id": "role:src:3", "source_id": "src:prd", "role": "seller"},
         ],
+        "permission_matrix": [
+            {
+                "permission_id": "permission:buyer:list",
+                "source_id": "src:prd",
+                "source_locator": "PRD.md#权限",
+                "role": "buyer",
+                "interface_id": "op:list-orders",
+                "action": "list",
+                "resource": "orders",
+                "decision": "allow",
+                "scope": "own",
+            }
+        ],
+        "cross_document_conflicts": [
+            {
+                "conflict_id": "conflict:shipping-state",
+                "kind": "STATE_CONTRADICTION",
+                "summary": "发货允许状态在两份资料中不一致",
+                "source_refs": [
+                    {"source_id": "src:prd", "locator": "PRD.md#发货"},
+                    {"source_id": "src:api", "locator": "API.md#ship"},
+                ],
+            }
+        ],
+        "parse_coverage_gaps": [
+            {
+                "kind": "UNPARSED_VISUAL",
+                "gap_type": "visual_semantics_unavailable",
+                "source_id": "src:diagram",
+            }
+        ],
         "entity_relations": [
             {
                 "from_entity": "orders",
@@ -101,6 +143,13 @@ def test_projection_carries_source_grounded_content() -> None:
     by_name = {e["name"]: e for e in world["entities"]}
     assert by_name["orders"]["is_core"] is True
     assert by_name["users"]["is_core"] is False
+    assert by_name["orders"]["aliases"] == ["sales_orders"]
+    assert by_name["orders"]["key_identifiers"] == ["order_id"]
+    assert by_name["orders"]["key_business_fields"] == ["status", "amount"]
+    assert by_name["orders"]["source_refs"][0]["source_id"] == "src:db"
+
+    assert world["documented_rules"][0]["is_verifiable"] is True
+    assert world["documented_rules"][1]["is_verifiable"] is False
 
     assert len(world["state_machines"]) == 1
     sm = world["state_machines"][0]
@@ -109,10 +158,22 @@ def test_projection_carries_source_grounded_content() -> None:
 
     # Roles are deduplicated by name.
     assert {r["name"] for r in world["roles"]} == {"buyer", "seller"}
+    buyer = next(row for row in world["roles"] if row["name"] == "buyer")
+    assert buyer["permissions"] == [{
+        "permission_id": "permission:buyer:list",
+        "operation_ref": "op:list-orders",
+        "action": "list",
+        "resource": "orders",
+        "decision": "allow",
+        "scope": "own",
+        "source": "src:prd@PRD.md#权限",
+    }]
 
     # Relationships drop rows without a complete triple.
     assert len(world["relationships"]) == 1
     assert world["relationships"][0]["relationship_type"] == "belongs_to"
+    assert world["contradictions"][0]["conflict_id"] == "conflict:shipping-state"
+    assert world["gaps"][0]["gap_type"] == "visual_semantics_unavailable"
 
 
 def test_projection_is_bounded_and_empty_safe() -> None:
@@ -128,7 +189,7 @@ def test_projection_is_bounded_and_empty_safe() -> None:
     assert empty["documented_rules"] == []
     assert empty["entities"] == []
     assert empty["state_machines"] == []
-    assert empty["gaps"] == {}
+    assert empty["gaps"] == []
 
 
 def test_projection_receipt_reports_truncation_instead_of_silent_cap() -> None:
@@ -153,8 +214,8 @@ def test_projection_receipt_reports_truncation_instead_of_silent_cap() -> None:
 
 
 def test_projection_default_budget_raises_breadth_floor_over_legacy_cap() -> None:
-    # The historical default (40 rules) was the measured hypothesis-generation
-    # first-loss.  The default now projects a strictly larger rule set, and the
+    # The historical default of 40 rules was a code-level breadth ceiling. The
+    # default now projects a strictly larger rule set, and the
     # receipt carries no truncation reason for this fixture.
     world = project_knowledge_world_model(_asset())
     receipt = world["projection_receipt"]

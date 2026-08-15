@@ -997,6 +997,33 @@ Contract. This section pins only the package-local anchors:
   `enterprise_understanding_model`) through
   `schema.clone_asset_for_understanding_projection`; every mutable cognition
   branch remains deep-isolated.
+- The knowledge-asset → Reasoner bridge has one lossless semantic projection
+  authority: `enterprise_knowledge_center.project_knowledge_world_model`.
+  Explicit entity aliases/identifiers/business fields/provenance, rule binding
+  readiness and operation refs, role permissions, cross-source contradictions,
+  and parse/coverage gaps must survive the projection. A rule is verifiable
+  only when the asset carries an explicit operation binding/readiness signal;
+  presence in `rule_library` alone is not verification. Structured fact
+  retrieval in `reasoning_fact_retrieval.retrieve_grounded_facts` schedules
+  rule, state, relation, entity, permission, conflict, and gap sections fairly
+  and receipts total/emitted/truncated counts per section, so a large rule list
+  cannot starve other business evidence or make missing coverage look complete.
+  `collect_reasoner_hypotheses` receives the scan's project/root explicitly;
+  chunk and learned-memory retrieval use that authority before process-global
+  environment state, preventing cross-project drift. `ReasonerPolicy`
+  normalizes legacy persisted defaults to the package runtime guardrail of 40
+  hypotheses per engine; the only supported lower budget is the explicit
+  `QUALIBUG_REASONER_MAX_HYPOTHESES_PER_ENGINE` per-run override, which remains
+  visible in the reasoner receipt.
+- Reasoner multi-step/cascade intent becomes executable authority only through
+  a unique source-declared Behavior IR `process_graph`. The hypothesis bridge
+  may retain an ordered operation hint only after each path joins uniquely to
+  a source-declared API operation; `obligation_source_adapter` must then resolve
+  every operation uniquely in Behavior IR and match the ordered sequence to
+  exactly one graph carrying source refs. Only that graph may populate an
+  obligation's `required_operations` and `property.process_graph`. LLM step
+  text is never a process definition. Missing or ambiguous operation/graph
+  joins remain `BLOCKED_DEEP_COMPREHENSION_UNCOMPILED`, not a guessed sequence.
 - Format-equivalent field dictionaries share one table-identity rule in
   `_parsing_mechanics`: an explicit row-level `Table`/`数据表` declaration wins;
   section, sheet and container locators are fallback provenance only and must

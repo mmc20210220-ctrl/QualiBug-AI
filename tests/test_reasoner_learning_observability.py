@@ -9,6 +9,8 @@ reasoner consumed learned knowledge. These tests pin the passthrough.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from ai_test_asset_center import llm_reasoning as _llm_mod
 from ai_test_asset_center import stage_reason_all_v2 as _reasoner_mod
 
@@ -63,6 +65,47 @@ def test_meta_carries_learning_receipts(monkeypatch) -> None:
     assert meta["engine_attention_receipt"]["boosted"] == ["causality"]
     assert meta["fact_retrieval_receipt"]["status"] == "SKIPPED"
     assert meta["graph_context"]["active"] is True
+
+
+def test_collect_reasoner_binds_project_and_root_to_retrieval_host(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """The mainline project identity must reach chunk and memory retrieval."""
+
+    class _FakeConfig:
+        enabled = True
+        timeout_seconds = 300
+        max_tokens = 32768
+
+    observed = {}
+
+    def _fake_stage(host, prd, api, reader, prior):
+        observed["project"] = host._project
+        observed["root"] = host._root
+        host._last_engine_report = {
+            "total_engines": 0,
+            "successful_engines": [],
+            "failed_engines": [],
+        }
+        return []
+
+    monkeypatch.setattr(
+        _llm_mod.ReasoningConfig,
+        "from_env",
+        staticmethod(lambda: _FakeConfig()),
+    )
+    monkeypatch.setattr(_llm_mod, "ReasoningClient", lambda config: None)
+    monkeypatch.setattr(_reasoner_mod, "_stage_reason_all_v2", _fake_stage)
+
+    _reasoner_mod.collect_reasoner_hypotheses(
+        "prd",
+        "api",
+        project_id="project-current",
+        root=tmp_path,
+    )
+
+    assert observed == {"project": "project-current", "root": tmp_path}
 
 
 def test_provider_unavailable_path_is_unchanged(monkeypatch) -> None:

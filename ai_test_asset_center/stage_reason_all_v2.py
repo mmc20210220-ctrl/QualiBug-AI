@@ -1388,7 +1388,10 @@ def _stage_reason_all_v2(self, prd_text: str, api_spec: str,
         "status": "SKIPPED", "reason": "project_not_set", "pattern_count": 0
     }
     try:
-        _lm_project = os.environ.get("QUALIBUG_PROJECT", "").strip()
+        _lm_project = (
+            str(getattr(self, "_project", "") or "").strip()
+            or os.environ.get("QUALIBUG_PROJECT", "").strip()
+        )
         if _lm_project:
             from .closed_loop_feedback import load_learned_scan_context
             from .learning_knowledge_consumption import build_learned_memory_prompt_block
@@ -1879,6 +1882,8 @@ def collect_reasoner_hypotheses(
     *,
     reader_output: dict | None = None,
     prior_findings: list | None = None,
+    project_id: str = "",
+    root: Path | None = None,
 ) -> tuple[list[dict], dict]:
     """Thin wrapper for v12 mainline unification.
 
@@ -1902,11 +1907,22 @@ def collect_reasoner_hypotheses(
     class _ReasonerHost:
         """Minimal host exposing the attributes ``_stage_reason_all_v2`` needs."""
 
-        def __init__(self, client_config: Any) -> None:
+        def __init__(
+            self,
+            client_config: Any,
+            *,
+            project_id: str,
+            root: Path | None,
+        ) -> None:
             from .llm_reasoning import ReasoningClient
 
             self.client = ReasoningClient(config=client_config)
             self._last_engine_report: dict[str, Any] = {}
+            # Mainline identity is an explicit retrieval authority.  Falling
+            # back to process-global env state here can read another project's
+            # chunks or learned memory and is therefore never the primary path.
+            self._project = str(project_id or "").strip()
+            self._root = Path(root) if root is not None else Path(__file__).resolve().parents[1]
 
         def _fill_template(self, template: str, **kwargs: Any) -> str:
             result = template
@@ -1914,7 +1930,11 @@ def collect_reasoner_hypotheses(
                 result = result.replace("{" + key + "}", str(value or ""))
             return result
 
-    host = _ReasonerHost(config)
+    host = _ReasonerHost(
+        config,
+        project_id=project_id,
+        root=root,
+    )
     try:
         hypotheses = _stage_reason_all_v2(
             host,

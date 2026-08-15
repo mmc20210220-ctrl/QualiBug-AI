@@ -681,6 +681,82 @@ def _depth_fields(hypothesis: dict[str, Any]) -> dict[str, Any]:
     return depth
 
 
+def _normalized_path_shape(value: Any) -> str:
+    path = _text(value).split("?", 1)[0].strip()
+    if not path.startswith("/"):
+        return ""
+    return re.sub(r"\{[^}]+\}|:([A-Za-z_][A-Za-z0-9_]*)", "{}", path).rstrip("/") or "/"
+
+
+def _source_operation_sequence(
+    hypothesis: dict[str, Any],
+    api_endpoints: list[dict[str, Any]],
+) -> tuple[list[str], list[str]]:
+    """Resolve multi-step hints only through unique source-declared endpoints.
+
+    The reasoner's step text is attention guidance, not execution authority.
+    This function merely records exact catalog joins; the obligation adapter
+    still requires one unique source-declared process graph before compiling
+    the sequence.
+    """
+    hints: list[tuple[str, str]] = [
+        (path, "") for path in _endpoint_paths_from_hypothesis(hypothesis)
+    ]
+    verification = hypothesis.get("verification_method")
+    if isinstance(verification, dict):
+        for key in (
+            "step1", "step2", "step3", "step4",
+            "check1", "check2", "check3",
+        ):
+            text = _text(verification.get(key))
+            if not text:
+                continue
+            method_match = re.search(
+                r"\b(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\b",
+                text.upper(),
+            )
+            method = method_match.group(1) if method_match else ""
+            for path in re.findall(r"(/[A-Za-z0-9_:\-{}./]+)", text):
+                if len(path) > 1 and not path.startswith("//"):
+                    hints.append((path, method))
+
+    catalog = [
+        endpoint
+        for endpoint in api_endpoints
+        if isinstance(endpoint, dict)
+        and _normalized_path_shape(endpoint.get("path"))
+        and _text(endpoint.get("operation_id") or endpoint.get("operationId"))
+    ]
+    operation_refs: list[str] = []
+    operation_paths: list[str] = []
+    seen: set[str] = set()
+    for hinted_path, hinted_method in hints:
+        shape = _normalized_path_shape(hinted_path)
+        matches = [
+            endpoint
+            for endpoint in catalog
+            if _normalized_path_shape(endpoint.get("path")) == shape
+            and (
+                not hinted_method
+                or _text(endpoint.get("method")).upper() == hinted_method
+            )
+        ]
+        if len(matches) != 1:
+            continue
+        endpoint = matches[0]
+        operation_ref = _text(
+            endpoint.get("operation_id") or endpoint.get("operationId")
+        )
+        if operation_ref in seen:
+            continue
+        seen.add(operation_ref)
+        operation_refs.append(operation_ref)
+        operation_paths.append(_text(endpoint.get("path")))
+    if len(operation_refs) < 2:
+        return [], []
+    return operation_refs, operation_paths
+
+
 def _priority(hypothesis: dict[str, Any]) -> float:
     for key in ("priority", "confidence", "confidence_score", "exploit_potential"):
         raw = hypothesis.get(key)
@@ -782,6 +858,13 @@ def hypotheses_to_source_candidates(
         }
         depth = _depth_fields(hypothesis)
         if depth:
+            operation_refs, operation_paths = _source_operation_sequence(
+                hypothesis,
+                api_endpoints or [],
+            )
+            if operation_refs:
+                depth["operation_refs"] = operation_refs
+                depth["operation_paths"] = operation_paths
             candidate["depth"] = depth
         candidates.append(candidate)
         by_origin[origin_key]["bound"] += 1

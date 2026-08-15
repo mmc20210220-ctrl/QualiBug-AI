@@ -1409,8 +1409,9 @@ def build_enterprise_business_knowledge_asset(
 # Budgets are operator-visible and receipted: an explicit caller argument is
 # exact; otherwise the environment variable / default applies with a
 # comprehension floor.  Every truncation is surfaced in ``projection_receipt``
-# with a named reason code — never a silent code-side cap (the historical
-# hard-coded 40/30/24/200 was the measured hypothesis-generation first-loss).
+# with a named reason code — never a silent code-side cap. The former
+# 40/30/24/200 projection bounds were code-level breadth ceilings regardless
+# of any historical evaluator attribution.
 _SEVERITY_RANK = {"P0": 0, "P1": 1, "P2": 2}
 
 _DEFAULT_WORLD_MODEL_MAX_RULES = 200
@@ -1490,6 +1491,41 @@ def project_knowledge_world_model(
 
     reason_codes: list[str] = []
 
+    def _explicit_text_list(value: Any) -> list[str]:
+        rows = value if isinstance(value, list) else []
+        output: list[str] = []
+        seen: set[str] = set()
+        for item in rows:
+            if isinstance(item, dict):
+                text = str(
+                    item.get("name")
+                    or item.get("field")
+                    or item.get("identifier")
+                    or item.get("alias")
+                    or ""
+                ).strip()
+            else:
+                text = str(item or "").strip()
+            if text and text not in seen:
+                seen.add(text)
+                output.append(text)
+        return output
+
+    def _source_refs(row: dict[str, Any]) -> list[dict[str, Any]]:
+        refs = [dict(ref) for ref in (row.get("source_refs") or []) if isinstance(ref, dict) and ref]
+        if refs:
+            return refs
+        source_id = str(row.get("source_id") or "").strip()
+        locator = str(row.get("source_locator") or "").strip()
+        if not source_id and not locator:
+            return []
+        ref: dict[str, Any] = {}
+        if source_id:
+            ref["source_id"] = source_id
+        if locator:
+            ref["locator"] = locator
+        return [ref]
+
     entities: list[dict[str, Any]] = []
     for row in asset.get("business_objects") or []:
         if not isinstance(row, dict):
@@ -1504,17 +1540,26 @@ def project_knowledge_world_model(
         source = str(row.get("source") or "").strip()
         entities.append({
             "name": name,
-            "aliases": [],
+            "aliases": _explicit_text_list(row.get("aliases")),
             "description": source[:120],
-            "key_identifiers": [],
-            "key_business_fields": [],
+            "key_identifiers": _explicit_text_list(
+                row.get("key_identifiers")
+                or row.get("identity_fields")
+                or row.get("primary_keys")
+            ),
+            "key_business_fields": _explicit_text_list(
+                row.get("key_business_fields")
+                or row.get("business_fields")
+            ),
             "is_core": confidence >= 0.6,
             "source": source[:120],
+            "source_refs": _source_refs(row),
         })
 
     seen_statements: set[str] = set()
     rules: list[dict[str, Any]] = []
     rules_total = 0
+    rule_statements_truncated = 0
     for row in sorted(
         (asset.get("rule_library") or []),
         key=lambda r: (_SEVERITY_RANK.get(str((r or {}).get("severity") or ""), 9),),
@@ -1530,15 +1575,32 @@ def project_knowledge_world_model(
             continue
         locator = str(row.get("source_locator") or "").strip()
         source = str(row.get("source_id") or "")
+        if len(statement) > rule_statement_chars:
+            rule_statements_truncated += 1
+        operation_refs = _explicit_text_list(
+            row.get("operation_refs")
+            or row.get("interface_refs")
+            or row.get("bound_operation_refs")
+        )
+        binding_readiness = str(row.get("binding_readiness") or "").strip().upper()
         rules.append({
             "rule": statement[:rule_statement_chars],
             "source": f"{source}@{locator}" if locator else source,
-            "entities_involved": [str(t) for t in (row.get("tokens") or [])[:8]],
-            "is_verifiable": True,
+            "entities_involved": [str(t) for t in (row.get("tokens") or [])],
+            "is_verifiable": bool(operation_refs) or binding_readiness in {
+                "READY", "BOUND", "RESOLVED", "VERIFIABLE",
+            },
             "severity": str(row.get("severity") or ""),
+            "operation_refs": operation_refs,
+            "binding_readiness": binding_readiness,
+            "source_refs": _source_refs(row),
         })
     if rules_total > len(rules):
         reason_codes.append(f"world_model_rules_truncated:{len(rules)}/{rules_total}")
+    if rule_statements_truncated:
+        reason_codes.append(
+            f"world_model_rule_statements_truncated:{rule_statements_truncated}/{len(rules)}"
+        )
 
     state_machines: list[dict[str, Any]] = []
     for row in asset.get("state_machines") or []:
@@ -1546,20 +1608,48 @@ def project_knowledge_world_model(
             continue
         state_machines.append({
             "entity": str(row.get("object") or row.get("entity") or "").strip(),
-            "states": [str(s) for s in (row.get("states") or [])[:40]],
+            "states": [str(s) for s in (row.get("states") or [])],
             "transitions": [
                 {
                     "from": str(t.get("from") or ""),
                     "to": str(t.get("to") or ""),
                     "trigger": str(t.get("trigger") or ""),
                 }
-                for t in (row.get("transitions") or [])[:60]
+                for t in (row.get("transitions") or [])
                 if isinstance(t, dict)
             ],
-            "terminal_states": [str(s) for s in (row.get("terminal_states") or [])[:20]],
-            "exception_paths": [str(p) for p in (row.get("exception_paths") or [])[:20]],
+            "terminal_states": [str(s) for s in (row.get("terminal_states") or [])],
+            "exception_paths": [str(p) for p in (row.get("exception_paths") or [])],
             "source": str(row.get("source_id") or ""),
+            "source_refs": _source_refs(row),
         })
+
+    permissions_by_role: dict[str, list[dict[str, Any]]] = {}
+    permission_rows_total = 0
+    for row in asset.get("permission_matrix") or []:
+        if not isinstance(row, dict):
+            continue
+        role = str(row.get("role") or row.get("role_name") or "").strip()
+        if not role:
+            continue
+        permission_rows_total += 1
+        locator = str(row.get("source_locator") or "").strip()
+        source_id = str(row.get("source_id") or "").strip()
+        permission = {
+            "permission_id": str(row.get("permission_id") or "").strip(),
+            "operation_ref": str(
+                row.get("interface_id")
+                or row.get("operation_ref")
+                or row.get("operation_id")
+                or ""
+            ).strip(),
+            "action": str(row.get("action") or "").strip(),
+            "resource": str(row.get("resource") or row.get("object") or "").strip(),
+            "decision": str(row.get("decision") or row.get("effect") or "").strip(),
+            "scope": str(row.get("scope") or "").strip(),
+            "source": f"{source_id}@{locator}" if locator else source_id,
+        }
+        permissions_by_role.setdefault(role, []).append(permission)
 
     seen_roles: set[str] = set()
     roles: list[dict[str, Any]] = []
@@ -1574,7 +1664,27 @@ def project_knowledge_world_model(
         roles_total += 1
         if len(roles) >= max_roles:
             continue
-        roles.append({"name": name, "permissions": [], "source": str(row.get("source_id") or "")})
+        roles.append({
+            "name": name,
+            "permissions": [dict(item) for item in permissions_by_role.get(name, [])],
+            "source": str(row.get("source_id") or ""),
+            "source_refs": _source_refs(row),
+        })
+    # A permission row is itself an explicit role declaration. Preserve it
+    # even when a separate roles table was absent from the source package.
+    for name, role_permissions in permissions_by_role.items():
+        if name in seen_roles:
+            continue
+        seen_roles.add(name)
+        roles_total += 1
+        if len(roles) >= max_roles:
+            continue
+        roles.append({
+            "name": name,
+            "permissions": [dict(item) for item in role_permissions],
+            "source": str(role_permissions[0].get("source") or "") if role_permissions else "",
+            "source_refs": [],
+        })
     if roles_total > len(roles):
         reason_codes.append(f"world_model_roles_truncated:{len(roles)}/{roles_total}")
 
@@ -1600,13 +1710,35 @@ def project_knowledge_world_model(
     if relationships_total > len(relationships):
         reason_codes.append(f"world_model_relationships_truncated:{len(relationships)}/{relationships_total}")
 
+    contradictions = [
+        dict(row)
+        for row in (
+            asset.get("cross_document_conflicts")
+            or asset.get("cross_doc_conflicts")
+            or []
+        )
+        if isinstance(row, dict) and row
+    ]
+    gaps: list[dict[str, Any]] = []
+    gap_seen: set[str] = set()
+    for key in ("parse_coverage_gaps", "coverage_gaps", "semantic_gaps"):
+        for row in asset.get(key) or []:
+            if not isinstance(row, dict) or not row:
+                continue
+            canonical = json.dumps(row, ensure_ascii=False, sort_keys=True, default=str)
+            if canonical in gap_seen:
+                continue
+            gap_seen.add(canonical)
+            gaps.append(dict(row))
+
     return {
         "documented_rules": rules,
         "state_machines": state_machines,
         "entities": entities,
         "roles": roles,
         "relationships": relationships,
-        "gaps": {},
+        "contradictions": contradictions,
+        "gaps": gaps,
         "insufficient_evidence": not (rules or entities or state_machines),
         "projection_receipt": {
             "schema_version": "qualibug.world-model-projection-receipt.v1",
@@ -1623,6 +1755,10 @@ def project_knowledge_world_model(
                 "relationships_projected": len(relationships),
                 "roles_total": roles_total,
                 "roles_projected": len(roles),
+                "permission_rows_total": permission_rows_total,
+                "contradictions_projected": len(contradictions),
+                "gaps_projected": len(gaps),
+                "rule_statements_truncated": rule_statements_truncated,
             },
             "reason_codes": reason_codes,
         },

@@ -416,8 +416,8 @@ Frozen surfaces:
 - before/after/cleanup/audit receipt requirements;
 - one governed receipt per actual write, reverse-order compensation for partial multi-write setup, and no whole-scenario write retry;
 - `timeout_seconds >= 300`, `max_tokens >= 32768`, `MAX_HYPOTHESES >= 40`, and `max_workers = 4`. The
-  hypothesis cap is a **floor**, not a fixed value: first-loss diagnosis puts the large majority of
-  missed defects at the hypothesis-generation stage, so narrowing it narrows discovery breadth. Its
+  hypothesis cap is a **floor**, not a fixed value: narrowing it is a direct code-level discovery
+  breadth ceiling regardless of the result of any particular evaluator snapshot. Its
   runtime authority is `policy_wiring._REASONER_MAX_HYPOTHESES_PER_ENGINE`, which is written onto
   `stage_reason_all_v2` at budget-resolution time — that constant, not the module literal, is what
   production runs, and `tests/test_reasoner_static_guardrails.py` cross-checks the two;
@@ -528,11 +528,17 @@ Bug discovery.
 
 ## Next engineering priorities (impact order)
 
-1. **Raise source-backed hypothesis coverage generically**; evaluator-private first-loss diagnosis attributes `104/131` known defects to hypothesis generation, so the dominant recall loss occurs before execution. Hidden labels remain evaluator-only and cannot become prompts, rules, or detectors.
-2. **Raise single-target execution conversion** by eliminating the measured `BLOCKED_NON_REVERSIBLE_WRITE`, missing-observer, missing-binding, and missing-fixture root causes without benchmark-specific rules.
-3. **Reduce externally measured false positives and make reproduction executable**; the authenticated checkpoint measured Precision `0.0588`, duplicate rate `0.2609`, and reproduction success `0`, so internal finding counts are not an optimization target.
-4. **Instrument provider cost into every evaluation envelope**; wall time and request volume are measured, but missing cost keeps unit-cost and cost-improvement gates unknown.
-5. **Freeze the commercial external evidence shape and run paired policies**: held-in, at least three held-out industries, and clean targets followed by authenticated champion/challenger replay and shadow reports. Until then Gate D stays `NOT_MEASURED`.
+The former `104/131` first-loss attribution and the precision/reproduction
+values below are a historical evaluator checkpoint, not evidence of current
+HEAD behavior. They must not be used to rank the current bottleneck until a
+fresh authenticated replay binds the current mainline and source snapshot.
+
+1. **Refresh the authenticated loss funnel on current HEAD**, keeping absent or invalid execution evidence `NOT_MEASURED`; do not carry the historical `104/131` attribution forward as a current fact.
+2. **Validate the code-level comprehension repairs under replay**: lossless knowledge-world projection, section-fair grounded retrieval, project/root-bound chunk and memory lookup, 40-hypothesis active policy authority, and unique source-process-graph compilation. A coverage improvement claim requires the blocked/uncompiled obligation counts to fall on the fresh run.
+3. **Raise single-target execution conversion** by eliminating current-run `BLOCKED_NON_REVERSIBLE_WRITE`, missing-observer, missing-binding, and missing-fixture root causes without benchmark-specific rules.
+4. **Reduce externally measured false positives and make reproduction executable**; historical quality values are diagnostic context only, while internal finding counts remain an invalid optimization target.
+5. **Instrument provider cost into every evaluation envelope**; wall time and request volume are insufficient when cost keeps unit-cost and cost-improvement gates unknown.
+6. **Freeze the commercial external evidence shape and run paired policies**: held-in, at least three held-out industries, and clean targets followed by authenticated champion/challenger replay and shadow reports. Until then Gate D stays `NOT_MEASURED`.
 
 ## Non-negotiable product constraints
 

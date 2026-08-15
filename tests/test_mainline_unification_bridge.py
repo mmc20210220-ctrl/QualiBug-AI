@@ -663,6 +663,69 @@ def test_adapter_carries_depth_and_flags_uncompiled_cascade() -> None:
     )
 
 
+def test_adapter_compiles_depth_through_unique_source_declared_process_graph() -> None:
+    ir = _adapter_ir()
+    ir["operations"].append({
+        "id": "op-read-resource",
+        "operation_id": "getResource",
+        "method": "GET",
+        "path": "/resources/{id}",
+        "read_write": "read",
+        "source_refs": [{"source_id": "SRC-API"}],
+    })
+    process_graph = {
+        "process_id": "process:create-and-read",
+        "source_refs": [{"source_id": "SRC-PROCESS", "locator": "PRD#flow"}],
+        "nodes": [
+            {
+                "node_id": "step-create",
+                "operation_ref": "op-create-resource",
+                "intent": "create resource",
+            },
+            {
+                "node_id": "step-read",
+                "operation_ref": "op-read-resource",
+                "intent": "read created resource",
+            },
+        ],
+        "edges": [{"from_ref": "step-create", "to_ref": "step-read"}],
+        "topological_order": ["step-create", "step-read"],
+    }
+    ir["process_graphs"] = [process_graph]
+
+    result = adapt_source_candidates_to_obligations(
+        [{
+            "candidate_id": "candidate-deep-source-graph",
+            "risk_family": "idempotency",
+            "method": "POST",
+            "path": "/resources",
+            "entity": "resource",
+            "source_refs": [{"source_id": "SRC-1"}],
+            "depth": {
+                "verification_steps": {
+                    "step1": "POST /resources",
+                    "step2": "GET /resources/{id}",
+                },
+                "operation_refs": ["createResource", "getResource"],
+            },
+        }],
+        ir,
+    )
+
+    assert result["depth_carried_count"] == 1
+    assert result["depth_uncompiled_count"] == 0
+    obligation = result["obligations"][0]
+    assert obligation["required_operations"] == [
+        "op-create-resource",
+        "op-read-resource",
+    ]
+    assert obligation["property"]["process_graph"] == process_graph
+    assert not any(
+        gap["code"] == "BLOCKED_DEEP_COMPREHENSION_UNCOMPILED"
+        for gap in result["coverage_gaps"]
+    )
+
+
 def test_adapter_flat_candidate_has_no_depth_counters() -> None:
     result = adapt_source_candidates_to_obligations(
         [{

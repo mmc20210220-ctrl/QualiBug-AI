@@ -77,13 +77,22 @@ def _patch_bridge(
     import ai_test_asset_center.stage_reason_all_v2 as stage
     import ai_test_asset_center.hypothesis_slice_bridge as bridge
 
-    calls = {"collect": 0, "bridge": 0, "world": None}
+    calls = {"collect": 0, "bridge": 0, "world": None, "project": None, "root": None}
 
-    def fake_collect(prd_text: str, api_text: str, *, reader_output=None):
+    def fake_collect(
+        prd_text: str,
+        api_text: str,
+        *,
+        reader_output=None,
+        project_id: str = "",
+        root: Path | None = None,
+    ):
         calls["collect"] += 1
         # The comprehension bridge must be live: the reasoner receives the
         # source-derived world model, never an empty business-world dict.
         calls["world"] = reader_output
+        calls["project"] = project_id
+        calls["root"] = root
         if collect_raises is not None:
             raise collect_raises
         return (
@@ -123,7 +132,13 @@ def test_mainline_reasoner_hypotheses_become_source_bound_obligations(
 
     bundle = planning.build_discovery_plan(_inputs(tmp_path), _campaign())
 
-    assert calls == {"collect": 1, "bridge": 1, "world": calls["world"]}
+    assert calls == {
+        "collect": 1,
+        "bridge": 1,
+        "world": calls["world"],
+        "project": "PROBE-1",
+        "root": tmp_path,
+    }
     world = calls["world"]
     assert isinstance(world, dict)
     assert "documented_rules" in world and "entities" in world
@@ -165,7 +180,13 @@ def test_mainline_reasoner_disabled_flag_skips_collection_visibly(
         _campaign(),
     )
 
-    assert calls == {"collect": 0, "bridge": 0, "world": None}
+    assert calls == {
+        "collect": 0,
+        "bridge": 0,
+        "world": None,
+        "project": None,
+        "root": None,
+    }
     report = bundle.obligations.get("mainline_reasoner_report")
     assert report is not None
     assert report["status"] == "NOT_REQUESTED"
@@ -180,7 +201,13 @@ def test_mainline_reasoner_env_kill_switch_skips_collection(
 
     bundle = planning.build_discovery_plan(_inputs(tmp_path), _campaign())
 
-    assert calls == {"collect": 0, "bridge": 0, "world": None}
+    assert calls == {
+        "collect": 0,
+        "bridge": 0,
+        "world": None,
+        "project": None,
+        "root": None,
+    }
     report = bundle.obligations.get("mainline_reasoner_report")
     assert report is not None
     assert report["status"] == "NOT_REQUESTED"
