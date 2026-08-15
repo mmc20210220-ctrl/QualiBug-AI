@@ -18,6 +18,7 @@ from .assertion_dsl import (
 )
 from .assertion_control_policy import assertion_requires_control
 from .observer_contracts_base import validate_observer_receipt
+from .sandbox_write_executor_base import framework_route_not_found
 
 
 CONTRACT_EVIDENCE_RECEIPT_SCHEMA = "qualibug.contract-evidence-receipt.v1"
@@ -598,6 +599,23 @@ def build_contract_oracle_activation_receipt(
                     _control_succeeded = (
                         receipt_evidence.get("control_succeeded") is True
                     )
+                    # A 404 whose media type is text/html (or whose body carries
+                    # the framework "Cannot METHOD" marker) is a framework-level
+                    # "route not registered" — the DOCUMENTED interface is not
+                    # implemented on the deployed target. That is a real,
+                    # reproducible documentation/implementation-drift defect, not
+                    # a control-arm setup failure. Name it distinctly so the
+                    # finalizer can promote it to a finding instead of burying it
+                    # as BLOCKED_CONTROL_ARM_NOT_PROVEN.
+                    if framework_route_not_found(
+                        _control_status,
+                        _text(receipt_evidence.get("response_content_type")),
+                    ):
+                        blockers.append(
+                            f"DECLARED_INTERFACE_NOT_IMPLEMENTED:{subject}"
+                            f":status={_control_status}"
+                        )
+                        continue
                     blockers.append(
                         f"CONTROL_SUCCESS_NOT_PROVEN:{subject}"
                         f":status={_control_status}"

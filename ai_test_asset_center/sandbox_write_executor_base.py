@@ -158,6 +158,60 @@ def _json_or_text(raw: str) -> Any:
         return {"_raw": text[:2000]}
 
 
+# Framework default 404 signatures. When an HTTP framework (Express, Flask,
+# FastAPI without a route, etc.) cannot match a route it emits a 404 whose
+# content-type is text/html and whose body is a generic "Cannot GET/POST/…"
+# message — NOT a business 404 (which the target service itself returns as
+# JSON). This distinguishes "the documented interface is not implemented on
+# the deployed target" from "the resource genuinely does not exist", a
+# distinction that is generic across any framework and any industry.
+_FRAMEWORK_ROUTE_NOT_FOUND_METHODS = frozenset({
+    "GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS",
+})
+
+
+def framework_route_not_found(
+    status_code: int,
+    content_type: str,
+    body: Any = None,
+) -> bool:
+    """True when the response is a framework-level "route not registered" 404.
+
+    A framework default 404 is distinguishable from a business 404 by its
+    media type (text/html) and, when the body is available, by the generic
+    ``Cannot <METHOD> <path>`` marker. The media-type signal alone is
+    sufficient — business services return application/json for their own 404s.
+    """
+    if int(status_code or 0) != 404:
+        return False
+    media_type = str(content_type or "").split(";", 1)[0].strip().lower()
+    if media_type == "text/html":
+        return True
+    # Fallback when content-type is missing but the body carries the framework
+    # marker (some gateways/proxies strip the header yet keep the HTML body).
+    raw = ""
+    if isinstance(body, dict):
+        raw = str(body.get("_raw") or "")
+    else:
+        raw = str(body or "")
+    if "cannot" in raw.lower() and any(
+        f"cannot {method.lower()} " in raw.lower()
+        for method in _FRAMEWORK_ROUTE_NOT_FOUND_METHODS
+    ):
+        return True
+    return False
+
+
+def _content_type(headers: Any) -> str:
+    """Extract the response media type from a raw header mapping."""
+    if not isinstance(headers, dict):
+        return ""
+    for key, value in headers.items():
+        if str(key or "").strip().lower() == "content-type":
+            return str(value or "")
+    return ""
+
+
 def load_project_environment_kind(root: Path, project: str) -> str:
     """Read declared environment from project config (no hardcoding of values)."""
     candidates = [

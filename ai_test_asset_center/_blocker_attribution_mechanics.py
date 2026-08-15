@@ -80,6 +80,11 @@ _REASON_ATTRIBUTION: dict[str, tuple[str, str, bool]] = {
     # An observer exists and ran, but its receipt was indeterminate.  Still an
     # observer-family gap, yet a different repair than a missing observer.
     "BLOCKED_OBSERVER_RECEIPT_INDETERMINATE": ("OBSERVER_CAPABILITY_GAP", "RECOVERABLE", False),
+    # The documented interface returned a framework-level 404 (route not
+    # registered) — a documentation/implementation-drift defect on the target,
+    # not a harness/observer gap. It remains a visible blocker so the drift
+    # finding is reported rather than silently skipped.
+    "BLOCKED_INTERFACE_NOT_IMPLEMENTED": ("TARGET_SYSTEM_RESPONSE", "SOURCE_DEPENDENT", True),
     "BLOCKED_MISSING_BINDING": ("BINDING_GRAPH_GAP", "RECOVERABLE", False),
     "BLOCKED_MISSING_FIXTURE": ("FIXTURE_CAPABILITY_GAP", "RECOVERABLE", False),
     "BLOCKED_MISSING_ACTOR": ("SOURCE_GAP", "SOURCE_DEPENDENT", False),
@@ -374,6 +379,11 @@ _CODE_GUIDANCE: dict[str, dict[str, str]] = {
         "控制臂已派发但成功未被证明，oracle 无法激活。",
         "不是观察端点缺失，而是控制臂证据未闭合（此前错误归因到观察缺口）。",
         "检查控制臂执行收据与成功证明（控制对比实验的前置）。",
+    ),
+    "BLOCKED_INTERFACE_NOT_IMPLEMENTED": _guidance(
+        "源材料声明的接口在目标运行时返回框架级 404（路由未注册）。",
+        "接口文档声明了该路由，但部署的目标服务未实现——文档/实现漂移缺陷。",
+        "确认目标版本与接口文档一致，或补充缺失的路由实现后重跑。",
     ),
     "BLOCKED_OBSERVER_RECEIPT_INDETERMINATE": _guidance(
         "观察者已运行但收据不确定。",

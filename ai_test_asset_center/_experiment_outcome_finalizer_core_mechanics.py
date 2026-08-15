@@ -185,6 +185,7 @@ def _pre_transport_reason_code(reasons: list[str]) -> str:
 # terminal code from the requirement tokens the oracle actually emitted.
 # Order matters: upstream causes precede the symptoms they produce.
 _MISSING_REQUIREMENT_REASON_RULES: tuple[tuple[str, str], ...] = (
+    ("DECLARED_INTERFACE_NOT_IMPLEMENTED", "BLOCKED_INTERFACE_NOT_IMPLEMENTED"),
     ("CONTROL_SUCCESS_NOT_PROVEN", "BLOCKED_CONTROL_ARM_NOT_PROVEN"),
     ("OBSERVER_RECEIPT_INDETERMINATE", "BLOCKED_OBSERVER_RECEIPT_INDETERMINATE"),
     ("MISSING_OBSERVER", "BLOCKED_MISSING_OBSERVER"),
@@ -1332,6 +1333,97 @@ def finalize_experiment_execution(
             "cleanup_equivalence_receipt": cleanup_equivalence_receipt,
             "execution_receipt": {"status": status, "reason_code": reason, "detail": detail},
         }
+    elif (
+        verdict.get("verdict") == "blocked_experiment"
+        and any(
+            "DECLARED_INTERFACE_NOT_IMPLEMENTED" in _text(item).upper()
+            for item in _list(verdict.get("missing_requirements"))
+        )
+    ):
+        # The control arm reached a framework-level "route not registered" 404
+        # (text/html, Cannot METHOD). The documented interface is not implemented
+        # on the deployed target — a real, reproducible documentation/implementation
+        # drift defect, not a control-arm setup failure. Promote it to a
+        # customer-deliverable candidate instead of burying it as
+        # BLOCKED_CONTROL_ARM_NOT_PROVEN.
+        control_plan = [step for step in _list(exp.get("control_plan")) if isinstance(step, dict)]
+        _primary_plan_step = _dict(control_plan[0] if control_plan else {})
+        _primary_op = ops.get(_text(_primary_plan_step.get("operation_ref"))) or {}
+        _drift_method = _text(_primary_op.get("method") or "GET").upper()
+        _drift_path = _text(
+            _primary_op.get("path") or _primary_op.get("raw_path")
+            or _primary_plan_step.get("path")
+        )
+        _drift_control = _dict(observations.get("control_observation"))
+        _drift_ct = _text(_drift_control.get("response_content_type") or "")
+        _drift_status = int(_drift_control.get("status_code") or 404)
+        _drift_timestamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        _drift_finding = {
+            "severity": "P1",
+            "title": f"[InterfaceDrift] declared {_drift_method} {_drift_path} not implemented on target",
+            "category": "interface_drift",
+            "risk_family": "visibility",
+            "source": "experiment_contract_oracle",
+            "description": (
+                f"The source-declared interface {_drift_method} {_drift_path} "
+                f"returned a framework-level 404 (content-type={_drift_ct or 'text/html'}), "
+                f"indicating the route is not implemented on the deployed target."
+            ),
+            "confidence_score": 0.95,
+            "experiment_id": eid,
+            "obligation_id": oid,
+            "campaign_id": campaign_id,
+            "source_refs": [dict(item) for item in _list(exp.get("source_refs")) if isinstance(item, dict)],
+            "timestamp": _drift_timestamp,
+            "execution_status": "executed",
+            "confirmation_status": "candidate",
+            "gate_passed": False,
+            "bug_status": "suspected",
+            "customer_delivery_status": "candidate",
+            "oracle": {
+                "oracle_name": "ContractOracle",
+                "oracle_tier": "contract",
+                "customer_deliverable": False,
+                "customer_deliverable_candidate": True,
+                "verdict": verdict.get("verdict"),
+                "status": verdict.get("status"),
+                "receipt_id": verdict.get("receipt_id"),
+                "activation_receipt_id": verdict.get("activation_receipt_id"),
+            },
+            "oracle_receipt_id": verdict.get("receipt_id"),
+            "activation_receipt_id": verdict.get("activation_receipt_id"),
+            "expected": {"interface_implemented": True},
+            "actual": {
+                "status_code": _drift_status,
+                "content_type": _drift_ct or "text/html",
+                "framework_route_not_found": True,
+            },
+            "evidence": {
+                "request": f"{_drift_method} {_drift_path}",
+                "response": f"HTTP {_drift_status}",
+                "target": _drift_path,
+                "actor": "control",
+                "timestamp": _drift_timestamp,
+                "reproduction_steps": [
+                    f"{_drift_method} {_drift_path} -> HTTP {_drift_status} (framework route not found)"
+                ],
+                "execution_semantics": "read_only" if _drift_method in {"GET", "HEAD", "OPTIONS"} else "governed_write",
+                "interface_drift": True,
+                "content_type": _drift_ct or "text/html",
+            },
+            "raw_evidence": {
+                "has_real_evidence": True,
+                "timestamp": _drift_timestamp,
+                "response_raw": {
+                    "status_code": _drift_status,
+                    "content_type": _drift_ct or "text/html",
+                    "body": _drift_control.get("body"),
+                },
+                "steps": steps_out[:10],
+                "interface_drift": True,
+            },
+        }
+        finding = _drift_finding
     elif (
         verdict.get("verdict") == "blocked_experiment"
         or verdict.get("status") == "INDETERMINATE"

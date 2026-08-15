@@ -48,7 +48,15 @@ from .sandbox_write_executor import (
     execute_governed_control_write,
     sandbox_write_allowed,
 )
-from .sandbox_write_executor_base import evaluator_request_trace
+from .sandbox_write_executor_base import (
+    _content_type,
+    evaluator_request_trace,
+)
+
+
+def _response_content_type(obs: dict[str, Any]) -> str:
+    """Response media type from a step observation's raw headers."""
+    return _content_type(obs.get("headers"))
 
 
 def _datetime_now_utc() -> datetime:
@@ -1878,6 +1886,7 @@ def execute_non_barrier_plans(
                     "mutation_selector": mutation_selector,
                     "mutation_operator": mutation_operator,
                     "response_observed": observed_status > 0,
+                    "response_content_type": _response_content_type(obs),
                     "write_reached_transport": _write_reached,
                     "request_reached_transport": (
                         observed_status > 0 or _write_reached
