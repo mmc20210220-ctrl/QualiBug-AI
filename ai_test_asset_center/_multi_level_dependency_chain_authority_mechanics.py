@@ -31,6 +31,20 @@ _original_plan_level = _core._plan_level
 REASON_CREATE_AMBIGUOUS = "MULTI_LEVEL_DEPENDENCY_CREATE_AMBIGUOUS"
 REASON_ACTOR_AMBIGUOUS = "MULTI_LEVEL_DEPENDENCY_ACTOR_AMBIGUOUS"
 
+# Generic management/audit/read-only role vocabulary. A create operation often
+# permits both the business role that owns the flow (buyer places an order) and
+# a management role (admin can place on the buyer's behalf). For subject
+# establishment the business role is the semantic initiator; management roles
+# are a fallback authority, never a tie-breaker that makes a single-role chain
+# look ambiguous. This is universal role semantics (admin/operator/auditor are
+# management roles in any industry), not benchmark or customer-specific data.
+_MANAGEMENT_ROLE_KEYS = frozenset({
+    "admin", "administrator", "operator", "auditor", "reviewer",
+    "approver", "support", "viewer", "root", "system", "sysadmin",
+    "superuser", "moderator", "管理员", "运营", "审计", "审核",
+    "审批", "运维", "客服", "系统管理员",
+})
+
 
 def __getattr__(name: str) -> Any:
     return getattr(_core, name)
@@ -245,8 +259,26 @@ def _create_actor_authority(
         eligible_roles = [
             role_key for role_key in declared_by_role if role_key in caller_by_role
         ]
+        if not eligible_roles:
+            # The caller actor is not the authority for establishing the
+            # subject entity — the subject create operation's own permits are.
+            # A warehouse reserving against an orderId may not hold the order
+            # create role; fall back to the subject's declared roles instead of
+            # reporting the caller as missing.
+            eligible_roles = list(declared_by_role)
     else:
         eligible_roles = list(declared_by_role)
+
+    if len(eligible_roles) > 1:
+        # Management roles (admin/operator/auditor/…) are a fallback authority,
+        # not a business-flow tie-breaker. When one business role remains after
+        # excluding them, it is the unique subject creator.
+        business_roles = [
+            role_key for role_key in eligible_roles
+            if role_key not in _MANAGEMENT_ROLE_KEYS
+        ]
+        if len(business_roles) == 1:
+            eligible_roles = business_roles
 
     if len(eligible_roles) == 1:
         actor_id = declared_by_role[eligible_roles[0]]

@@ -298,6 +298,64 @@ def test_missing_actor_blocks_with_named_reason() -> None:
     assert result["reason_code"] == REASON_NO_ACTOR
 
 
+def test_caller_actor_not_subject_creator_falls_back_to_subject_authority() -> None:
+    """A cross-entity chain must use the subject create operation's own
+    permitted role, not the caller's execution actor.
+
+    A warehouse reserves inventory against an ``orderId``; the order is created
+    by a buyer, not the warehouse. Reusing the caller actor (warehouse) turned
+    that legitimate chain into MULTI_LEVEL_DEPENDENCY_ACTOR_UNRESOLVED.
+    """
+    ir = _base_ir()
+    # Add a warehouse actor that is permitted to reserve but NOT to create the
+    # order; the order create remains permitted only to actor_buyer.
+    ir["actors"].append({
+        "id": "actor_warehouse",
+        "name": "warehouse01",
+        "role": "warehouse",
+        "runtime_bound": True,
+        "credential_secret_ref": "secret_ref:actor:warehouse01",
+    })
+    ir["operations"].append({
+        "id": "op_reserve",
+        "method": "POST",
+        "path": "/api/inventory/reserve",
+        "read_write": "write",
+        "request_example": {"orderId": "<order_id>", "qty": 1, "sku": "SKU-PHONE-001"},
+        "source_refs": [{"kind": "api_operation", "locator": "POST /api/inventory/reserve"}],
+    })
+    ir["relations"].append({
+        "relation_type": "permits",
+        "actor_ref": "actor_warehouse",
+        "operation_ref": "op_reserve",
+        "status": "accepted",
+        "source_refs": [{"kind": "document", "locator": "prd"}],
+    })
+    ir["body_reference_relations"].append({
+        "operation_ref": "op_reserve",
+        "body_path": "orderId",
+        "target_entity_ref": "ent_order",
+        "status": "RESOLVED",
+        "source_refs": [{"kind": "database_foreign_key", "locator": "inventory_locks.order_id -> orders.id"}],
+    })
+
+    result = plan_money_family_precondition(
+        behavior_ir=ir,
+        operation=next(op for op in ir["operations"] if op["id"] == "op_reserve"),
+        actor_refs=["actor_warehouse"],
+        property_spec={},
+        family="conservation",
+        environment_type="test",
+    )
+
+    assert result["status"] == PLANNED
+    # The order establishment runs as the order's own permitted creator
+    # (buyer), not the warehouse caller.
+    create_step = result["steps"][0]
+    assert create_step["operation_ref"] == "op_create_order"
+    assert create_step["actor_ref"] == "actor_buyer"
+
+
 def test_missing_cleanup_blocks_with_named_reason() -> None:
     ir = _base_ir()
     ir["relations"] = [

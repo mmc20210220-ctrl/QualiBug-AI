@@ -108,7 +108,7 @@ def test_two_distinct_permitted_roles_are_ambiguous_not_first() -> None:
     behavior_ir = {
         "actors": [
             {"id": "actor-a", "role": "member"},
-            {"id": "actor-b", "role": "admin"},
+            {"id": "actor-b", "role": "seller"},
         ],
         "relations": [
             {
@@ -143,7 +143,7 @@ def test_caller_role_restriction_can_make_permits_unique() -> None:
     behavior_ir = {
         "actors": [
             {"id": "actor-a", "role": "member"},
-            {"id": "actor-b", "role": "admin"},
+            {"id": "actor-b", "role": "seller"},
         ],
         "relations": [
             {"relation_type": "permits", "operation_ref": "create-address", "actor_ref": "actor-a"},
@@ -160,6 +160,39 @@ def test_caller_role_restriction_can_make_permits_unique() -> None:
     assert actor == "actor-b"
     assert authority == "operation_permits_unique"
     assert eligible == ["actor-b"]
+
+
+def test_business_role_wins_over_management_role() -> None:
+    """A business role is the subject-establishment initiator; a management
+    role (admin/operator/auditor) is a fallback authority, never a tie-breaker
+    that makes a single-business-role chain look ambiguous.
+    """
+    from ai_test_asset_center.multi_level_dependency_chain import (
+        _create_actor_authority,
+    )
+
+    behavior_ir = {
+        "actors": [
+            {"id": "actor-buyer", "role": "buyer"},
+            {"id": "actor-admin", "role": "admin"},
+        ],
+        "relations": [
+            {"relation_type": "permits", "operation_ref": "create-address", "actor_ref": "actor-buyer"},
+            {"relation_type": "permits", "operation_ref": "create-address", "actor_ref": "actor-admin"},
+        ],
+    }
+
+    actor, authority, eligible = _create_actor_authority(
+        create_operation=_create("create-address"),
+        behavior_ir=behavior_ir,
+        actor_refs=[],
+    )
+
+    # buyer (business role) is the unique subject creator; admin (management)
+    # is excluded from the tie-breaker.
+    assert actor == "actor-buyer"
+    assert authority == "operation_permits_unique"
+    assert eligible == ["actor-buyer"]
 
 
 def test_role_and_account_actors_of_same_role_collapse_to_one_authority() -> None:

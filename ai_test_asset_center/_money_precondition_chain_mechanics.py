@@ -429,12 +429,24 @@ def plan_money_family_precondition(
             })
             continue
         create_op_id = _text(create_op.get("id"))
-        chain_actors = list(available_actors)
+        # The subject entity is established by a role the SUBJECT'S create
+        # operation permits, not by the caller's own execution actor. Those two
+        # role sets differ on real flows: a warehouse reserves inventory against
+        # an orderId whose order is created by a buyer. Reusing the caller actor
+        # here turns that legitimate cross-actor chain into
+        # MULTI_LEVEL_DEPENDENCY_ACTOR_UNRESOLVED. Prefer the caller actor only
+        # when it is also a permitted subject creator; otherwise fall back to the
+        # subject create operation's own declared actor authority.
+        declared = _declared_fixture_actor_refs(create_op, behavior_ir=ir)
+        declared_actors = [
+            actor_id for actor_id in declared if actor_id in actors
+        ]
+        chain_actors = [
+            actor_id for actor_id in available_actors
+            if actor_id in declared_actors
+        ]
         if not chain_actors:
-            declared = _declared_fixture_actor_refs(create_op, behavior_ir=ir)
-            chain_actors = [
-                actor_id for actor_id in declared if actor_id in actors
-            ]
+            chain_actors = declared_actors
         if not chain_actors:
             unresolved_reasons.append({
                 "entity_ref": entity_id,
