@@ -565,7 +565,17 @@ def plan_money_family_precondition(
             for index, edge in enumerate(
                 _list(state_result.get("steps")), start=_state_base + 1
             ):
-                steps.append(
+                # The state planner already resolved the governed state field
+                # plus its readback contract for this edge. Preserve them
+                # verbatim: rebuilding a bare step dict here dropped
+                # ``state_field`` / ``readback_contract`` /
+                # ``runtime_body_plan``, so the compile-time state-precondition
+                # freezer blocked every conservation/idempotency experiment
+                # whose money chain advanced the subject's state with
+                # ``BLOCKED_STATE_PRECONDITION_FIELD_MISSING`` — even though the
+                # field was resolvable from the same IR the planner used.
+                advancement = dict(edge)
+                advancement.update(
                     {
                         "step_id": f"money_precondition_state_{index - _state_base}",
                         "phase": "fixture",
@@ -602,6 +612,7 @@ def plan_money_family_precondition(
                         },
                     }
                 )
+                steps.append(advancement)
 
         chain_detail = _dict(chain_result.get("detail"))
         return {

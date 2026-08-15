@@ -107,7 +107,32 @@ def freeze_state_precondition_fields(experiment: dict[str, Any]) -> dict[str, An
     assertion_fields = _assertion_fields(result)
     frozen: list[dict[str, Any]] = []
     bindings: list[dict[str, str]] = []
+    # State-TRANSITION step intents. Only these need a frozen governed state
+    # field. A precondition plan mixes fixture/subject/dependency establishment
+    # steps (create the referenced user/address/order — ``*_establishment``)
+    # with state-advancement steps (cancel the order to reach the declared
+    # pre-state). The establishment steps carry no governed state transition and
+    # the referenced entity often has no STATE field at all (a user). Demanding
+    # a state field on every step blocked every conservation/idempotency
+    # experiment whose subject chain included such a dependency create with
+    # ``BLOCKED_STATE_PRECONDITION_FIELD_MISSING`` — a structural ceiling on
+    # whole risk families, not a missing input. These intent strings are
+    # product-internal step semantics, never industry/business terms.
+    _STATE_TRANSITION_INTENTS = frozenset({
+        "state_precondition_establishment",
+        "money_subject_state_advancement",
+    })
     for step in plan:
+        is_state_transition = bool(
+            _text(step.get("from_state"))
+            or _text(step.get("to_state"))
+            or _text(step.get("intent")) in _STATE_TRANSITION_INTENTS
+        )
+        if not is_state_transition:
+            # Preserve establishment steps verbatim; they carry no governed
+            # state transition and need no frozen state field.
+            frozen.append(step)
+            continue
         declared = _text(step.get("state_field") or step.get("field"))
         candidates: list[str] = []
         if declared:

@@ -594,3 +594,51 @@ def test_plan_is_unchanged_by_industry_terms_inside_descriptions() -> None:
     )
     assert result["status"] == PLANNED
     assert result["create_operation_ref"] == "op_create_order"
+
+
+def test_state_advancement_step_preserves_planner_state_field_and_readback() -> None:
+    """The advancement step must carry the planner-resolved state field verbatim.
+
+    When the source entity declares a STATE-typed field (``status``) and the
+    transition-graph states name their owning entity, the state planner resolves
+    the field and stamps ``state_field`` + ``readback_contract`` +
+    ``runtime_body_plan`` onto each edge. Rebuilding the advancement step as a
+    bare dict dropped all three, so the compile-time freezer blocked the
+    experiment with ``BLOCKED_STATE_PRECONDITION_FIELD_MISSING`` even though the
+    field was resolvable from the same IR — a silent conservation/idempotency
+    breadth loss. The chain must forward those fields unchanged.
+    """
+    ir = _base_ir()
+    # Entity declares the governed STATE field, and each state node names its
+    # owning entity by NAME (matching the real Behavior IR shape).
+    ir["entities"][0]["fields"] = [{"name": "status", "semantic_type": "STATE"}]
+    for state in ir["states"]:
+        state["entity_ref"] = "order"
+    result = plan_money_family_precondition(
+        behavior_ir=ir,
+        operation=_pay_operation(ir),
+        actor_refs=["actor_buyer"],
+        property_spec={
+            "template": "forbidden_state_transition",
+            "from_state": "CANCELLED",
+            "expression": {
+                "kind": "forbidden_state_transition",
+                "operands": [{"from_state": "CANCELLED"}],
+            },
+        },
+        family="idempotency",
+    )
+    assert result["status"] == PLANNED
+    advancement = next(
+        step
+        for step in result["steps"]
+        if step.get("intent") == "money_subject_state_advancement"
+    )
+    assert advancement.get("state_field") == "status"
+    assert advancement.get("readback_contract", {}).get("state_field") == "status"
+    assert (
+        advancement.get("runtime_body_plan", {})
+        .get("readback_contract", {})
+        .get("state_field")
+        == "status"
+    )
