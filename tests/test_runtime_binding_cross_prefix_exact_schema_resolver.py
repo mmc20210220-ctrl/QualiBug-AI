@@ -80,3 +80,48 @@ def test_array_target_does_not_gain_cross_prefix_entity_resolver() -> None:
         "response_schema": _array_response("CustomerSales"),
     }]}
     assert _resolver()(target, behavior_ir=ir) == []
+
+
+def test_schema_exact_resolver_outranks_heuristic_module_prefix_fallback() -> None:
+    """The schema-matched resolver (right entity) must be tried BEFORE the
+    heuristic action-path fallback (wrong entity).
+
+    Regression: status2's ``{id}`` is a USER id (path segment ``users``), but
+    the action-path fallback picked ``GET /api/users/addresses`` (Address rows)
+    because it is the only module-prefix GET that pairs with a create POST.
+    When the addresses collection was non-empty (fixture residue), the executor
+    short-circuited on the WRONG entity's id, cleanup restored the wrong
+    identity and the DELIVERABLE finding was lost.
+    """
+    target = {
+        "id": "status2",
+        "method": "POST",
+        "path": "/api/users/admin/users/{id}/status2",
+        "response_schema": _object_response("User"),
+    }
+    ir = {"operations": [
+        target,
+        {
+            "id": "addresses",
+            "method": "GET",
+            "path": "/api/users/addresses",
+            "response_schema": _array_response("Address"),
+        },
+        {
+            "id": "create-addresses",
+            "method": "POST",
+            "path": "/api/users/addresses",
+            "request_example": {"userId": "<user_id>", "city": "C"},
+        },
+        {
+            "id": "search-users",
+            "method": "GET",
+            "path": "/api/users/admin/search",
+            "response_schema": _array_response("User"),
+        },
+    ]}
+    rows = _resolver()(target, behavior_ir=ir)
+    assert [r["path"] for r in rows] == [
+        "/api/users/admin/search",
+        "/api/users/addresses",
+    ]

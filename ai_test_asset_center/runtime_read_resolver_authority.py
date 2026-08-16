@@ -125,41 +125,77 @@ def install_runtime_read_resolver_authority(target: Any) -> None:
         operation: dict[str, Any], *, behavior_ir: dict[str, Any], max_candidates: int = 2
     ) -> list[dict[str, str]]:
         limit = max(1, min(int(max_candidates or 1), 5))
-        rows = list(original(operation, behavior_ir=behavior_ir, max_candidates=limit))
-        if len(rows) >= limit:
-            return rows[:limit]
-        seen = {(_t(r.get("operation_ref")), _t(r.get("method")), _t(r.get("path"))) for r in rows}
-        path = core.normalize_path_placeholders(_t(_d(operation).get("path")))
-        if not path.startswith("/") or not core.path_has_placeholders(path):
-            return rows[:limit]
-        prefix = core.normalize_path_placeholders(core.collection_path(path)).rstrip("/")
-        refs = _resource_refs(operation, _d(behavior_ir), core)
-        if refs and prefix.startswith("/") and not core.path_has_placeholders(prefix):
-            for candidate in _l(_d(behavior_ir).get("operations")):
-                if not isinstance(candidate, dict):
-                    continue
-                cpath = core.normalize_path_placeholders(_t(candidate.get("path") or candidate.get("raw_path")))
-                key = (_t(candidate.get("id") or candidate.get("operation_id")), "GET", cpath)
-                if (
-                    _t(candidate.get("method")).upper() != "GET" or not key[0]
-                    or not cpath.startswith(prefix + "/") or core.path_has_placeholders(cpath)
-                    or not (refs & _array_refs(candidate)) or key in seen
-                ):
-                    continue
-                rows.append({"operation_ref": key[0], "method": "GET", "path": cpath})
-                seen.add(key)
-                if len(rows) >= limit:
-                    break
-        if len(rows) < limit:
-            candidate = _cross_prefix_exact_schema_candidate(
-                operation,
-                behavior_ir=_d(behavior_ir),
-                core=core,
-                seen=seen,
+        heuristic = list(original(operation, behavior_ir=behavior_ir, max_candidates=limit))
+
+        def _key(row: dict[str, Any]) -> tuple[str, str, str]:
+            return (
+                _t(row.get("operation_ref")),
+                _t(row.get("method")),
+                _t(row.get("path")),
             )
-            if candidate is not None:
-                rows.append(candidate)
-        return rows[:limit]
+
+        # Entity-precise (schema-matched) resolvers must outrank the heuristic
+        # action-path fallback. The fallback picks the first collection under the
+        # module prefix that merely pairs with a create POST; it never verifies
+        # the collection's entity, so it can bind the WRONG entity's id ahead of
+        # the schema-exact resolver. Observed regression: status2's ``{id}``
+        # resolved from GET /api/users/addresses -> Address.id instead of
+        # GET /api/users/admin/search -> User.id, so cleanup restored the wrong
+        # identity and a DELIVERABLE finding was lost. Compute the schema-matched
+        # candidate first and append the heuristic rows after it.
+        schema_rows: list[dict[str, str]] = []
+        seen: set[tuple[str, str, str]] = set()
+        path = core.normalize_path_placeholders(_t(_d(operation).get("path")))
+        if path.startswith("/") and core.path_has_placeholders(path):
+            prefix = core.normalize_path_placeholders(
+                core.collection_path(path)
+            ).rstrip("/")
+            refs = _resource_refs(operation, _d(behavior_ir), core)
+            if refs and prefix.startswith("/") and not core.path_has_placeholders(prefix):
+                for candidate in _l(_d(behavior_ir).get("operations")):
+                    if not isinstance(candidate, dict):
+                        continue
+                    cpath = core.normalize_path_placeholders(
+                        _t(candidate.get("path") or candidate.get("raw_path"))
+                    )
+                    key = (
+                        _t(candidate.get("id") or candidate.get("operation_id")),
+                        "GET",
+                        cpath,
+                    )
+                    if (
+                        _t(candidate.get("method")).upper() != "GET"
+                        or not key[0]
+                        or not cpath.startswith(prefix + "/")
+                        or core.path_has_placeholders(cpath)
+                        or not (refs & _array_refs(candidate))
+                        or key in seen
+                    ):
+                        continue
+                    row = {"operation_ref": key[0], "method": "GET", "path": cpath}
+                    schema_rows.append(row)
+                    seen.add(key)
+                    if len(schema_rows) >= limit:
+                        break
+            if len(schema_rows) < limit:
+                candidate = _cross_prefix_exact_schema_candidate(
+                    operation,
+                    behavior_ir=_d(behavior_ir),
+                    core=core,
+                    seen=seen,
+                )
+                if candidate is not None:
+                    schema_rows.append(candidate)
+                    seen.add(_key(candidate))
+
+        ordered = list(schema_rows)
+        for row in heuristic:
+            key = _key(row)
+            if key in seen:
+                continue
+            ordered.append(row)
+            seen.add(key)
+        return ordered[:limit]
 
     for module in (core, authority, semantic, target):
         module.declared_runtime_read_resolvers = declared_runtime_read_resolvers
