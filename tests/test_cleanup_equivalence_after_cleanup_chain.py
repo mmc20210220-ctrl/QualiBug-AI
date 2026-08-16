@@ -833,3 +833,52 @@ def test_requires_cleanup_equivalence_tolerates_blocked_write_status() -> None:
     assert _requires_cleanup_equivalence(
         safety_contract={}, steps_out=steps
     ) is False
+
+
+def test_adapter_cleanup_from_step_body_when_receipts_argument_empty() -> None:
+    """Adapter DB-SQL cleanup steps carry their audit receipt in the step BODY,
+    and the after-cleanup observation GET is also phase=cleanup. When the
+    ``adapter_cleanup_receipts`` argument is empty (the executor did not populate
+    it for this path), the receipt builder must fall back to the step-body
+    adapter receipts instead of misreading the adapter write through the
+    governed-write branch as ``CLEANUP_GOVERNANCE_AUDIT_RECEIPT_MISSING`` —
+    which dropped proven VIOLATION findings as
+    ``cleanup_transport_failed:status=200``.
+    """
+    receipt = build_cleanup_execution_receipt(
+        experiment_id="exp_1",
+        proof_id="wrp_1",
+        cleanup_plan=[{"adapter": "db_sql", "table": "users", "identity_column": "id"}],
+        steps_out=[
+            # after-cleanup observation GET (phase=cleanup, no governance accept)
+            {"phase": "cleanup", "method": "GET", "path": "/api/users/admin/export", "status_code": 200, "governance_receipt": {"accepted": False}},
+            # adapter DB-SQL cleanup step: body carries the adapter receipt
+            {
+                "phase": "cleanup",
+                "method": "ADAPTER_DB_SQL",
+                "path": "/api/users/admin/export",
+                "status_code": 200,
+                "governance_receipt": {"accepted": True, "status": "executed", "reason": "adapter_cleanup_cleaned"},
+                "body": {
+                    "schema_version": "qualibug.cleanup-adapter-execution.v1",
+                    "receipt_id": "cleanup_adapter_1",
+                    "adapter": "db_sql",
+                    "table": "users",
+                    "identity_column": "id",
+                    "identity_value": "u-1",
+                    "status": "CLEANED",
+                    "reason_code": "",
+                    "rows_deleted": 1,
+                    "mode": "row_delete",
+                    "ownership_basis": "creation_receipt",
+                },
+            },
+        ],
+        cleanup_failures=0,
+        cleanup_status="cleaned",
+        proof=_proof(),
+        adapter_cleanup_receipts=[],
+    )
+    assert receipt["succeeded"] is True
+    assert receipt["status"] == "ACCEPTED"
+    assert receipt["source_receipt_ids"] == ["cleanup_adapter_1"]

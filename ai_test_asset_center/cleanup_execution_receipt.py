@@ -92,6 +92,24 @@ def build_cleanup_execution_receipt(
     adapter_receipts = [
         row for row in _list(adapter_cleanup_receipts) if isinstance(row, dict)
     ]
+    # Adapter DB-SQL cleanup steps carry their audit receipt in the step body
+    # (a ``qualibug.cleanup-adapter-execution.v1`` receipt), and the
+    # after-cleanup observation GET is also tagged ``phase="cleanup"``. So
+    # ``cleanup_steps`` can be non-empty even when the real cleanup was an
+    # adapter write, and the ``adapter_cleanup_receipts`` argument may not have
+    # been populated for that path. Fall back to the step-body receipts so the
+    # adapter authority below still judges them instead of the governed-write
+    # branch misreading a cleaned adapter write as
+    # ``CLEANUP_GOVERNANCE_AUDIT_RECEIPT_MISSING`` (which dropped proven
+    # VIOLATION findings as ``cleanup_transport_failed:status=200``).
+    if not adapter_receipts:
+        adapter_receipts = [
+            _dict(step.get("body"))
+            for step in cleanup_steps
+            if isinstance(step, dict)
+            and _text(_dict(step.get("body")).get("schema_version"))
+            == "qualibug.cleanup-adapter-execution.v1"
+        ]
 
     # ── Accepted-residue mode seals an explicit waiver, not a restoration ──
     # A cleanup plan whose every entry is accepted_residue means the target's
@@ -151,7 +169,7 @@ def build_cleanup_execution_receipt(
             detail="no_cleanup_plan_declared",
         )
 
-    if not cleanup_steps:
+    if not cleanup_steps or adapter_receipts:
         if adapter_receipts:
             cleaned = [
                 row
