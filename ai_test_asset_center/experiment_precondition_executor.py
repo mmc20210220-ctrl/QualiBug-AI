@@ -34,6 +34,7 @@ from .runtime_binding_graph import (
     _request_example as _tokenized_request_example,
 )
 from .sandbox_write_executor import execute_governed_control_write
+from .validation_read_side_protocol import is_ownership_key
 
 
 SCHEMA_VERSION = "qualibug.precondition-execution.v1"
@@ -151,6 +152,34 @@ def _target_verdict(
     # reads the governed write response instead of a post-write readback GET.
     if step.get("observe_response_body") is True:
         after = _dict(governed.get("write"))
+        # Pure establishment create (no declared target state): the governed
+        # create RESPONSE is the observation, and the establishment "reached"
+        # iff the create was accepted. No state field is ever invented — the
+        # caller captures the created identity from the response body. Without
+        # this branch an establishment step fell into the
+        # target_or_state_field_missing failure below and every multi-level
+        # dependency create reported NOT_OBSERVED even after its write was
+        # accepted, so the chain could never establish a subject.
+        if not target_state:
+            after_status = int(
+                after.get("status") or after.get("status_code") or 0
+            )
+            reached = 200 <= after_status < 300
+            return {
+                "observed": True,
+                "reached": reached,
+                "reason_code": (
+                    "" if reached else BLOCKED_PRECONDITION_TARGET_NOT_OBSERVED
+                ),
+                "detail": (
+                    ""
+                    if reached
+                    else f"establishment_write_status_not_success:{after_status}"
+                ),
+                "state_field": state_field,
+                "target_state": target_state,
+                "observed_values": [],
+            }
     else:
         after = _dict(
             governed.get("response_bound_after")
@@ -430,6 +459,27 @@ def execute_precondition_plan(
         body = materialize_body_template(body_template, runtime_bindings)
         unresolved_path = _unresolved_path_placeholders(path)
         unresolved_body = _unresolved_body_placeholders(body, runtime_bindings)
+        # Caller-scoped ownership identity params (userId/ownerId/accountId/…)
+        # carry the executing actor's own identity, not a referenced entity. A
+        # documented example may still tokenize such a field into a ``{userId}``
+        # placeholder with no collection to read it from (a user identity is
+        # runtime-observed material, never a list row of a users collection the
+        # caller may or may not be allowed to list). Resolve those placeholders
+        # from the step actor's login-observed account_id — the same channel the
+        # fixture materializer uses for ``ownership_identity_param``. The field
+        # is matched structurally (is_ownership_key), never by industry terms.
+        _ownership_identity = _text(actor.get("account_id"))
+        if _ownership_identity and unresolved_body:
+            _ownership_tokens = [
+                token for token in unresolved_body if is_ownership_key(token)
+            ]
+            if _ownership_tokens:
+                for _ownership_token in _ownership_tokens:
+                    runtime_bindings[_ownership_token] = _ownership_identity
+                body = materialize_body_template(body_template, runtime_bindings)
+                unresolved_body = _unresolved_body_placeholders(
+                    body, runtime_bindings
+                )
         if unresolved_path or unresolved_body:
             return {
                 "schema_version": SCHEMA_VERSION,
