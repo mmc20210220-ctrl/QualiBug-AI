@@ -402,23 +402,29 @@ def _authorization_delivery_failure(
 ) -> dict[str, Any]:
     blocked = dict(result)
     blocked["finding"] = None
-    if _text(blocked.get("status")).upper() not in {"BLOCKED", "HARNESS_FAILURE"}:
-        blocked["status"] = "EXECUTED"
+    # An authorization finding whose causal delivery evidence is invalid cannot
+    # be delivered. This is a causal-proof gap (the executor correctly refused
+    # to seal an unprovable binding), NOT a clean EXECUTED-with-no-finding and
+    # NOT a harness failure. Record it as BLOCKED so the batch ledger routes it
+    # to the blocked bucket instead of the delivery path, which would try to
+    # build a delivery receipt from a non-receipt oracle verdict and crash.
+    blocked["status"] = "BLOCKED"
     blocked["reason_code"] = "AUTHORIZATION_DELIVERY_EVIDENCE_INVALID"
     blocked["detail"] = str(exc)
-    verdict = dict(
-        blocked.get("oracle_verdict")
-        if isinstance(blocked.get("oracle_verdict"), dict)
-        else {}
-    )
-    verdict.update({
+    # A clean minimal gate-block verdict: no schema_version, no receipt_id, no
+    # activation, no assertions. This is deliberately NOT a sealed oracle
+    # receipt — it carries the demotion marker and the reason, and the batch
+    # executor treats any non-receipt gate block as a block instead of trying
+    # to validate it as a full receipt (which raised
+    # contract_oracle_receipt_fingerprint_invalid and discarded the outcome as
+    # HARNESS_FAILED).
+    blocked["oracle_verdict"] = {
         "status": "INDETERMINATE",
         "verdict": "blocked_experiment",
         "customer_deliverable_candidate": False,
         "authorization_delivery_gate": "INDETERMINATE",
         "authorization_delivery_reason": str(exc),
-    })
-    blocked["oracle_verdict"] = verdict
+    }
     return blocked
 
 

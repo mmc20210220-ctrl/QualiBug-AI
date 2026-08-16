@@ -745,11 +745,26 @@ def execute_selected_experiments(
         # contract_oracle_receipt_fields_invalid and killed the entire pipeline: on a live
         # target the scan failed outright while the HTTP envelope still said ok: true.
         #
+        # The authorization delivery gate produces the same shape of non-receipt
+        # block: {status, verdict, customer_deliverable_candidate,
+        # authorization_delivery_gate, authorization_delivery_reason} with no
+        # schema_version / receipt_id. Treat both as non-receipt blocks so neither
+        # is validated as a sealed receipt (which raised
+        # contract_oracle_receipt_fingerprint_invalid and discarded the outcome as
+        # HARNESS_FAILED).
+        #
         # Anything CLAIMING to be a receipt is still validated strictly. Only a verdict
         # that carries neither schema_version nor receipt_id, and says why it was blocked,
         # is carried through as the block it is.
-        _is_gate_block = bool(oracle_verdict.get("oracle_blocked_by_completeness_gate")) and not (
-            _text(oracle_verdict.get("schema_version")) or _text(oracle_verdict.get("receipt_id"))
+        _is_gate_block = (
+            bool(
+                oracle_verdict.get("oracle_blocked_by_completeness_gate")
+                or oracle_verdict.get("authorization_delivery_gate")
+            )
+            and not (
+                _text(oracle_verdict.get("schema_version"))
+                or _text(oracle_verdict.get("receipt_id"))
+            )
         )
         if oracle_verdict and not _is_gate_block:
             try:
