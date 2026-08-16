@@ -1035,3 +1035,43 @@ def test_zero_effect_without_already_absent_reason_stays_invalid() -> None:
     )
     assert receipt["succeeded"] is False
     assert receipt["reason_code"] == "ADAPTER_CLEANUP_CARDINALITY_INVALID"
+
+
+def test_mixed_plan_residue_accepted_seals_waiver_not_attempted() -> None:
+    """A MIXED cleanup plan (some state-unchanged, one accepted_residue) resolves
+    to cleanup_status=residue_accepted with no transport. It must seal the same
+    explicit accepted-residue waiver as the all-residue plan — NOT
+    CLEANUP_NOT_ATTEMPTED, which the equivalence gate drops the proven
+    VIOLATION finding over."""
+    receipt = build_cleanup_execution_receipt(
+        experiment_id="exp_1",
+        proof_id="wrp_1",
+        cleanup_plan=[
+            {"action": "restore_before_snapshot", "mode": "snapshot_restore"},
+            {"action": "accepted_residue", "mode": "accepted_residue_no_cleanup"},
+        ],
+        steps_out=[
+            # after-cleanup observation GET only (no real cleanup write)
+            {
+                "phase": "cleanup",
+                "method": "GET",
+                "path": "/api/refunds",
+                "status_code": 200,
+                "governance_receipt": {
+                    "accepted": False,
+                    "reason": "post_cleanup_readback",
+                    "method": "GET",
+                    "before": {},
+                    "write": {},
+                    "after": {"status": 200, "body": {"ok": True}},
+                },
+            }
+        ],
+        cleanup_failures=0,
+        cleanup_status="residue_accepted",
+        proof={"cleanup_authority": {"mode": "snapshot_restore"}},
+        adapter_cleanup_receipts=[],
+    )
+    assert receipt["status"] == "NOT_REQUIRED"
+    assert receipt["reason_code"] == "ACCEPTED_RESIDUE_NO_CLEANUP"
+    assert receipt["cleanup_mode"] == "accepted_residue_no_cleanup"

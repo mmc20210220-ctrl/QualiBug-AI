@@ -320,6 +320,37 @@ def build_cleanup_execution_receipt(
                 detail="accepted_write_state_unchanged_or_explicit_not_required",
             )
 
+        # Accepted-residue degradation (declared non-production, no source
+        # compensator): the write's leftover is deliberately accepted with an
+        # audit receipt and reset externally. A mixed cleanup plan (some state
+        # unchanged, one residue) resolves to cleanup_status="residue_accepted"
+        # without ever firing a transport, so it must seal the same explicit
+        # waiver as the all-residue plan branch above — otherwise the
+        # equivalence gate misreads it as CLEANUP_NOT_ATTEMPTED and drops the
+        # proven VIOLATION finding.
+        if cleanup_status.lower() in {"residue_accepted", "residue"}:
+            return _build_receipt(
+                experiment_id=experiment_id,
+                proof_id=proof_id,
+                cleanup_operation_ref=cleanup_operation_ref,
+                cleanup_authority=cleanup_authority
+                or "accepted_residue_no_cleanup",
+                attempted=False,
+                transport_reached=False,
+                method=_first_cleanup_method(cleanup_plan),
+                path_template=_first_cleanup_path(cleanup_plan),
+                materialized_path="",
+                request_body_fingerprint="",
+                identity_bindings={},
+                status_code=0,
+                response_body_fingerprint="",
+                succeeded=False,
+                status=STATUS_NOT_REQUIRED,
+                reason_code="ACCEPTED_RESIDUE_NO_CLEANUP",
+                detail="accepted_residue_explicit_waiver",
+                cleanup_mode="accepted_residue_no_cleanup",
+            )
+
         if cleanup_status == "blocked":
             status = STATUS_BLOCKED
             reason = "CLEANUP_BLOCKED_BEFORE_TRANSPORT"
