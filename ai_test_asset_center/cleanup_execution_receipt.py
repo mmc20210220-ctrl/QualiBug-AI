@@ -58,6 +58,14 @@ def _cleaned_adapter_receipt_error(receipt: dict[str, Any]) -> str:
     affected = int(receipt.get("rows_deleted") or 0) + int(
         receipt.get("rows_updated") or 0
     )
+    # CLEANUP_ROW_ALREADY_ABSENT is a legitimate idempotent outcome: the row was
+    # already gone / fields already at target values, so 0 affected rows is the
+    # expected result, not a cardinality failure. Rejecting it dropped proven
+    # VIOLATION findings whose second cleanup step re-observed an already-absent
+    # row (inventory transfer, refund-to-balance) as
+    # ADAPTER_CLEANUP_CARDINALITY_INVALID.
+    if affected == 0 and _text(receipt.get("reason_code")) == "CLEANUP_ROW_ALREADY_ABSENT":
+        return ""
     if affected != 1:
         return "ADAPTER_CLEANUP_CARDINALITY_INVALID"
     return ""

@@ -971,3 +971,67 @@ def test_observation_only_get_is_not_cleanup_transport() -> None:
     assert receipt["status"] == "NOT_REQUIRED"
     assert receipt["succeeded"] is False
     assert receipt["reason_code"] == "CLEANUP_NOT_REQUIRED"
+
+
+def test_cleanup_row_already_absent_is_not_cardinality_invalid() -> None:
+    """A cleaned adapter receipt whose reason is CLEANUP_ROW_ALREADY_ABSENT has
+    0 affected rows by design (the row was already gone). It must NOT be
+    rejected as ADAPTER_CLEANUP_CARDINALITY_INVALID — that rejection dropped
+    proven VIOLATION findings whose second cleanup step re-observed an
+    already-absent row (inventory transfer, refund-to-balance)."""
+    receipt = build_cleanup_execution_receipt(
+        experiment_id="exp_1",
+        proof_id="wrp_1",
+        cleanup_plan=[{"adapter": "db_sql", "table": "inventory", "identity_column": "sku"}],
+        steps_out=[],
+        cleanup_failures=0,
+        cleanup_status="cleaned",
+        proof=_proof(),
+        adapter_cleanup_receipts=[
+            {
+                "receipt_id": "cleanup_adapter_1",
+                "status": "CLEANED",
+                "adapter": "db_sql",
+                "table": "inventory",
+                "identity_column": "sku",
+                "identity_value": "SKU-PHONE-001",
+                "mode": "row_delete",
+                "ownership_basis": "creation_receipt",
+                "rows_deleted": 0,
+                "rows_updated": 0,
+                "reason_code": "CLEANUP_ROW_ALREADY_ABSENT",
+            }
+        ],
+    )
+    assert receipt["succeeded"] is True
+    assert receipt["status"] == "ACCEPTED"
+
+
+def test_zero_effect_without_already_absent_reason_stays_invalid() -> None:
+    """Counter-case: 0 affected rows WITHOUT the CLEANUP_ROW_ALREADY_ABSENT
+    reason is still a cardinality failure (fail-closed)."""
+    receipt = build_cleanup_execution_receipt(
+        experiment_id="exp_1",
+        proof_id="wrp_1",
+        cleanup_plan=[{"adapter": "db_sql", "table": "inventory", "identity_column": "sku"}],
+        steps_out=[],
+        cleanup_failures=0,
+        cleanup_status="cleaned",
+        proof=_proof(),
+        adapter_cleanup_receipts=[
+            {
+                "receipt_id": "cleanup_adapter_1",
+                "status": "CLEANED",
+                "adapter": "db_sql",
+                "table": "inventory",
+                "identity_column": "sku",
+                "identity_value": "SKU-PHONE-001",
+                "mode": "row_delete",
+                "ownership_basis": "creation_receipt",
+                "rows_deleted": 0,
+                "rows_updated": 0,
+            }
+        ],
+    )
+    assert receipt["succeeded"] is False
+    assert receipt["reason_code"] == "ADAPTER_CLEANUP_CARDINALITY_INVALID"
