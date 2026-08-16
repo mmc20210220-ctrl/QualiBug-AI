@@ -381,6 +381,42 @@ def test_materializer_stays_blocked_without_declared_environment(
     assert not governed_calls, "undeclared environment must not create fixtures"
 
 
+def test_materializer_resolves_environment_from_safety_contract_stamp(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The compiled experiment stamps the env on ``safety_contract``, not top-level.
+
+    The real compiler emits ``safety_contract.environment_type`` and NO top-level
+    ``environment_type`` key. Reading only the absent top-level key made every
+    non-production run look undeclared, so accepted-residue fixture creation
+    (the only legal path when a create has no DELETE compensator) was refused as
+    ``fixture_setup_missing_cleanup`` — a structural breadth loss, not a missing
+    input. The materializer must read the authoritative stamped field.
+    """
+    monkeypatch.setattr(
+        "ai_test_asset_center.experiment_fixture_materializer_core._run_http_step",
+        _empty_list_step,
+    )
+    governed_calls: list[dict] = []
+    monkeypatch.setattr(
+        "ai_test_asset_center.experiment_fixture_materializer_core."
+        "execute_governed_control_write",
+        _created_thing_governed_write(governed_calls),
+    )
+    inputs = _residue_inputs("")
+    # Remove the top-level env (the historical test shape) and stamp it where
+    # the real compiler puts it — inside safety_contract.
+    inputs["exp"].pop("environment_type", None)
+    inputs["exp"]["safety_contract"]["environment_type"] = "test"
+    result = materialize_experiment_fixtures(**inputs)
+    assert result["status"] == "ready"
+    assert result["runtime_bindings"].get("thing_id") == "thing-1"
+    assert len(governed_calls) == 1
+    pending = result["pending_fixture_cleanups"]
+    assert len(pending) == 1
+    assert pending[0]["accepted_residue"]["mode"] == "accepted_residue_no_cleanup"
+
+
 # ── Cleanup phase: RESIDUE_ACCEPTED receipt, no transport ───────────────
 
 

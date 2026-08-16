@@ -588,8 +588,21 @@ def materialize_experiment_fixtures(
     # the compiled experiment; undeclared/unknown stays fail-closed here too).
     from .target_policy import is_nonproduction_environment
 
+    # The compiler stamps the declared environment onto
+    # ``safety_contract.environment_type`` — there is no top-level
+    # ``environment_type`` key on a compiled experiment. Reading the absent
+    # top-level key made every non-production run look undeclared, so accepted-
+    # residue fixture creation (the only legal path when a create has no DELETE
+    # compensator, e.g. order create → no order DELETE) was refused and the
+    # experiment blocked as ``fixture_setup_missing_cleanup``. Resolve the env
+    # from the authoritative stamped field, keeping the historical top-level key
+    # as a compatibility fallback.
+    _declared_environment_type = _text(
+        _dict(exp.get("safety_contract")).get("environment_type")
+        or exp.get("environment_type")
+    )
     _accepted_residue_allowed = is_nonproduction_environment(
-        _text(exp.get("environment_type"))
+        _declared_environment_type
     )
 
     # ── P0-3: Cleanup authority preflight — before ANY fixture write ──
