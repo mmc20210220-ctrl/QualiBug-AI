@@ -263,6 +263,56 @@ def _state_goal_from_property(property_spec: dict[str, Any]) -> str:
     return normalized
 
 
+def _state_subject_pair(
+    behavior_ir: dict[str, Any],
+    property_spec: dict[str, Any],
+) -> tuple[str, str] | None:
+    """Resolve ``(entity_id, reference_field)`` for a state-family subject.
+
+    A state obligation whose measured write is a path-param transition carries
+    no body reference field, so the subject cannot be found from the example.
+    The subject entity is the state machine's own entity — the entity_ref the
+    state precondition planner projects from the goal state. Its identity flows
+    into the transition step's path placeholder (``{id}``), so the reference
+    field is the entity's structural identity field, never a guessed body name.
+    """
+    goal = _state_goal_from_property(property_spec)
+    if not goal:
+        return None
+    from .state_precondition_planner import (
+        _entity_ref_of_state,
+        build_transition_graph,
+    )
+
+    adjacency = build_transition_graph(behavior_ir)
+    entity_ref = _text(_entity_ref_of_state(behavior_ir, adjacency, goal))
+    if not entity_ref:
+        return None
+    entities = [
+        row for row in _list(behavior_ir.get("entities")) if isinstance(row, dict)
+    ]
+    entity = next(
+        (
+            row
+            for row in entities
+            if _text(row.get("id")) == entity_ref
+            or _text(row.get("name")).lower() == entity_ref.lower()
+        ),
+        None,
+    )
+    if entity is None:
+        return None
+    identity_fields = [
+        _text(value)
+        for value in _list(entity.get("identity_fields"))
+        if _text(value)
+    ]
+    reference_field = identity_fields[0] if identity_fields else _text(entity.get("name"))
+    if not reference_field:
+        return None
+    return _text(entity.get("id")), reference_field
+
+
 def _readback_contract_for_entity(
     behavior_ir: dict[str, Any],
     create_path: str,
@@ -393,6 +443,14 @@ def plan_money_family_precondition(
     nonproduction = is_nonproduction_environment(environment_type)
     example = _request_example(operation)
     subject_pairs = _subject_entities_from_example(example, ir)
+    if not subject_pairs and _text(family) == "state":
+        # State-family subject: a path-param transition write (ship
+        # /api/orders/{id}/ship) has no body reference field, so the subject
+        # resolves from the state machine's own entity instead. Its identity
+        # flows into the transition step's path placeholder.
+        state_pair = _state_subject_pair(ir, _dict(property_spec))
+        if state_pair:
+            subject_pairs = [state_pair]
     if not subject_pairs:
         return {
             "status": NOT_APPLICABLE,

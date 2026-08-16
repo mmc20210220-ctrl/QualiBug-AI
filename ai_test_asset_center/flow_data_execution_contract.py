@@ -100,7 +100,11 @@ def _ambiguity_issues(
         for row in _list(req.get("step_requirements"))
         if isinstance(row, dict) and _text(row.get("step_id"))
     }
-    prior_identity_producers: dict[str, set[str]] = {}
+    # Identity producers are namespaced by the entity they establish. Two
+    # different entities (address, order) each emit the bare alias ``id``; a
+    # consumer scoped to the order entity must resolve only order's producer,
+    # never be reported ambiguous against the address entity's id.
+    prior_identity_producers: dict[tuple[str, str], set[str]] = {}
 
     for phase, step in steps:
         step_id = _text(step.get("step_id") or step.get("id"))
@@ -186,7 +190,24 @@ def _ambiguity_issues(
             if _text(value)
         }
         for target in sorted(required_targets):
-            producers = set(prior_identity_producers.get(target) or set())
+            # A consuming step scopes its identity consumption with
+            # ``subject_entity_ref`` (the entity whose identity field its path/
+            # body placeholder names). Scoped, it resolves within that entity's
+            # namespace; unscoped, every entity's producer for the bare target is
+            # a candidate, so cross-entity collisions stay ambiguous (fail closed).
+            consumer_entity_ref = _text(step.get("subject_entity_ref"))
+            if consumer_entity_ref:
+                producers = set(
+                    prior_identity_producers.get((consumer_entity_ref, target))
+                    or set()
+                )
+            else:
+                producers = set()
+                for (entity_ref, candidate_target), step_ids in (
+                    prior_identity_producers.items()
+                ):
+                    if candidate_target == target:
+                        producers.update(step_ids)
             if len(producers) <= 1:
                 continue
             if not (
@@ -218,8 +239,11 @@ def _ambiguity_issues(
                     }
                 )
             if phase == "precondition" and valid_output:
+                entity_ref = _text(identity_output.get("entity_ref"))
                 for target in output_targets:
-                    prior_identity_producers.setdefault(target, set()).add(step_id)
+                    prior_identity_producers.setdefault(
+                        (entity_ref, target), set()
+                    ).add(step_id)
 
     return issues
 

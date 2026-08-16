@@ -107,6 +107,30 @@ def _text(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _resolve_state_subject_entity_ref(
+    behavior_ir: dict[str, Any],
+    *,
+    from_state: str,
+) -> str:
+    """Resolve the state machine's own entity ref for a path-param transition.
+
+    Reuses the money-chain subject resolution (``_state_subject_pair``), which
+    derives the entity from the state goal's owning entity — the same authority
+    the state precondition planner projects. Returns "" when the goal or entity
+    cannot be established; the flow-data contract then keeps its fail-closed
+    (unscoped) ambiguity semantics.
+    """
+    if not _text(from_state):
+        return ""
+    from ._money_precondition_chain_mechanics import _state_subject_pair
+
+    pair = _state_subject_pair(
+        behavior_ir,
+        {"from_state": from_state},
+    )
+    return _text(pair[0]) if pair else ""
+
+
 def _request_schema_required_fields(operation: dict[str, Any]) -> list[str]:
     """Source-declared required body fields from flat or OpenAPI request schema."""
     schema = _dict(operation.get("request_schema") or operation.get("requestBody"))
@@ -1456,7 +1480,7 @@ def compile_experiment_for_obligation(
         is_write
         and family in _MONEY_PRECONDITION_FAMILIES
         and not permit_only
-        and _example_reference_fields
+        and (_example_reference_fields or family == "state")
     ):
         try:
             from .money_precondition_chain import (
@@ -3181,6 +3205,19 @@ def compile_experiment_for_obligation(
             "from_state_ref": _text(prop.get("from_state_ref")),
             "to_state_ref": _text(prop.get("to_state_ref")),
         }
+        # Entity-namespaced identity scope: a path-param transition (ship
+        # /api/orders/{id}/ship) consumes the state machine's own entity's
+        # identity field (``id``). The multi-level precondition chain also
+        # establishes other entities (address) that emit the same bare ``id``;
+        # stamping the subject entity ref here lets the flow-data execution
+        # contract resolve the treatment's ``{id}`` to the order entity's
+        # producer instead of reporting an address-vs-order ambiguity.
+        _st_subject_entity_ref = _resolve_state_subject_entity_ref(
+            ir,
+            from_state=_text(prop.get("from_state")),
+        )
+        if _st_subject_entity_ref:
+            treatment_rows[0]["subject_entity_ref"] = _st_subject_entity_ref
         # Postcondition causal-chain assertions use a dedicated evaluation path
         # that checks entity_state observer evidence (state_change_count, effect_count)
         # rather than requiring explicit from_state/to_state values.
