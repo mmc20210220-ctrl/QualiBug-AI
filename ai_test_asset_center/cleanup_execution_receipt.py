@@ -84,10 +84,20 @@ def build_cleanup_execution_receipt(
     cleanup_operation_ref = _text(
         _dict(proof.get("cleanup_authority")).get("cleanup_operation_ref")
     )
+    # A cleanup TRANSPORT step is always a write (DELETE/PUT/PATCH/POST or
+    # ADAPTER_DB_SQL). ``seal_after_cleanup_observation`` appends a read-only
+    # GET tagged ``phase="cleanup"`` whose governance receipt marks it
+    # ``reason="post_cleanup_readback"`` / ``accepted=False`` — that is an
+    # observation, never a cleanup write. Including it in ``cleanup_steps`` made
+    # a NOT_REQUIRED cleanup (accepted write state unchanged, no real write)
+    # look like a failed transport, dropping proven VIOLATION findings as
+    # ``CLEANUP_GOVERNANCE_ACCEPTANCE_MISSING``.
     cleanup_steps = [
         step
         for step in steps_out
-        if isinstance(step, dict) and _text(step.get("phase")) == "cleanup"
+        if isinstance(step, dict)
+        and _text(step.get("phase")) == "cleanup"
+        and _text(step.get("method")).upper() != "GET"
     ]
     adapter_receipts = [
         row for row in _list(adapter_cleanup_receipts) if isinstance(row, dict)

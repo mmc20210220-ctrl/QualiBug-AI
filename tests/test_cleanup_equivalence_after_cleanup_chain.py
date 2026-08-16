@@ -933,3 +933,41 @@ def test_adapter_row_delete_is_authoritative_when_route_not_declared() -> None:
         cleanup_execution_receipt=cleanup_exec,
     )
     assert receipt["equivalence_status"] == "EQUIVALENT"
+
+
+def test_observation_only_get_is_not_cleanup_transport() -> None:
+    """The after-cleanup observation GET is tagged phase=cleanup but is
+    read-only (reason=post_cleanup_readback, accepted=False). It must never be
+    treated as a cleanup TRANSPORT step — otherwise a NOT_REQUIRED cleanup
+    (accepted write state unchanged) is misread as a failed transport and the
+    proven VIOLATION finding is dropped as CLEANUP_GOVERNANCE_ACCEPTANCE_MISSING."""
+    receipt = build_cleanup_execution_receipt(
+        experiment_id="exp_1",
+        proof_id="wrp_1",
+        cleanup_plan=[{"action": "restore_before_snapshot", "mode": "snapshot_restore"}],
+        steps_out=[
+            {
+                "phase": "cleanup",
+                "method": "GET",
+                "path": "/api/payments/health",
+                "status_code": 200,
+                "governance_receipt": {
+                    "accepted": False,
+                    "status": "executed",
+                    "reason": "post_cleanup_readback",
+                    "method": "GET",
+                    "before": {},
+                    "write": {},
+                    "after": {"status": 200, "body": {"ok": True}},
+                    "write_request_attempt_count": 0,
+                },
+            }
+        ],
+        cleanup_failures=0,
+        cleanup_status="not_required",
+        proof={"cleanup_authority": {"mode": "snapshot_restore"}},
+        adapter_cleanup_receipts=[],
+    )
+    assert receipt["status"] == "NOT_REQUIRED"
+    assert receipt["succeeded"] is False
+    assert receipt["reason_code"] == "CLEANUP_NOT_REQUIRED"
