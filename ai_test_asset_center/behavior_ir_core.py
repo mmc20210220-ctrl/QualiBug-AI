@@ -4288,6 +4288,31 @@ def build_behavior_ir_from_knowledge_asset(
                 _table_db_columns.setdefault(_dt_name, {}).setdefault(
                     _col_name, {"name": _col}
                 )
+        # Project DB CHECK enum constraints (``col IN ('A','B',...)``) onto the
+        # column entry as ``enum`` so the entity field node carries the
+        # database-declared legal value set. Without this the enum lives only in
+        # the parsed ``check_constraints`` and never reaches IR ``enum_values``,
+        # so example-enum normalization and persistence assertions have no legal
+        # set to judge against — a fixture write could send a value the DB CHECK
+        # rejects and crash the target (observed: product.status=ACTIVE into
+        # products_status_check). A field_dictionary / OpenAPI schema ``enum`` is
+        # higher precision and wins; the DB CHECK is the fallback source.
+        for _cc in _list(_dt.get("check_constraints")):
+            if not isinstance(_cc, dict):
+                continue
+            _cc_column = _text(_cc.get("column")).lower()
+            _cc_values = [
+                _text(value)
+                for value in _list(_cc.get("values"))
+                if _text(value)
+            ]
+            if not _cc_column or not _cc_values:
+                continue
+            _cc_entry = _table_db_columns.setdefault(_dt_name, {}).setdefault(
+                _cc_column, {"name": _cc_column}
+            )
+            if not _list(_cc_entry.get("enum")):
+                _cc_entry["enum"] = _cc_values
 
     # Supplement from top-level field_dictionary (has table→field mappings)
     for _fd_top in _list(data.get("field_dictionary")):

@@ -153,3 +153,33 @@ def test_explicit_source_rule_remains_the_business_invariant_channel() -> None:
     assert source_invariants[0]["derivation"] == "explicit"
     assert (source_invariants[0].get("expression") or {}).get("operator") == "within_bound"
     assert _removed_schema_invariants(ir) == []
+
+
+def test_ddl_check_enum_projects_into_entity_field_enum_values() -> None:
+    """A DB CHECK ``col IN (...)`` is source-declared legal-value material.
+
+    The DDL parser emits ``check_constraints`` rows of the shape
+    ``{column, operator: "in", values: [...]}``. Those values must reach the
+    entity field's ``enum_values`` so example-enum normalization and fixture
+    writes judge against the database's real legal set. Without this, a fixture
+    body could send a value the DB CHECK rejects (observed: product status
+    ACTIVE into ``products_status_check``) and crash the target.
+    """
+    asset = _schema_only_asset()
+    asset["data_tables"][0]["check_constraints"] = [
+        {"column": "status", "operator": "in", "values": ["OPEN", "CLOSED"]},
+    ]
+
+    ir = build_behavior_ir_from_knowledge_asset(
+        asset, api_operations=_generic_operations()
+    )
+    records = next(row for row in ir["entities"] if row.get("name") == "records")
+    fields = {
+        row.get("name"): row
+        for row in records.get("fields", [])
+        if isinstance(row, dict) and row.get("name")
+    }
+
+    assert fields["status"]["enum_values"] == ["OPEN", "CLOSED"]
+    assert _removed_schema_invariants(ir) == []
+
