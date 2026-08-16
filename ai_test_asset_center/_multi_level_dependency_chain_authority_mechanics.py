@@ -21,6 +21,8 @@ from typing import Any
 from . import _multi_level_dependency_chain_mechanics as _core
 from .body_reference_authority import resolve_body_reference
 from .money_precondition_chain import _create_operation_candidates_for_entity
+from .obligation_compiler_base import _operation_declares_ownership_language
+from .validation_read_side_protocol import is_ownership_key
 
 for _name in dir(_core):
     if not _name.startswith("__") and not _name.startswith("_original_"):
@@ -89,8 +91,18 @@ def _source_declared_subject_pairs(
         return []
 
     resolved: list[tuple[str, str]] = []
+    # A parent create whose own documentation declares caller scope (只能为自己
+    # 创建 / 本人 / own) defaults its ownership identity field (userId/ownerId/…)
+    # to the caller — the target service computes it from the token, it is NOT a
+    # referenced collection row. Planning it as a dependency would mint a brand
+    # new account. Only the OPERATION-level own-scope declaration drives this:
+    # a bare ``userId`` without such a declaration remains a real FK dependency
+    # (the user→address→order chain), so a name-only skip is forbidden.
+    parent_scope_declared = _operation_declares_ownership_language(operation)
     for field in example:
         if not isinstance(field, str) or not _text(field):
+            continue
+        if parent_scope_declared and is_ownership_key(field):
             continue
         receipt = resolve_body_reference(
             operation,

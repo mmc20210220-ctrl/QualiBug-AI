@@ -857,3 +857,54 @@ def test_primary_key_wins_over_business_keys_in_identity_resolution():
         in {"id", "uuid", "pk", "key", "uid", "guid"}
     ]
     assert structural2 == []
+
+
+def test_caller_scoped_ownership_field_is_not_a_dependency() -> None:
+    """A parent create whose documentation declares caller scope defaults its
+    ownership identity field (userId) to the caller — it is NOT a referenced
+    collection row. The chain must not plan a user-registration dependency for
+    it (that would mint a brand-new account); the runtime executor binds the
+    value from the step actor's login-observed account_id instead.
+
+    The signal is the OPERATION-level own-scope declaration (只能为自己/本人/
+    own), never the field name alone — a bare ``userId`` without that
+    declaration stays a real FK dependency (the existing user→address→order
+    chain tests pin that side).
+    """
+    ir = _ir()
+    # Address create declares caller scope on its own documentation: the target
+    # service defaults userId to the token's subject (targetUserId = userId ||
+    # req.user.id), so it is not an establishment dependency.
+    for op in ir["operations"]:
+        if op["id"] == "op_create_address":
+            op["description"] = "普通用户只能为自己创建地址；管理员代建须审计。"
+    result = plan_multi_level_dependency_chain(
+        behavior_ir=ir,
+        entity_id="ent_order",
+        reference_field="orderId",
+        actor_refs=["actor_buyer"],
+    )
+    assert result["status"] == PLANNED
+    # No user-registration step: the address create's userId is caller-scoped.
+    creates = [step["creates_entity_ref"] for step in result["steps"]]
+    assert "ent_user" not in creates
+    assert creates == ["ent_address", "ent_order"]
+
+
+def test_bare_ownership_field_without_scope_declaration_is_a_dependency() -> None:
+    """The counter-case: no own-scope declaration on the parent create, so the
+    ``userId`` remains a real foreign-key dependency and the user entity IS
+    established (leaves-first: user -> address -> order)."""
+    ir = _ir()
+    result = plan_multi_level_dependency_chain(
+        behavior_ir=ir,
+        entity_id="ent_order",
+        reference_field="orderId",
+        actor_refs=["actor_buyer"],
+    )
+    assert result["status"] == PLANNED
+    assert [step["creates_entity_ref"] for step in result["steps"]] == [
+        "ent_user",
+        "ent_address",
+        "ent_order",
+    ]
