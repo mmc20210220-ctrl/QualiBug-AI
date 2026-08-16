@@ -3241,11 +3241,21 @@ def compile_experiment_for_obligation(
             }
         # ── V1.5.0 §16: State Precondition Planning for built-in state family ──
         # Plan the path to establish from_state before the measured window.
+        # When the subject-establishment chain already planned the state
+        # advancement (the money chain now covers the state family and runs
+        # multi-level dependency + state advancement), do NOT overwrite that
+        # richer plan with the bare transition path — the bare path has no FK
+        # dependency steps (order create's addressId) and would leave the
+        # subject unestablishable.
         _from_state = _text(
             _dict(protocol.get("assertion")).get("from_state")
             or prop.get("from_state")
         )
-        if _from_state and _from_state.lower() not in ("", "unknown_state", "unknown"):
+        if (
+            not _precondition_plan
+            and _from_state
+            and _from_state.lower() not in ("", "unknown_state", "unknown")
+        ):
             from .state_precondition_planner import (
                 plan_state_precondition as _plan_precondition,
                 STATUS_PLANNED as _PRECOND_PLANNED,

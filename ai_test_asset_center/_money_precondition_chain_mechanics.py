@@ -59,11 +59,15 @@ REASON_NO_CLEANUP = "MONEY_PRECONDITION_CLEANUP_MISSING"
 REASON_STATE_UNREACHABLE = "MONEY_PRECONDITION_STATE_UNREACHABLE"
 REASON_NO_READBACK = "MONEY_PRECONDITION_READBACK_MISSING"
 
-# Money families whose write experiments consume a subject entity that must
-# exist before the measured window. Structural signal only: these families
-# compile control/treatment writes whose bodies carry entity reference
-# fields; a read-only family never needs subject establishment.
-MONEY_PRECONDITION_FAMILIES = frozenset({"conservation", "idempotency"})
+# Subject-establishment families whose write experiments consume a subject
+# entity that must exist before the measured window. Structural signal only:
+# these families compile control/treatment writes whose bodies carry entity
+# reference fields. ``state`` joins the set because its precondition path also
+# starts at a subject-establishment create (order before the CANCELLED→PAID
+# transition) whose body carries FK reference fields (addressId) — the same
+# multi-level dependency + state-advancement composition, not a separate
+# mechanism. A read-only family never needs subject establishment.
+MONEY_PRECONDITION_FAMILIES = frozenset({"conservation", "idempotency", "state"})
 
 
 def _dict(value: Any) -> dict[str, Any]:
