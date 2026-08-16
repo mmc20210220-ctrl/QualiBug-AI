@@ -305,6 +305,37 @@ def evaluate_cleanup_equivalence(
             relation_comparison={},
         )
 
+    # Adapter DB-SQL cleanup is identity-precise: the adapter receipt already
+    # proved exactly one affected row (delete or field-restore) with complete
+    # identity lineage before sealing ``succeeded=True``. Re-deriving presence
+    # from the HTTP collection observation is WRONG here — a collection is never
+    # empty after deleting one row (other rows remain), and a route-not-declared
+    # 404 is misread as "entity absent". Those two misreads dropped proven
+    # VIOLATION findings as ``created_entity_not_deleted`` /
+    # ``write_did_not_create_entity_or_mode_mismatch``. The adapter receipt is
+    # the authoritative restoration proof, so short-circuit to EQUIVALENT.
+    if (
+        _text(cleanup_execution_receipt.get("method")).upper() == "ADAPTER_DB_SQL"
+        and cleanup_succeeded is True
+    ):
+        return _build_receipt(
+            proof_id=proof_id,
+            primary_identity=primary_identity,
+            cleanup_identity=cleanup_identity,
+            before_obs=before_observation,
+            after_write_obs=after_write_observation,
+            after_cleanup_obs=after_cleanup_observation,
+            equivalence_status="EQUIVALENT",
+            reason_code="",
+            detail="adapter_cleanup_receipt_authoritative",
+            field_comparison={
+                "compared": ["adapter_cleanup"],
+                "matched": ["adapter_cleanup"],
+                "mismatched": [],
+            },
+            relation_comparison={},
+        )
+
     # Check after-cleanup observation exists
     if not after_cleanup_observation:
         return _build_receipt(

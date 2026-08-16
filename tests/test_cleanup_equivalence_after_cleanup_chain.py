@@ -882,3 +882,54 @@ def test_adapter_cleanup_from_step_body_when_receipts_argument_empty() -> None:
     assert receipt["succeeded"] is True
     assert receipt["status"] == "ACCEPTED"
     assert receipt["source_receipt_ids"] == ["cleanup_adapter_1"]
+
+
+def test_adapter_row_delete_is_authoritative_when_collection_still_nonempty() -> None:
+    """Adapter DB-SQL row_delete proved exactly one row removed. A collection
+    read after cleanup is still non-empty (other rows remain), which the old
+    created_entity_absent evaluator misread as ``created_entity_not_deleted``
+    and dropped the finding. The adapter receipt is the authoritative proof."""
+    cleanup_exec = {
+        "schema_version": "qualibug.cleanup-execution-receipt.v1",
+        "method": "ADAPTER_DB_SQL",
+        "cleanup_mode": "row_delete",
+        "mode": "row_delete",
+        "succeeded": True,
+        "status": "ACCEPTED",
+        "status_code": 200,
+    }
+    receipt = evaluate_cleanup_equivalence(
+        proof={"proof_id": "wrp_1", "equivalence_contract": {"mode": "created_entity_absent"}, "identity_contract": {"identity_fields": ["id"]}},
+        before_observation={"status_code": 200, "body": [{"id": "other-1"}]},
+        after_write_observation={"status_code": 200, "body": [{"id": "other-1"}, {"id": "created-id"}]},
+        after_cleanup_observation={"status_code": 200, "body": [{"id": "other-1"}]},
+        runtime_bindings={"id": "created-id"},
+        cleanup_execution_receipt=cleanup_exec,
+    )
+    assert receipt["equivalence_status"] == "EQUIVALENT"
+    assert receipt["detail"] == "adapter_cleanup_receipt_authoritative"
+
+
+def test_adapter_row_delete_is_authoritative_when_route_not_declared() -> None:
+    """Before/after are framework-level 404 (route not declared). The old
+    created_entity_absent evaluator misread ``after_write`` 404 as
+    ``write_did_not_create_entity_or_mode_mismatch``. The adapter receipt is
+    authoritative regardless of HTTP observation shape."""
+    cleanup_exec = {
+        "schema_version": "qualibug.cleanup-execution-receipt.v1",
+        "method": "ADAPTER_DB_SQL",
+        "cleanup_mode": "row_delete",
+        "mode": "row_delete",
+        "succeeded": True,
+        "status": "ACCEPTED",
+        "status_code": 200,
+    }
+    receipt = evaluate_cleanup_equivalence(
+        proof={"proof_id": "wrp_1", "equivalence_contract": {"mode": "created_entity_absent"}, "identity_contract": {"identity_fields": ["id"]}},
+        before_observation={"status_code": 404, "body": {"_raw": "<!DOCTYPE html>"}},
+        after_write_observation={"status_code": 404, "body": {"_raw": "<!DOCTYPE html>"}},
+        after_cleanup_observation={"status_code": 404, "body": {"_raw": "<!DOCTYPE html>"}},
+        runtime_bindings={"id": "created-id"},
+        cleanup_execution_receipt=cleanup_exec,
+    )
+    assert receipt["equivalence_status"] == "EQUIVALENT"
