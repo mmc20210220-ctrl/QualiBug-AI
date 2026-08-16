@@ -456,7 +456,16 @@ def materialize_experiment_fixtures(**kwargs: Any) -> dict[str, Any]:
     state["fixture_receipts"] = fixture_receipts
 
     contract_receipts = list(_list(state.get("contract_evidence_receipts")))
-    contract_receipts.extend(_list(precondition.get("receipts")))
+    # Precondition step receipts are establishment-observation artifacts, NOT
+    # contract-evidence receipts. They carry a step-shaped payload
+    # (step_id/phase/operation_ref/accepted/target_reached, no ``kind`` or
+    # ``evidence``) and are already captured above into ``fixture_receipts``
+    # under ``state_precondition_establishment``. Appending them to
+    # ``contract_evidence_receipts`` made the contract oracle and the delivery
+    # gate validate a step dict as a sealed contract receipt and reject every
+    # establishment-succeeded experiment with
+    # ``contract_evidence_receipt_fields_invalid`` — a real write was executed,
+    # then its finding was discarded. Keep the two collections separate.
     state["contract_evidence_receipts"] = contract_receipts
 
     if precondition.get("established") is True:
