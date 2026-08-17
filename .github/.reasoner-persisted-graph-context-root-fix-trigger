@@ -1,1 +1,2 @@
 trigger=RUN_REASONER_PERSISTED_GRAPH_CONTEXT_ROOT_FIX_20260817
+mode=pull_request_validation
