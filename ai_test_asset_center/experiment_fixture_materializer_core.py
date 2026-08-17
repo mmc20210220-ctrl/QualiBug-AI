@@ -812,6 +812,9 @@ def materialize_experiment_fixtures(
                     "source_priority": _text(binding.get("source_priority")),
                     "status": "bound",
                     "value": binding["materialized_value"],
+                    "value_fingerprint": hashlib.sha256(
+                        str(binding["materialized_value"]).encode("utf-8")
+                    ).hexdigest()[:12],
                     "operation_ref": _text(binding.get("operation_ref")),
                 })
                 continue
@@ -1030,6 +1033,9 @@ def materialize_experiment_fixtures(
                         "source_priority": "ownership_identity_param",
                         "status": "bound",
                         "value": _identity_value,
+                        "value_fingerprint": hashlib.sha256(
+                            _identity_value.encode("utf-8")
+                        ).hexdigest()[:12],
                         "identity_source": _identity_source,
                     })
                 else:
