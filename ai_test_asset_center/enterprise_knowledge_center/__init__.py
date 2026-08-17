@@ -140,6 +140,22 @@ from .source_occurrence_lifecycle import (  # noqa: E402,F401
     update_enterprise_knowledge_source,
 )
 
+# Canonical Artifact read contract. Read-only projection over the runtime source
+# registry and the knowledge source registry; it adds no second storage model.
+from .canonical_artifact import (  # noqa: E402,F401
+    CANONICAL_ARTIFACT_BLOCK_SCHEMA,
+    CANONICAL_ARTIFACT_DIFF_SCHEMA,
+    CANONICAL_ARTIFACT_QUERY_SCHEMA,
+    CANONICAL_ARTIFACT_SCHEMA,
+    CANONICAL_ARTIFACT_SOURCE_RELATION_SCHEMA,
+    CANONICAL_ARTIFACT_VERSION_SCHEMA,
+    CanonicalArtifactError,
+    diff_artifact_versions,
+    list_artifact_versions,
+    project_canonical_artifacts,
+    query_canonical_artifacts,
+)
+
 # Explicit re-exports for underscore-prefixed compatibility symbols.
 from ._common import _SEMANTIC_LEXICON_CACHE  # noqa: F401
 from ._utils import (  # noqa: F401

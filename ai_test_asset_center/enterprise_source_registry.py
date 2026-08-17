@@ -355,6 +355,68 @@ def list_source_assets(project_id: str, *, root: Path) -> list[dict[str, Any]]:
     return sorted(result, key=lambda item: item["source_id"])
 
 
+def list_source_asset_versions(
+    project_id: str,
+    *,
+    root: Path,
+    asset_id: str | None = None,
+    source_hash: str | None = None,
+) -> list[dict[str, Any]]:
+    """Public read of immutable versions for source assets (canonical Artifact SSOT).
+
+    Returns version rows with their registered metadata in registry order. A missing
+    or empty registry yields an empty list; a malformed registry fails closed with
+    ``SourceRegistryError``.
+    """
+    registry = _read_registry(Path(root), _safe_project(project_id))
+    assets = registry.get("assets") if isinstance(registry, dict) else None
+    if not isinstance(assets, dict):
+        return []
+    wanted_asset = str(asset_id or "").strip()
+    wanted_hash = str(source_hash or "").strip().lower()
+    result: list[dict[str, Any]] = []
+    for raw_asset in assets.values():
+        if not isinstance(raw_asset, dict):
+            continue
+        current_id = str(raw_asset.get("source_id") or "").strip()
+        if wanted_asset and current_id != wanted_asset:
+            continue
+        versions = [
+            dict(row)
+            for row in raw_asset.get("versions") or []
+            if isinstance(row, dict)
+        ]
+        if wanted_hash:
+            versions = [
+                row
+                for row in versions
+                if str(row.get("source_hash") or "").strip().lower() == wanted_hash
+            ]
+        for version in versions:
+            result.append(
+                {
+                    "schema_version": "enterprise-source-registry-v1",
+                    "source_id": current_id,
+                    "source_type": str(
+                        version.get("source_type")
+                        or raw_asset.get("source_type")
+                        or ""
+                    )[:80],
+                    "version_id": str(version.get("version_id") or ""),
+                    "source_hash": str(version.get("source_hash") or ""),
+                    "byte_count": version.get("byte_count"),
+                    "source_origin": str(version.get("source_origin") or "")[:80],
+                    "filename": str(version.get("filename") or "")[:240],
+                    "external_ref": str(version.get("external_ref") or "")[:500],
+                    "registered_at_utc": str(version.get("registered_at_utc") or ""),
+                    "registered_by": dict(version.get("registered_by") or {}),
+                    "metadata": dict(version.get("metadata") or {}),
+                    "blob_ref": str(version.get("blob_ref") or ""),
+                }
+            )
+    return result
+
+
 def load_source_content(project_id: str, source_hash: str, *, root: Path) -> str:
     digest = str(source_hash or "").strip().lower()
     if not _SHA256_RE.fullmatch(digest):

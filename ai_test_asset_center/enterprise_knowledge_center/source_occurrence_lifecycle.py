@@ -527,8 +527,44 @@ def operate_enterprise_knowledge_center(
             else None,
         )
         return {"ok": True, "action": "rebuild", "asset": asset}
+    if action in {"artifacts", "artifact-view"}:
+        from .canonical_artifact import query_canonical_artifacts
+
+        result = query_canonical_artifacts(
+            project,
+            resolved_root,
+            artifact_id=payload.get("artifact_id"),
+            source_ref=payload.get("source_ref"),
+            content_hash=payload.get("content_hash"),
+            knowledge_source_id=payload.get("knowledge_source_id"),
+            include_deleted=bool(payload.get("include_deleted")),
+        )
+        return {"ok": True, "action": "artifacts", "result": result}
+    if action in {"artifact-versions"}:
+        from .canonical_artifact import list_artifact_versions
+
+        result = list_artifact_versions(
+            project,
+            _text(payload.get("artifact_id")),
+            resolved_root,
+        )
+        return {"ok": True, "action": "artifact-versions", "result": result}
+    if action in {"artifact-diff"}:
+        from .canonical_artifact import diff_artifact_versions
+
+        result = diff_artifact_versions(
+            project,
+            _text(payload.get("artifact_id")),
+            resolved_root,
+            base_version_id=payload.get("base_version_id"),
+            head_version_id=payload.get("head_version_id"),
+            base_hash=payload.get("base_hash"),
+            head_hash=payload.get("head_hash"),
+        )
+        return {"ok": True, "action": "artifact-diff", "result": result}
     raise ValueError(
-        "unsupported knowledge center action; use view, upload, edit, delete or rebuild"
+        "unsupported knowledge center action; use view, upload, edit, delete, rebuild, "
+        "artifacts, artifact-versions or artifact-diff"
     )
 
 
