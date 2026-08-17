@@ -3,6 +3,10 @@ name: Apply reasoner persisted graph context root fix
 on:
   issues:
     types: [opened]
+  push:
+    branches: [main]
+    paths:
+      - '.github/.reasoner-persisted-graph-context-root-fix-trigger'
 
 permissions:
   contents: write
@@ -13,7 +17,9 @@ concurrency:
 
 jobs:
   root-fix:
-    if: github.event.issue.title == 'RUN_REASONER_PERSISTED_GRAPH_CONTEXT_ROOT_FIX_20260817'
+    if: >-
+      github.event_name == 'push' ||
+      github.event.issue.title == 'RUN_REASONER_PERSISTED_GRAPH_CONTEXT_ROOT_FIX_20260817'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -72,6 +78,8 @@ jobs:
           git config user.email 'qualibug-mainline-bot@users.noreply.github.com'
           git rm -r tools/.one_shot/reasoner_persisted_graph_context_root_fix
           git rm .github/workflows/apply-reasoner-persisted-graph-context-root-fix.yml
+          git rm -f .github/workflows/apply-reasoner-persisted-graph-context-pr.yml || true
+          git rm -f .github/.reasoner-persisted-graph-context-root-fix-trigger || true
           git add ai_test_asset_center/discovery_runtime_planning.py tests/test_reasoner_persisted_graph_context_bridge.py
           git diff --cached --check
           git commit -m 'fix(discovery): feed persisted knowledge into reasoner graph context'
