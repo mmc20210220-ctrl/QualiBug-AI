@@ -420,6 +420,7 @@ def build_discovery_plan(
     from .enterprise_knowledge_center import (
         build_enterprise_business_knowledge_asset,
         build_runtime_source_knowledge_overlay,
+        load_enterprise_business_knowledge_asset,
         merge_knowledge_asset_overlay,
         project_knowledge_world_model,
     )
@@ -435,7 +436,10 @@ def build_discovery_plan(
         in {"1", "true", "yes"}
     )
 
-    asset = build_enterprise_business_knowledge_asset(
+    asset = load_enterprise_business_knowledge_asset(
+        inputs.project,
+        inputs.root,
+    ) or build_enterprise_business_knowledge_asset(
         inputs.project,
         inputs.root,
         options={
