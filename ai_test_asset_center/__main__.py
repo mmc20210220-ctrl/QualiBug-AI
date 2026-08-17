@@ -855,11 +855,21 @@ def _scan_impl(project: str, root: Optional[Path] = None, *, prd_text: str = "",
     if _downgraded:
         _formal = [f for f in (result.get("findings") or []) if f.get("customer_delivery_status") == "defect"]
         result["total_findings"] = len(_formal)
+        # Keep the canonical projection self-consistent after demotion: the
+        # count must equal the surviving canonical defect id set, otherwise
+        # discovery_funnel._formal_projection fails the whole scan.
+        _formal_canonical_ids = sorted({
+            str(f.get("canonical_defect_id") or "").strip()
+            for f in _formal
+            if str(f.get("canonical_defect_id") or "").strip()
+        })
         for _proj_key in ("formal_count_projection", "formal_delivery_authority"):
             _proj = _as_dict(result.get(_proj_key))
             if _proj:
                 _proj["formal_customer_deliverable_count"] = len(_formal)
                 _proj["canonical_defect_count"] = len(_formal)
+                if _formal_canonical_ids:
+                    _proj["canonical_defect_ids"] = _formal_canonical_ids
     result["benchmark_metrics"] = suppress_benchmark_quality_when_not_measured(
         _as_dict(result.get("benchmark_metrics")),
         _as_dict(result.get("external_evaluation")),
