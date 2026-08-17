@@ -120,7 +120,8 @@ REASON_CODES = frozenset(
         "TEMPORAL_RELATION_UNSUPPORTED",  # temporal relation is outside implemented protocol
         "TEMPORAL_PROCESS_WAIT_UNRESOLVED",  # no exact source process-wait binding
         "TEMPORAL_PROCESS_WAIT_AMBIGUOUS",  # more than one exact process-wait binding
-        "TEMPORAL_COMPLETION_OBSERVER_UNRESOLVED",  # wait lacks observer/predicate/policy
+        "TEMPORAL_COMPLETION_OBSERVER_UNRESOLVED",  # wait lacks exact observer/predicate
+        "TEMPORAL_POLL_POLICY_UNRESOLVED",  # completion is observable but polling bounds are absent
     }
 )
 

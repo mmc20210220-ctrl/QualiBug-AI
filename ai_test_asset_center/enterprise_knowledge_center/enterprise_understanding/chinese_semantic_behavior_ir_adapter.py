@@ -220,7 +220,7 @@ def _temporal_constraint_identity(value: dict[str, Any]) -> tuple[Any, ...] | No
     return raw, anchor, duration, int(window_ms)
 
 
-def _source_process_wait_binding(
+def source_process_wait_binding(
     constraint: dict[str, Any],
     *,
     operation_ref: str,
@@ -238,7 +238,8 @@ def _source_process_wait_binding(
     if identity is None:
         return {}, "TEMPORAL_PROCESS_WAIT_UNRESOLVED"
     complete: list[dict[str, Any]] = []
-    incomplete_match = False
+    incomplete_observer_match = False
+    incomplete_policy_match = False
     for graph_value in process_graphs:
         graph = _dict(graph_value)
         if _text(graph.get("status")) != "COMPILED":
@@ -287,23 +288,34 @@ def _source_process_wait_binding(
             async_policy = _dict(
                 wait.get("async_policy") or wait.get("poll_policy")
             )
-            if not (
+            anchor_complete = bool(
                 anchor_operation_ref
                 and source_node_id != target_node_id
                 and anchor_operation_ref != operation_ref
-                and observer_operation_ref
-                and predicate
-                and async_policy.get("enabled") is True
-                and async_policy.get("expected_max_delay_ms") == identity[3]
                 and _ref_resolves(
                     anchor_operation_ref, "operation", ref_resolver
                 )
+                and _text(wait.get("wait_id") or wait.get("contract_id"))
+            )
+            observer_complete = bool(
+                observer_operation_ref
+                and predicate
                 and _ref_resolves(
                     observer_operation_ref, "operation", ref_resolver
                 )
-                and _text(wait.get("wait_id") or wait.get("contract_id"))
-            ):
-                incomplete_match = True
+            )
+            policy_complete = bool(
+                async_policy.get("enabled") is True
+                and async_policy.get("expected_max_delay_ms") == identity[3]
+            )
+            if not anchor_complete:
+                incomplete_observer_match = True
+                continue
+            if not observer_complete:
+                incomplete_observer_match = True
+                continue
+            if not policy_complete:
+                incomplete_policy_match = True
                 continue
             complete.append(
                 {
@@ -325,9 +337,16 @@ def _source_process_wait_binding(
         return next(iter(unique.values())), ""
     if len(unique) > 1:
         return {}, "TEMPORAL_PROCESS_WAIT_AMBIGUOUS"
-    if incomplete_match:
+    if incomplete_policy_match:
+        return {}, "TEMPORAL_POLL_POLICY_UNRESOLVED"
+    if incomplete_observer_match:
         return {}, "TEMPORAL_COMPLETION_OBSERVER_UNRESOLVED"
     return {}, "TEMPORAL_PROCESS_WAIT_UNRESOLVED"
+
+
+# Compatibility for the original internal name while the public helper is
+# reused by the later exact effect-observer binding stage.
+_source_process_wait_binding = source_process_wait_binding
 
 
 def project_semantic_frames_to_behavior_ir(
@@ -596,7 +615,7 @@ def project_semantic_frames_to_behavior_ir(
                 "anchor_grounding_status": "UNRESOLVED",
             }
             if source_process_graphs:
-                binding, binding_reason = _source_process_wait_binding(
+                binding, binding_reason = source_process_wait_binding(
                     constraint,
                     operation_ref=operation_ref,
                     process_graphs=source_process_graphs,

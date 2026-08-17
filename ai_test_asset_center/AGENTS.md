@@ -299,8 +299,18 @@ source node operation, and a declared read observer + terminal predicate +
 bounded async policy. Zero, incomplete or multiple matches remain visible as
 `TEMPORAL_PROCESS_WAIT_UNRESOLVED`,
 `TEMPORAL_COMPLETION_OBSERVER_UNRESOLVED`, or
-`TEMPORAL_PROCESS_WAIT_AMBIGUOUS`; raw-text/path similarity and document order
-are never binding authority. `behavior_ir_core` preserves those governed
+`TEMPORAL_PROCESS_WAIT_AMBIGUOUS`; an exact completion observer without a
+source-declared bounded polling policy remains
+`TEMPORAL_POLL_POLICY_UNRESOLVED`. The existing effect-observer binding stage
+may complete a missing wait observer only by a three-way exact join: the
+process target node's declared `to_state`, one `must_become` postcondition on
+that exact target operation and one canonical `STATE` field response binding
+to a GET/HEAD operation. The resulting equality predicate uses only the
+declared response JSON path and postcondition value. Multiple readbacks,
+multiple predicates, state mismatches or conflicts never use a first-item
+choice and remain receipted gaps. Raw-text/path/field-name similarity and
+document order are never binding authority; polling intervals/attempts are
+never derived from the deadline. `behavior_ir_core` preserves those governed
 process graphs on Behavior IR so the action-deadline compiler can reuse the
 existing multi-step/wait scheduler. Grounded refs are emitted in IR-resolvable
 forms — actor role names, `METHOD:path` operation forms (interface ids

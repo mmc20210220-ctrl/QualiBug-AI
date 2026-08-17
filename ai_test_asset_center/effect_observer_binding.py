@@ -19,6 +19,9 @@ from .behavior_ir import (
     _relation_node,
     validate_behavior_ir,
 )
+from .enterprise_knowledge_center.enterprise_understanding.chinese_semantic_behavior_ir_adapter import (
+    source_process_wait_binding,
+)
 
 SCHEMA_VERSION = "qualibug.effect-observer-binding.v1"
 _WRITE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
@@ -65,6 +68,259 @@ def _invariant_field_ids(invariant: dict[str, Any]) -> list[str]:
         if field_ref.startswith("cf_") and field_ref not in refs:
             refs.append(field_ref)
     return refs
+
+
+def _completion_candidate_index(
+    *,
+    invariants: list[Any],
+    canonical_fields: dict[str, dict[str, Any]],
+    operations: dict[str, dict[str, Any]],
+) -> dict[tuple[str, str], list[dict[str, Any]]]:
+    """Index exact state-transition completion predicates.
+
+    A candidate exists only when one source-backed postcondition operand names
+    one canonical STATE field and that field declares a concrete response JSON
+    path on a GET/HEAD operation.  Multiple distinct readbacks remain multiple
+    candidates; callers must fail closed instead of selecting by order.
+    """
+
+    merged: dict[tuple[str, str, str, str, str], dict[str, Any]] = {}
+    for invariant_value in invariants:
+        invariant = _dict(invariant_value)
+        invariant_ref = _text(invariant.get("id"))
+        expression = _dict(invariant.get("expression"))
+        operands = [
+            _dict(value)
+            for value in _list(expression.get("operands"))
+            if isinstance(value, dict)
+        ]
+        if (
+            not invariant_ref
+            or not _list(invariant.get("source_refs"))
+            or _text(expression.get("kind")) != "postcondition"
+            or _text(expression.get("operator")) != "must_become"
+            or len(operands) != 1
+        ):
+            continue
+        operand = operands[0]
+        field_ref = _text(operand.get("field_id"))
+        expected_value = operand.get("expected_value")
+        if (
+            not field_ref
+            or not isinstance(expected_value, str)
+            or not expected_value.strip()
+        ):
+            continue
+        field = _dict(canonical_fields.get(field_ref))
+        if (
+            _text(field.get("semantic_type")).upper() != "STATE"
+            or not (
+                _list(field.get("source_refs"))
+                or _list(field.get("entity_source_refs"))
+            )
+        ):
+            continue
+        write_refs = [
+            ref
+            for ref in (
+                _text(value) for value in _list(invariant.get("operation_refs"))
+            )
+            if ref in operations
+            and _text(operations[ref].get("method")).upper() in _WRITE_METHODS
+            and _list(operations[ref].get("source_refs"))
+        ]
+        read_bindings: dict[tuple[str, str], dict[str, Any]] = {}
+        for binding_value in _list(field.get("api_response_bindings")):
+            binding = _dict(binding_value)
+            observer_ref = _text(binding.get("operation_id"))
+            json_path = _text(binding.get("json_path"))
+            observer = _dict(operations.get(observer_ref))
+            if (
+                observer_ref
+                and json_path
+                and _text(observer.get("method")).upper() in _READ_METHODS
+                and _list(observer.get("source_refs"))
+            ):
+                read_bindings[(observer_ref, json_path)] = binding
+        for write_ref in write_refs:
+            for observer_ref, json_path in sorted(read_bindings):
+                key = (
+                    write_ref,
+                    _text(expected_value),
+                    observer_ref,
+                    json_path,
+                    field_ref,
+                )
+                candidate = merged.setdefault(
+                    key,
+                    {
+                        "target_operation_ref": write_ref,
+                        "target_state": expected_value,
+                        "observer_operation_ref": observer_ref,
+                        "json_path": json_path,
+                        "canonical_field_ref": field_ref,
+                        "completion_invariant_refs": [],
+                    },
+                )
+                if invariant_ref not in candidate["completion_invariant_refs"]:
+                    candidate["completion_invariant_refs"].append(invariant_ref)
+
+    indexed: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for candidate in merged.values():
+        candidate["completion_invariant_refs"] = sorted(
+            candidate["completion_invariant_refs"]
+        )
+        indexed.setdefault(
+            (
+                _text(candidate.get("target_operation_ref")),
+                _text(candidate.get("target_state")),
+            ),
+            [],
+        ).append(candidate)
+    for candidates in indexed.values():
+        candidates.sort(
+            key=lambda row: (
+                _text(row.get("observer_operation_ref")),
+                _text(row.get("json_path")),
+                _text(row.get("canonical_field_ref")),
+            )
+        )
+    return indexed
+
+
+def _bind_timed_wait_completion_observers(
+    *,
+    process_graphs: list[Any],
+    completion_candidates: dict[tuple[str, str], list[dict[str, Any]]],
+) -> tuple[int, dict[str, int]]:
+    bound_count = 0
+    reason_counts: dict[str, int] = {}
+
+    def record(reason: str) -> None:
+        reason_counts[reason] = reason_counts.get(reason, 0) + 1
+
+    for graph_value in process_graphs:
+        graph = _dict(graph_value)
+        if _text(graph.get("status")) != "COMPILED" or not (
+            _list(graph.get("source_refs")) or _list(graph.get("evidence"))
+        ):
+            continue
+        nodes = {
+            _text(row.get("node_id")): row
+            for row in _list(graph.get("nodes"))
+            if isinstance(row, dict) and _text(row.get("node_id"))
+        }
+        for wait_value in _list(graph.get("wait_contracts")):
+            wait = _dict(wait_value)
+            if not (
+                _text(wait.get("wait_kind")) == "TIMED_WAIT"
+                and _text(wait.get("status")) == "BOUND"
+                and wait.get("source_backed") is True
+            ):
+                continue
+            target_node = _dict(nodes.get(_text(wait.get("target_node_id"))))
+            target_operation_ref = _text(target_node.get("operation_ref"))
+            target_state = _text(target_node.get("to_state"))
+            candidates = completion_candidates.get(
+                (target_operation_ref, target_state), []
+            )
+            if not target_operation_ref or not target_state or not candidates:
+                record("TEMPORAL_COMPLETION_POSTCONDITION_UNRESOLVED")
+                continue
+            if len(candidates) != 1:
+                record("TEMPORAL_COMPLETION_OBSERVER_AMBIGUOUS")
+                continue
+            candidate = candidates[0]
+            expected_predicate = {
+                "json_path": candidate["json_path"],
+                "operator": "equals",
+                "expected_value": candidate["target_state"],
+            }
+            declared_observer = _text(
+                wait.get("observer_operation_ref")
+                or wait.get("read_operation_ref")
+            )
+            declared_predicate = _dict(
+                wait.get("predicate") or wait.get("terminal_predicate")
+            )
+            if (
+                declared_observer
+                and declared_observer != candidate["observer_operation_ref"]
+            ) or (
+                declared_predicate
+                and declared_predicate != expected_predicate
+            ):
+                record("TEMPORAL_COMPLETION_OBSERVER_CONFLICT")
+                continue
+            wait["observer_operation_ref"] = candidate[
+                "observer_operation_ref"
+            ]
+            wait["predicate"] = expected_predicate
+            wait["completion_binding"] = {
+                "authority": "state_transition_postcondition_response_binding",
+                "canonical_field_ref": candidate["canonical_field_ref"],
+                "completion_invariant_refs": candidate[
+                    "completion_invariant_refs"
+                ],
+                "target_operation_ref": target_operation_ref,
+                "target_state": candidate["target_state"],
+            }
+            bound_count += 1
+    return bound_count, dict(sorted(reason_counts.items()))
+
+
+def _bind_temporal_invariants_from_process_waits(
+    *,
+    invariants: list[Any],
+    process_graphs: list[Any],
+    operations: dict[str, dict[str, Any]],
+) -> tuple[int, dict[str, int]]:
+    bound_count = 0
+    reason_counts: dict[str, int] = {}
+
+    def resolves(kind: str, ref: str) -> bool:
+        return kind == "operation" and ref in operations
+
+    for invariant_value in invariants:
+        invariant = _dict(invariant_value)
+        expression = _dict(invariant.get("expression"))
+        if not (
+            _text(expression.get("kind")) == "temporal"
+            and _text(expression.get("temporal_semantics"))
+            == "action_deadline"
+            and _text(expression.get("anchor_grounding_status")) != "BOUND"
+        ):
+            continue
+        operation_refs = sorted(
+            {
+                _text(value)
+                for value in _list(invariant.get("operation_refs"))
+                if _text(value) in operations
+            }
+        )
+        if len(operation_refs) != 1:
+            reason = "TEMPORAL_PROCESS_WAIT_UNRESOLVED"
+            reason_counts[reason] = reason_counts.get(reason, 0) + 1
+            continue
+        constraint = {
+            "raw": expression.get("raw"),
+            "anchor": expression.get("anchor"),
+            "duration": expression.get("duration"),
+            "window_ms": expression.get("window_ms"),
+            "source_backed": True,
+        }
+        binding, reason = source_process_wait_binding(
+            constraint,
+            operation_ref=operation_refs[0],
+            process_graphs=process_graphs,
+            ref_resolver=resolves,
+        )
+        if binding:
+            expression.update(binding)
+            bound_count += 1
+        else:
+            reason_counts[reason] = reason_counts.get(reason, 0) + 1
+    return bound_count, dict(sorted(reason_counts.items()))
 
 
 def bind_source_effect_observers(
@@ -222,6 +478,24 @@ def bind_source_effect_observers(
         ],
         *added_relations,
     ]
+    completion_candidates = _completion_candidate_index(
+        invariants=_list(enriched.get("invariants")),
+        canonical_fields=canonical_fields,
+        operations=operations,
+    )
+    timed_wait_observer_bound_count, timed_wait_binding_reason_counts = (
+        _bind_timed_wait_completion_observers(
+            process_graphs=_list(enriched.get("process_graphs")),
+            completion_candidates=completion_candidates,
+        )
+    )
+    temporal_invariant_bound_count, temporal_binding_reason_counts = (
+        _bind_temporal_invariants_from_process_waits(
+            invariants=_list(enriched.get("invariants")),
+            process_graphs=_list(enriched.get("process_graphs")),
+            operations=operations,
+        )
+    )
     receipt: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
         "status": (
@@ -229,11 +503,18 @@ def bind_source_effect_observers(
             if missing_field_ids
             or fields_without_read_binding
             or invariants_without_write_binding
+            or timed_wait_binding_reason_counts
+            or temporal_binding_reason_counts
             else "BOUND"
             if pair_evidence
+            or timed_wait_observer_bound_count
+            or temporal_invariant_bound_count
             else "NO_CANONICAL_EFFECT_BINDINGS"
         ),
         "binding_authority": "canonical_field_api_response_binding",
+        "timed_wait_binding_authority": (
+            "state_transition_postcondition_response_binding"
+        ),
         "heuristic_binding_enabled": False,
         "candidate_pair_count": len(pair_evidence),
         "added_relation_count": len(added_relations),
@@ -243,6 +524,13 @@ def bind_source_effect_observers(
         "field_without_read_binding_ids": sorted(fields_without_read_binding),
         "invariant_without_write_binding_count": len(invariants_without_write_binding),
         "invariant_without_write_binding_ids": sorted(invariants_without_write_binding),
+        "timed_wait_completion_candidate_count": sum(
+            len(rows) for rows in completion_candidates.values()
+        ),
+        "timed_wait_observer_bound_count": timed_wait_observer_bound_count,
+        "timed_wait_binding_reason_counts": timed_wait_binding_reason_counts,
+        "temporal_invariant_bound_count": temporal_invariant_bound_count,
+        "temporal_binding_reason_counts": temporal_binding_reason_counts,
     }
     receipt["receipt_fingerprint"] = _fingerprint(receipt)
     enriched["effect_observer_binding_receipt"] = receipt

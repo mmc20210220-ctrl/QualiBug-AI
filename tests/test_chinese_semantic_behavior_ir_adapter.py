@@ -343,6 +343,45 @@ def test_ambiguous_process_wait_never_guesses_temporal_anchor() -> None:
     )
 
 
+def test_observable_completion_without_poll_bounds_stays_policy_unresolved() -> None:
+    frame = _grounded_frame(
+        frame_id="csf:timed-policy-gap",
+        frame_type="PERMISSION_RULE",
+        modality="MAY",
+        operation="op:query",
+    )
+    frame["time_constraints"] = [
+        {
+            "raw": "提交后1小时内",
+            "anchor": "提交后",
+            "relation": "WITHIN",
+            "duration": "1小时",
+            "window_ms": 3_600_000,
+            "source_backed": True,
+            "resolution_status": "RESOLVED",
+        }
+    ]
+    frame["resolution"]["semantic_signature"] = semantic_signature(frame)
+    graph = _timed_process_graph()
+    del graph["wait_contracts"][0]["async_policy"]
+
+    result = project_semantic_frames_to_behavior_ir(
+        [frame],
+        ref_resolver=_resolver_accepts_all(),
+        process_graphs=[graph],
+    )
+
+    invariant = next(
+        row for row in result["contributions"]
+        if row["contribution_kind"] == "INVARIANT"
+    )
+    assert invariant["expression"]["anchor_grounding_status"] == "UNRESOLVED"
+    assert any(
+        row["reason_code"] == "TEMPORAL_POLL_POLICY_UNRESOLVED"
+        for row in result["skips"]
+    )
+
+
 def test_calendar_time_window_and_ambiguous_operation_stay_visible() -> None:
     calendar = _grounded_frame(
         frame_id="csf:calendar", frame_type="PERMISSION_RULE",
