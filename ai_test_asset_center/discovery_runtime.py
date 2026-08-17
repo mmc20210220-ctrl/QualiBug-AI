@@ -20,6 +20,10 @@ from typing import Any
 
 from .formal_ui_surface import install_formal_ui_surface
 from .formal_ui_surface_guard import install_formal_ui_read_only_guard
+from .reasoner_graph_context import (
+    install_reasoner_graph_context_bridge,
+    reasoner_graph_context_scope,
+)
 from .scan_stage_progress import (
     begin_scan_stage_progress,
     mark_scan_stage,
@@ -27,6 +31,7 @@ from .scan_stage_progress import (
 
 install_formal_ui_surface()
 install_formal_ui_read_only_guard()
+install_reasoner_graph_context_bridge()
 
 from .discovery_runtime_execution import (  # noqa: E402,F401
     RUNTIME_SCHEMA,
@@ -78,6 +83,25 @@ def _progress_scope(inputs: Any) -> tuple[Path, str]:
     return Path(getattr(inputs, "root")), str(getattr(inputs, "project", "")).strip()
 
 
+def _reasoner_scope(inputs: Any, campaign_handle: Any) -> dict[str, str]:
+    context = getattr(inputs, "campaign_context", {})
+    context = context if isinstance(context, dict) else {}
+    run_id = str(
+        context.get("run_id")
+        or getattr(campaign_handle, "run_id", "")
+        or ""
+    ).strip()
+    return {
+        "environment_id": str(
+            context.get("environment_id")
+            or context.get("environment_type")
+            or "test"
+        ).strip() or "test",
+        "run_id": run_id,
+        "policy_version": str(context.get("policy_version") or "").strip(),
+    }
+
+
 def build_discovery_plan(inputs: Any, campaign_handle: Any) -> Any:
     """Run the real semantic/planning authority and publish only observed boundaries."""
 
@@ -100,8 +124,16 @@ def build_discovery_plan(inputs: Any, campaign_handle: Any) -> Any:
         "active",
         detail="行为义务、场景与实验计划正在同一规划主链编译",
     )
+    graph_scope = _reasoner_scope(inputs, campaign_handle)
     try:
-        plan = _build_discovery_plan(inputs, campaign_handle)
+        with reasoner_graph_context_scope(
+            project_id=project,
+            environment_id=graph_scope["environment_id"],
+            root=root,
+            run_id=graph_scope["run_id"],
+            policy_version=graph_scope["policy_version"],
+        ):
+            plan = _build_discovery_plan(inputs, campaign_handle)
     except Exception as exc:
         detail = f"{type(exc).__name__}: {str(exc)[:180]}"
         mark_scan_stage(root, project, "enterprise_understanding", "failed", detail=detail)
