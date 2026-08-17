@@ -22,6 +22,7 @@ CandidatePromoter = Callable[[dict[str, Any]], dict[str, Any]]
 __all__ = [
     "validate_and_promote_candidates",
     "candidates_to_behavior_ir_entries",
+    "project_validated_candidates_to_asset_spaces",
     "promote_validated_candidates",
     "register_candidate_kind",
     "registered_candidate_kinds",
@@ -45,6 +46,11 @@ _TERMINAL_BUCKET_BY_STATUS = {
     "STALE": "stale",
 }
 _GENERIC_KINDS = frozenset({"entity", "field", "relation", "state", "actor"})
+_TYPED_BINDING_FIELDS = {
+    "field": ("owner",),
+    "state": ("owner",),
+    "relation": ("source_entity", "target_entity"),
+}
 _RULE_LOGICAL_FORM_RE = re.compile(r"^[A-Z][A-Z0-9_]{2,63}$")
 _RULE_FORMAL_AUTHORITIES = frozenset(
     {
@@ -546,6 +552,26 @@ def _validate_generic_candidate(
     source = _source_identity(candidate, prefix="candidate")
     evidence: list[str] = []
     details: dict[str, list[str]] = {}
+    typed_binding_gaps: list[str] = []
+    quote = _text(candidate.get("verbatim_quote"))
+    for binding_name in _TYPED_BINDING_FIELDS.get(kind, ()):
+        value = _text(candidate.get(binding_name))
+        if not value:
+            typed_binding_gaps.append(binding_name)
+            continue
+        if value not in quote:
+            return {
+                "status": "REJECTED",
+                "reason": f"typed_binding_not_in_quote:{binding_name}",
+                "typed_binding_status": "REJECTED",
+                "typed_binding_gaps": [binding_name],
+            }
+    typed_binding_decision = {
+        "typed_binding_status": (
+            "INCOMPLETE" if typed_binding_gaps else "COMPLETE"
+        ),
+        "typed_binding_gaps": typed_binding_gaps,
+    } if kind in _TYPED_BINDING_FIELDS else {}
 
     for evidence_name, sources in (
         (
@@ -619,12 +645,14 @@ def _validate_generic_candidate(
             "confidence": min(
                 1.0, float(candidate.get("confidence") or 0.5) + 0.2
             ),
+            **typed_binding_decision,
         }
     return {
         "status": "PENDING_VALIDATION",
         "promotion_evidence": [],
         "promotion_evidence_sources": {},
         "pending_reason": "no_independent_source_evidence",
+        **typed_binding_decision,
     }
 
 
@@ -692,7 +720,17 @@ def validate_and_promote_candidates(
         row = dict(candidate)
         row["kind"] = kind
         row.setdefault("name", name)
-        row.setdefault("candidate_id", _stable_id("cand", kind, name, row.get("source_refs")))
+        row.setdefault(
+            "candidate_id",
+            _stable_id(
+                "cand",
+                kind,
+                name,
+                _source_identity(row, prefix="candidate"),
+                row.get("source_refs"),
+                row.get("verbatim_quote"),
+            ),
+        )
         normalized.append(row)
 
     conflicted_keys: dict[tuple[str, str], set[str]] = defaultdict(set)
@@ -845,6 +883,362 @@ def _diagnostic_entry(
         "derivation": derivation,
         "promotion_evidence": list(candidate.get("promotion_evidence") or []),
         "promotion_evidence_sources": dict(candidate.get("promotion_evidence_sources") or {}),
+    }
+
+
+def project_validated_candidates_to_asset_spaces(
+    validated: list[dict[str, Any]],
+    *,
+    business_objects: list[dict[str, Any]] | None = None,
+    data_tables: list[dict[str, Any]] | None = None,
+    roles: list[dict[str, Any]] | None = None,
+    state_machines: list[dict[str, Any]] | None = None,
+    entity_relations: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Project source-validated typed candidates into existing asset spaces.
+
+    A name alone is not enough authority for a typed binding. Fields and
+    states require a source-anchored ``owner``; relations require both
+    ``source_entity`` and ``target_entity``. Missing or unknown bindings stay
+    visible as coverage gaps and never become guessed objects or edges.
+    """
+    objects = [dict(row) for row in (business_objects or []) if isinstance(row, dict)]
+    tables = [dict(row) for row in (data_tables or []) if isinstance(row, dict)]
+    projected_roles = [dict(row) for row in (roles or []) if isinstance(row, dict)]
+    machines = [dict(row) for row in (state_machines or []) if isinstance(row, dict)]
+    relations = [dict(row) for row in (entity_relations or []) if isinstance(row, dict)]
+    gaps: list[dict[str, Any]] = []
+    projected_by_kind: Counter[str] = Counter()
+
+    def source_refs(candidate: dict[str, Any]) -> list[dict[str, Any]]:
+        refs = [
+            dict(row)
+            for row in _list(candidate.get("source_refs"))
+            if isinstance(row, dict) and row
+        ]
+        if refs:
+            return refs
+        source_id = _text(candidate.get("source_id"))
+        locator = _text(candidate.get("source_locator"))
+        quote = _text(candidate.get("verbatim_quote"))[:500]
+        if not source_id and not locator and not quote:
+            return []
+        return [{
+            "source_id": source_id,
+            "locator": locator,
+            "quote": quote,
+        }]
+
+    def candidate_ref(candidate: dict[str, Any]) -> str:
+        return _text(candidate.get("candidate_id")) or _stable_id(
+            "candidate",
+            candidate.get("kind"),
+            candidate.get("name"),
+            candidate.get("source_id"),
+            candidate.get("source_locator"),
+        )
+
+    def append_candidate_ref(row: dict[str, Any], ref: str) -> None:
+        refs = [
+            _text(value)
+            for value in _list(row.get("semantic_candidate_refs"))
+            if _text(value)
+        ]
+        if ref not in refs:
+            refs.append(ref)
+        row["semantic_candidate_refs"] = refs
+
+    def append_candidate_evidence(
+        row: dict[str, Any],
+        ref: str,
+        refs: list[dict[str, Any]],
+    ) -> None:
+        evidence = [
+            dict(value)
+            for value in _list(row.get("semantic_candidate_evidence"))
+            if isinstance(value, dict)
+        ]
+        if not any(_text(value.get("candidate_id")) == ref for value in evidence):
+            evidence.append({"candidate_id": ref, "source_refs": refs})
+        row["semantic_candidate_evidence"] = evidence
+
+    def gap(
+        candidate: dict[str, Any],
+        code: str,
+        missing: list[str],
+    ) -> None:
+        ref = candidate_ref(candidate)
+        gaps.append({
+            "gap_id": _stable_id("semantic_gap", ref, code),
+            "code": code,
+            "candidate_id": ref,
+            "candidate_kind": _text(candidate.get("kind")).lower(),
+            "candidate_name": _text(candidate.get("name")),
+            "missing_bindings": list(missing),
+            "source_refs": source_refs(candidate),
+            "operator_action": "provide source-grounded typed bindings or independent material evidence",
+        })
+
+    def unresolved_typed_bindings(candidate: dict[str, Any]) -> list[str]:
+        kind = _text(candidate.get("kind")).lower()
+        quote = _text(candidate.get("verbatim_quote"))
+        unresolved = [
+            field
+            for field in _TYPED_BINDING_FIELDS.get(kind, ())
+            if (
+                not _text(candidate.get(field))
+                or _text(candidate.get(field)) not in quote
+            )
+        ]
+        if _text(candidate.get("typed_binding_status")).upper() != "COMPLETE":
+            declared_gaps = [
+                _text(value)
+                for value in _list(candidate.get("typed_binding_gaps"))
+                if _text(value)
+            ]
+            unresolved.extend(
+                declared_gaps or _TYPED_BINDING_FIELDS.get(kind, ())
+            )
+        return sorted(set(unresolved))
+
+    candidates = [
+        dict(row)
+        for row in validated
+        if (
+            isinstance(row, dict)
+            and _text(row.get("status")).upper() == "VALIDATED"
+            and _text(row.get("kind")).lower() in _GENERIC_KINDS
+        )
+    ]
+
+    object_by_name = {
+        _text(row.get("object") or row.get("name")): row
+        for row in objects
+        if _text(row.get("object") or row.get("name"))
+    }
+    for candidate in candidates:
+        if _text(candidate.get("kind")).lower() != "entity":
+            continue
+        name = _text(candidate.get("name"))
+        if not name:
+            continue
+        ref = candidate_ref(candidate)
+        row = object_by_name.get(name)
+        if row is None:
+            row = {
+                "object": name,
+                "source": "semantic_extraction_validated",
+                "source_id": _text(candidate.get("source_id")),
+                "source_refs": source_refs(candidate),
+                "key_business_fields": [],
+                "confidence": float(candidate.get("confidence") or 0.7),
+                "behavior_ir_promotion_status": "ENTITY_SPACE_ACCEPTED",
+            }
+            objects.append(row)
+            object_by_name[name] = row
+        append_candidate_evidence(row, ref, source_refs(candidate))
+        append_candidate_ref(row, ref)
+        projected_by_kind["entity"] += 1
+
+    known_entity_names = set(object_by_name)
+    known_entity_names.update(
+        _text(row.get("name")) for row in tables if _text(row.get("name"))
+    )
+
+    role_by_name = {
+        _text(row.get("role") or row.get("name")): row
+        for row in projected_roles
+        if _text(row.get("role") or row.get("name"))
+    }
+    machine_by_owner = {
+        _text(row.get("object") or row.get("entity")): row
+        for row in machines
+        if _text(row.get("object") or row.get("entity"))
+    }
+    relation_by_key = {
+        (
+            _text(row.get("from_entity")),
+            _text(row.get("to_entity")),
+            _text(row.get("relation_type")),
+        ): row
+        for row in relations
+    }
+
+    for candidate in candidates:
+        kind = _text(candidate.get("kind")).lower()
+        name = _text(candidate.get("name"))
+        ref = candidate_ref(candidate)
+        refs = source_refs(candidate)
+        if kind == "actor":
+            row = role_by_name.get(name)
+            if row is None:
+                row = {
+                    "role_id": _stable_id("semantic_role", name, ref),
+                    "role": name,
+                    "source_id": _text(candidate.get("source_id")),
+                    "source_locator": _text(candidate.get("source_locator")),
+                    "source_refs": refs,
+                    "confidence": float(candidate.get("confidence") or 0.7),
+                    "derivation": "validated_semantic_actor",
+                }
+                projected_roles.append(row)
+                role_by_name[name] = row
+            append_candidate_evidence(row, ref, refs)
+            append_candidate_ref(row, ref)
+            projected_by_kind["actor"] += 1
+        elif kind == "field":
+            unresolved = unresolved_typed_bindings(candidate)
+            if unresolved:
+                gap(
+                    candidate,
+                    "SEMANTIC_FIELD_OWNER_UNRESOLVED",
+                    unresolved,
+                )
+                continue
+            owner = _text(candidate.get("owner"))
+            if not owner or owner not in known_entity_names:
+                gap(candidate, "SEMANTIC_FIELD_OWNER_UNRESOLVED", ["owner"])
+                continue
+            owner_row = object_by_name.get(owner)
+            if owner_row is None:
+                gap(candidate, "SEMANTIC_FIELD_OWNER_UNRESOLVED", ["business_object"])
+                continue
+            fields = [
+                _text(value)
+                for value in _list(owner_row.get("key_business_fields"))
+                if _text(value)
+            ]
+            field_added = name not in fields
+            if field_added:
+                fields.append(name)
+            owner_row["key_business_fields"] = fields
+            bindings = [
+                dict(row)
+                for row in _list(owner_row.get("semantic_field_bindings"))
+                if isinstance(row, dict)
+            ]
+            if not any(
+                _text(row.get("field")) == name
+                and _text(row.get("candidate_id")) == ref
+                for row in bindings
+            ):
+                bindings.append({
+                    "field": name,
+                    "candidate_id": ref,
+                    "source_refs": refs,
+                    "projected_field_added": field_added,
+                })
+            owner_row["semantic_field_bindings"] = bindings
+            append_candidate_evidence(owner_row, ref, refs)
+            append_candidate_ref(owner_row, ref)
+            projected_by_kind["field"] += 1
+        elif kind == "state":
+            unresolved = unresolved_typed_bindings(candidate)
+            if unresolved:
+                gap(
+                    candidate,
+                    "SEMANTIC_STATE_OWNER_UNRESOLVED",
+                    unresolved,
+                )
+                continue
+            owner = _text(candidate.get("owner"))
+            if not owner or owner not in known_entity_names:
+                gap(candidate, "SEMANTIC_STATE_OWNER_UNRESOLVED", ["owner"])
+                continue
+            row = machine_by_owner.get(owner)
+            if row is None:
+                row = {
+                    "state_machine_id": _stable_id("semantic_state_machine", owner),
+                    "object": owner,
+                    "states": [],
+                    "transitions": [],
+                    "source_id": _text(candidate.get("source_id")),
+                    "source_refs": refs,
+                    "derivation": "validated_semantic_state",
+                }
+                machines.append(row)
+                machine_by_owner[owner] = row
+            states = [_text(value) for value in _list(row.get("states")) if _text(value)]
+            state_added = name not in states
+            if state_added:
+                states.append(name)
+            row["states"] = states
+            state_bindings = [
+                dict(value)
+                for value in _list(row.get("semantic_state_bindings"))
+                if isinstance(value, dict)
+            ]
+            if not any(
+                _text(value.get("state")) == name
+                and _text(value.get("candidate_id")) == ref
+                for value in state_bindings
+            ):
+                state_bindings.append({
+                    "state": name,
+                    "candidate_id": ref,
+                    "source_refs": refs,
+                    "projected_state_added": state_added,
+                })
+            row["semantic_state_bindings"] = state_bindings
+            append_candidate_evidence(row, ref, refs)
+            append_candidate_ref(row, ref)
+            projected_by_kind["state"] += 1
+        elif kind == "relation":
+            unresolved = unresolved_typed_bindings(candidate)
+            if unresolved:
+                gap(
+                    candidate,
+                    "SEMANTIC_RELATION_ENDPOINT_UNRESOLVED",
+                    unresolved,
+                )
+                continue
+            source_entity = _text(candidate.get("source_entity"))
+            target_entity = _text(candidate.get("target_entity"))
+            missing = [
+                field
+                for field, value in (
+                    ("source_entity", source_entity),
+                    ("target_entity", target_entity),
+                )
+                if not value or value not in known_entity_names
+            ]
+            if missing:
+                gap(candidate, "SEMANTIC_RELATION_ENDPOINT_UNRESOLVED", missing)
+                continue
+            key = (source_entity, target_entity, name)
+            row = relation_by_key.get(key)
+            if row is None:
+                row = {
+                    "relation_id": _stable_id("semantic_relation", *key, ref),
+                    "from_entity": source_entity,
+                    "to_entity": target_entity,
+                    "relation_type": name,
+                    "source_id": _text(candidate.get("source_id")),
+                    "source_refs": refs,
+                    "confidence": float(candidate.get("confidence") or 0.7),
+                    "derivation": "validated_semantic_relation",
+                    "status": "accepted",
+                }
+                relations.append(row)
+                relation_by_key[key] = row
+            append_candidate_evidence(row, ref, refs)
+            append_candidate_ref(row, ref)
+            projected_by_kind["relation"] += 1
+
+    return {
+        "business_objects": objects,
+        "roles": projected_roles,
+        "state_machines": machines,
+        "entity_relations": relations,
+        "coverage_gaps": gaps,
+        "projection_receipt": {
+            "schema_version": "qualibug.typed-semantic-candidate-projection.v1",
+            "validated_input_count": len(candidates),
+            "projected_by_kind": dict(sorted(projected_by_kind.items())),
+            "gap_count": len(gaps),
+            "gap_codes": dict(sorted(Counter(row["code"] for row in gaps).items())),
+            "authority": "source_validated_typed_candidates_only",
+        },
     }
 
 

@@ -49,6 +49,11 @@ _SEMANTIC_PROVIDER_SLOTS = threading.BoundedSemaphore(
     _SEMANTIC_PROVIDER_CONCURRENCY_LIMIT
 )
 _VALID_KINDS = {"entity", "field", "relation", "state", "actor", "rule"}
+_TYPED_CANDIDATE_BINDINGS = {
+    "field": ("owner",),
+    "state": ("owner",),
+    "relation": ("source_entity", "target_entity"),
+}
 _VALID_RULE_ORIGINS = {"explicit", "inferred"}
 _VALID_RULE_FAMILIES = {
     "prohibition", "permission", "obligation", "state_transition",
@@ -694,9 +699,15 @@ _SYSTEM_PROMPT = """\
 7. 实体/字段/关系/状态/角色候选格式：
    {"kind":"entity|field|relation|state|actor",
     "name":"原文名称",
+    "owner":"字段或状态所属对象的原文名称；仅 field/state 必填",
+    "source_entity":"关系起点的原文名称；仅 relation 必填",
+    "target_entity":"关系终点的原文名称；仅 relation 必填",
     "source_locator":"章节或字符范围",
     "verbatim_quote":"原文精确证据",
     "confidence":0.0-1.0}
+   field/state 的 owner、relation 的 source_entity/target_entity 必须全部逐字出现在
+   同一个 verbatim_quote 中；原文没有明确绑定时保留候选名称但把相应字段留空，
+   不得根据距离、顺序、文件名或行业常识补写。
 8. 没有可抽取内容时返回 {"candidates": []}。
 9. 实体、字段、关系、状态和角色不得推断、翻译、归纳或创造。规则允许抽取
    `rule_origin=inferred` 的隐含语义假设，但它不是业务事实：必须逐字锚定原文，
@@ -1567,6 +1578,25 @@ def validate_semantic_candidates(
 
         raw_locator = _text(candidate.get("source_locator"))
         locator = raw_locator or locator_prefix
+        typed_bindings: dict[str, str] = {}
+        missing_typed_bindings: list[str] = []
+        invalid_typed_binding = ""
+        for binding_name in _TYPED_CANDIDATE_BINDINGS.get(kind, ()):
+            binding_value = _text(candidate.get(binding_name))
+            if not binding_value:
+                missing_typed_bindings.append(binding_name)
+                continue
+            if binding_value not in verbatim_quote:
+                invalid_typed_binding = binding_name
+                break
+            typed_bindings[binding_name] = binding_value
+        if invalid_typed_binding:
+            rejected.append({
+                "name": name,
+                "kind": kind,
+                "reason": f"typed_binding_not_in_quote:{invalid_typed_binding}",
+            })
+            continue
         absolute_quote_start = (
             source_offset + exact_position if exact_position >= 0 else None
         )
@@ -1575,27 +1605,35 @@ def validate_semantic_candidates(
             if absolute_quote_start is not None
             else None
         )
-        validated.append(
-            {
-                "kind": kind,
-                "name": name,
-                "source_id": source_id,
-                "source_locator": locator,
-                "verbatim_quote": verbatim_quote[:500],
-                "quote_start": absolute_quote_start,
-                "quote_end": absolute_quote_end,
-                "confidence": min(
-                    1.0,
-                    max(0.0, float(confidence or 0.5)),
-                ),
-                "status": "CANDIDATE",
-                "language_contract": (
-                    "ORIGINAL_CHINESE_PRESERVED"
-                    if re.search(r"[\u3400-\u4dbf\u4e00-\u9fff]", name)
-                    else "ORIGINAL_SOURCE_NAME_PRESERVED"
-                ),
-            }
-        )
+        validated_row = {
+            "kind": kind,
+            "name": name,
+            "source_id": source_id,
+            "source_locator": locator,
+            "verbatim_quote": verbatim_quote[:500],
+            "quote_start": absolute_quote_start,
+            "quote_end": absolute_quote_end,
+            "confidence": min(
+                1.0,
+                max(0.0, float(confidence or 0.5)),
+            ),
+            "status": "CANDIDATE",
+            "language_contract": (
+                "ORIGINAL_CHINESE_PRESERVED"
+                if re.search(r"[\u3400-\u4dbf\u4e00-\u9fff]", name)
+                else "ORIGINAL_SOURCE_NAME_PRESERVED"
+            ),
+            "typed_binding_status": (
+                "INCOMPLETE"
+                if missing_typed_bindings
+                else "COMPLETE"
+                if kind in _TYPED_CANDIDATE_BINDINGS
+                else "NOT_REQUIRED"
+            ),
+            "typed_binding_gaps": missing_typed_bindings,
+        }
+        validated_row.update(typed_bindings)
+        validated.append(validated_row)
 
     return validated, rejected
 

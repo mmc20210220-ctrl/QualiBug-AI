@@ -1108,8 +1108,25 @@ Contract. This section pins only the package-local anchors:
   build: regex rules for the changed source come from its freshly parsed row;
   eligible LLM rules attach to that row before source replacement (never to a
   soon-to-be-replaced asset list); and the shared candidate-validation gate is
-  recomputed after semantic candidates merge so multi-source validated entity
-  candidates re-enter `business_objects`. Mode, batch and per-source receipts
+  recomputed after semantic candidates merge. `_candidate_validation`
+  `project_validated_candidates_to_asset_spaces` is the only non-rule typed
+  projection authority: validated entities enter `business_objects`, actors
+  enter `roles`, source-local `field.owner` bindings enter the owning object's
+  `key_business_fields`, source-local `state.owner` bindings enter
+  `state_machines`, and relations enter `entity_relations` only when both
+  source-local endpoints resolve to known entities. Typed binding values must
+  occur in the same verbatim quote and are revalidated at extraction, candidate
+  and final projection gates. Generic candidate occurrence identity includes
+  its source identity and quote, so independent documents never collapse into
+  one lineage record merely because they use the same name. Missing/unknown
+  owners or endpoints emit stable `SEMANTIC_*_UNRESOLVED` gaps; pending
+  candidates never project. Incremental refresh removes prior typed additions before recomputing,
+  so deleted source meaning cannot survive as stale fields, states, roles,
+  relations or objects;
+  the prior semantic state projection is also excluded from candidate validation
+  so it cannot masquerade as independent corroborating evidence.
+  `qualibug.typed-semantic-candidate-projection.v1` receipts expose per-kind
+  projected counts and gap codes. Mode, batch and per-source receipts
   carry stable `receipt_id` values so repeated refreshes replace prior state
   instead of accumulating identity-less receipts.
 

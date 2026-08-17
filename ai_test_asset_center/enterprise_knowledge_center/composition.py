@@ -1254,7 +1254,7 @@ def _incremental_refresh_semantic_candidate_projection(
 ) -> int:
     """Recompute the full semantic-candidate gate after changed rows are merged."""
     from ._candidate_validation import (
-        candidates_to_behavior_ir_entries,
+        project_validated_candidates_to_asset_spaces,
         validate_and_promote_candidates,
     )
 
@@ -1263,6 +1263,39 @@ def _incremental_refresh_semantic_candidate_projection(
         for row in _incremental_list(asset.get("semantic_candidates"))
         if isinstance(row, dict)
     ]
+    # Validation must not use the previous semantic projection as independent
+    # evidence, or one removed source can make a surviving candidate validate
+    # against stale state that the candidate layer itself created.
+    base_state_machines: list[dict[str, Any]] = []
+    for raw in _incremental_list(asset.get("state_machines")):
+        if not isinstance(raw, dict):
+            continue
+        if _incremental_text(raw.get("derivation"), 100) == "validated_semantic_state":
+            continue
+        row = dict(raw)
+        prior_state_bindings = [
+            dict(value)
+            for value in _incremental_list(row.pop("semantic_state_bindings", []))
+            if isinstance(value, dict)
+        ]
+        prior_states = {
+            _incremental_text(value.get("state"), 500)
+            for value in prior_state_bindings
+            if (
+                _incremental_text(value.get("state"), 500)
+                and bool(value.get("projected_state_added"))
+            )
+        }
+        if prior_states:
+            row["states"] = [
+                value
+                for value in _incremental_list(row.get("states"))
+                if _incremental_text(value, 500) not in prior_states
+            ]
+        row.pop("semantic_candidate_refs", None)
+        row.pop("semantic_candidate_evidence", None)
+        base_state_machines.append(row)
+
     receipt = validate_and_promote_candidates(
         candidates,
         interfaces=[
@@ -1280,38 +1313,105 @@ def _incremental_refresh_semantic_candidate_projection(
             for row in _incremental_list(asset.get("rule_library"))
             if isinstance(row, dict)
         ],
-        state_machines=[
-            dict(row)
-            for row in _incremental_list(asset.get("state_machines"))
-            if isinstance(row, dict)
-        ],
+        state_machines=base_state_machines,
     )
     asset["candidate_validation_receipt"] = receipt.to_dict()
-    projected = candidates_to_behavior_ir_entries(
-        receipt.validated,
-        receipt.pending,
-    )
-    objects = [
-        dict(row)
-        for row in _incremental_list(asset.get("business_objects"))
-        if isinstance(row, dict)
-        and _incremental_text(row.get("source"), 100)
-        != "semantic_extraction_validated"
-    ]
-    object_names = {
+    objects: list[dict[str, Any]] = []
+    for raw in _incremental_list(asset.get("business_objects")):
+        if not isinstance(raw, dict):
+            continue
+        if _incremental_text(raw.get("source"), 100) == "semantic_extraction_validated":
+            continue
+        row = dict(raw)
+        row.pop("semantic_candidate_refs", None)
+        row.pop("semantic_candidate_evidence", None)
+        prior_bindings = [
+            dict(value)
+            for value in _incremental_list(row.pop("semantic_field_bindings", []))
+            if isinstance(value, dict)
+        ]
+        prior_fields = {
+            _incremental_text(value.get("field"), 500)
+            for value in prior_bindings
+            if (
+                _incremental_text(value.get("field"), 500)
+                and bool(value.get("projected_field_added"))
+            )
+        }
+        if prior_fields:
+            row["key_business_fields"] = [
+                value
+                for value in _incremental_list(row.get("key_business_fields"))
+                if _incremental_text(value, 500) not in prior_fields
+            ]
+        objects.append(row)
+
+    base_roles: list[dict[str, Any]] = []
+    for raw in _incremental_list(asset.get("roles")):
+        if not isinstance(raw, dict):
+            continue
+        if _incremental_text(raw.get("derivation"), 100) == "validated_semantic_actor":
+            continue
+        row = dict(raw)
+        row.pop("semantic_candidate_refs", None)
+        row.pop("semantic_candidate_evidence", None)
+        base_roles.append(row)
+
+    base_relations: list[dict[str, Any]] = []
+    for raw in _incremental_list(asset.get("entity_relations")):
+        if not isinstance(raw, dict):
+            continue
+        if (
+            _incremental_text(raw.get("derivation"), 100)
+            == "validated_semantic_relation"
+        ):
+            continue
+        row = dict(raw)
+        row.pop("semantic_candidate_refs", None)
+        row.pop("semantic_candidate_evidence", None)
+        base_relations.append(row)
+
+    object_names_before = {
         _incremental_text(row.get("object") or row.get("name"), 500)
         for row in objects
+        if _incremental_text(row.get("object") or row.get("name"), 500)
     }
-    added = 0
-    for row in projected:
-        name = _incremental_text(row.get("object"), 500)
-        if not name or name in object_names:
-            continue
-        objects.append(dict(row))
-        object_names.add(name)
-        added += 1
-    asset["business_objects"] = objects
-    return added
+    typed_projection = project_validated_candidates_to_asset_spaces(
+        receipt.validated,
+        business_objects=objects,
+        data_tables=[
+            dict(row)
+            for row in _incremental_list(asset.get("data_tables"))
+            if isinstance(row, dict)
+        ],
+        roles=base_roles,
+        state_machines=base_state_machines,
+        entity_relations=base_relations,
+    )
+    asset["business_objects"] = typed_projection["business_objects"]
+    asset["roles"] = typed_projection["roles"]
+    asset["state_machines"] = typed_projection["state_machines"]
+    asset["entity_relations"] = typed_projection["entity_relations"]
+    typed_gap_codes = {
+        "SEMANTIC_FIELD_OWNER_UNRESOLVED",
+        "SEMANTIC_RELATION_ENDPOINT_UNRESOLVED",
+        "SEMANTIC_STATE_OWNER_UNRESOLVED",
+    }
+    asset["coverage_gaps"] = [
+        dict(row)
+        for row in _incremental_list(asset.get("coverage_gaps"))
+        if isinstance(row, dict)
+        and _incremental_text(row.get("code"), 100) not in typed_gap_codes
+    ] + [dict(row) for row in typed_projection["coverage_gaps"]]
+    asset["typed_semantic_projection_receipt"] = dict(
+        typed_projection["projection_receipt"]
+    )
+    object_names_after = {
+        _incremental_text(row.get("object") or row.get("name"), 500)
+        for row in asset["business_objects"]
+        if _incremental_text(row.get("object") or row.get("name"), 500)
+    }
+    return len(object_names_after - object_names_before)
 
 
 def _incremental_asset_identity(
@@ -1364,6 +1464,19 @@ def _incremental_update_summary(
             "role_count": len(asset.get("roles") or []),
             "state_machine_count": len(asset.get("state_machines") or []),
             "relationship_count": len(asset.get("relationships") or []),
+            "typed_semantic_projected_count": sum(
+                int(value or 0)
+                for value in _incremental_dict(
+                    _incremental_dict(
+                        asset.get("typed_semantic_projection_receipt")
+                    ).get("projected_by_kind")
+                ).values()
+            ),
+            "typed_semantic_gap_count": int(
+                _incremental_dict(
+                    asset.get("typed_semantic_projection_receipt")
+                ).get("gap_count") or 0
+            ),
             "incremental_semantic_refresh_status": _incremental_text(
                 refresh_receipt.get("status"), 100
             ),

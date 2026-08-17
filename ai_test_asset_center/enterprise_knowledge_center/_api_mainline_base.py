@@ -1261,7 +1261,10 @@ def build_enterprise_business_knowledge_asset(
     # Rule relationalization: structurize text rules into causal chains
     rules = _structurize_rule_causal_chains(rules)
     # ── Phase 4: Candidate validation and promotion ──
-    from ._candidate_validation import validate_and_promote_candidates, candidates_to_behavior_ir_entries
+    from ._candidate_validation import (
+        project_validated_candidates_to_asset_spaces,
+        validate_and_promote_candidates,
+    )
     _candidate_receipt = validate_and_promote_candidates(
         semantic_candidates,
         interfaces=interfaces,
@@ -1269,17 +1272,52 @@ def build_enterprise_business_knowledge_asset(
         rules=rules,
         state_machines=state_machines,
     )
-    # Feed validated + pending candidates into entity space
-    _candidate_entities = candidates_to_behavior_ir_entries(
+    # Project only source-validated candidates into their existing typed asset
+    # spaces. Incomplete field/state owners and relation endpoints remain GAPs;
+    # pending candidates never enter a formal model.
+    _typed_candidate_projection = project_validated_candidates_to_asset_spaces(
         _candidate_receipt.validated,
-        _candidate_receipt.pending,
+        business_objects=objects,
+        data_tables=tables,
+        roles=roles,
+        state_machines=state_machines,
     )
-    for _cand_ent in _candidate_entities:
-        _cand_name = str(_cand_ent.get("object") or "")
-        if _cand_name and _cand_name not in object_names:
-            objects.append(_cand_ent)
-            object_names.add(_cand_name)
+    objects = list(_typed_candidate_projection["business_objects"])
+    roles = list(_typed_candidate_projection["roles"])
+    state_machines = list(_typed_candidate_projection["state_machines"])
+    parse_coverage_gaps.extend(_typed_candidate_projection["coverage_gaps"])
     entity_relations = _extract_entity_relations(interfaces, tables, field_dictionary, rules, state_machines, permissions)
+    _relation_by_key = {
+        (
+            str(row.get("from_entity") or ""),
+            str(row.get("to_entity") or ""),
+            str(row.get("relation_type") or ""),
+        ): row
+        for row in entity_relations
+        if isinstance(row, dict)
+    }
+    for _relation in _typed_candidate_projection["entity_relations"]:
+        _key = (
+            str(_relation.get("from_entity") or ""),
+            str(_relation.get("to_entity") or ""),
+            str(_relation.get("relation_type") or ""),
+        )
+        _existing_relation = _relation_by_key.get(_key)
+        if _existing_relation is not None:
+            for _field in (
+                "semantic_candidate_refs",
+                "semantic_candidate_evidence",
+            ):
+                _existing_values = list(_existing_relation.get(_field) or [])
+                for _value in _relation.get(_field) or []:
+                    if _value not in _existing_values:
+                        _existing_values.append(_value)
+                if _existing_values:
+                    _existing_relation[_field] = _existing_values
+            continue
+        _copied_relation = dict(_relation)
+        entity_relations.append(_copied_relation)
+        _relation_by_key[_key] = _copied_relation
     cross_doc_conflicts = _detect_cross_document_conflicts(field_dictionary, rules, interfaces, permissions)
     # ── Phase 0: asset-level space health check ──
     # If entire entity/field/permission spaces are empty, emit asset-level gaps.
@@ -1342,6 +1380,9 @@ def build_enterprise_business_knowledge_asset(
         "rule_promotion_receipts": _rule_promotion_receipts,
         "rule_promotion_gates": _rule_promotion_gates,
         "candidate_validation_receipt": _candidate_receipt.to_dict(),
+        "typed_semantic_projection_receipt": dict(
+            _typed_candidate_projection["projection_receipt"]
+        ),
         "oracle_library": oracles,
         "governance": {
             "no_manual_customer_industry_pack_required": True,
@@ -1380,6 +1421,17 @@ def build_enterprise_business_knowledge_asset(
         "oracle_count": len(asset["oracle_library"]),
         "generated_probe_count": len(probes),
         "relationship_count": len(asset["relationships"]),
+        "typed_semantic_projected_count": sum(
+            int(value or 0)
+            for value in (
+                _typed_candidate_projection["projection_receipt"]
+                .get("projected_by_kind", {})
+                .values()
+            )
+        ),
+        "typed_semantic_gap_count": int(
+            _typed_candidate_projection["projection_receipt"].get("gap_count") or 0
+        ),
         "knowledge_ready": bool(active and (rules or interfaces or tables)),
         "claim_guard": {"absolute_understanding_allowed": False, "approved_product_language": "平台将企业资料归并为可追溯业务知识资产，并把规则、接口、数据依赖和高价值风险转化为可审计的 Bug 验证计划。", "prohibited_product_language": ["上传资料后自动完全理解所有业务", "不需要人工复核即可保证零缺陷", "覆盖全部业务 Bug"]},
     }
