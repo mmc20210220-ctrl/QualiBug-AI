@@ -67,6 +67,42 @@ def _asset() -> dict[str, Any]:
             },
             {"rule_id": "rule:src:4", "source_id": "src:api", "statement": "", "severity": "P0"},
         ],
+        "semantic_candidates": [
+            {
+                "candidate_id": "candidate_implicit_return_sequence",
+                "kind": "rule",
+                "name": "仓库验收入库",
+                "rule_origin": "inferred",
+                "candidate_status": "VALIDATED",
+                "source_id": "src:prd",
+                "source_locator": "PRD.md#退货流程",
+                "verbatim_quote": "客服登记退货，仓库验收入库，财务原路退款。",
+                "evidence_spans": [{
+                    "text": "客服登记退货，仓库验收入库，财务原路退款。",
+                    "start": 0,
+                    "end": 24,
+                }],
+                "semantic_spans": {
+                    "actor": [{"text": "仓库"}],
+                    "object": [{"text": "退货"}],
+                    "action": [{"text": "验收入库"}],
+                },
+                "suggested_rule_family": "cross_entity",
+                "normalized_suggestion": {
+                    "effect": {"operator_family": "sequence_hypothesis", "action": "验收入库"},
+                },
+            },
+            {
+                "candidate_id": "candidate_explicit_not_advisory",
+                "kind": "rule",
+                "name": "订单支付前不得发货",
+                "rule_origin": "explicit",
+                "candidate_status": "VALIDATED",
+                "source_id": "src:prd",
+                "verbatim_quote": "订单支付前不得发货",
+                "evidence_spans": [{"text": "订单支付前不得发货"}],
+            },
+        ],
         "state_machines": [
             {
                 "state_machine_id": "state:src:1",
@@ -151,6 +187,15 @@ def test_projection_carries_source_grounded_content() -> None:
     assert world["documented_rules"][0]["is_verifiable"] is True
     assert world["documented_rules"][1]["is_verifiable"] is False
 
+    # Inferred Chinese semantics are carried as explicitly unverified reasoning
+    # hypotheses, never mixed into documented_rules or formal rule authority.
+    assert len(world["semantic_hypotheses"]) == 1
+    semantic_hypothesis = world["semantic_hypotheses"][0]
+    assert semantic_hypothesis["candidate_id"] == "candidate_implicit_return_sequence"
+    assert semantic_hypothesis["statement"] == "客服登记退货，仓库验收入库，财务原路退款。"
+    assert semantic_hypothesis["authority"] == "UNVERIFIED_SEMANTIC_HYPOTHESIS"
+    assert semantic_hypothesis["formal_rule_authority"] is False
+
     assert len(world["state_machines"]) == 1
     sm = world["state_machines"][0]
     assert sm["entity"] == "order"
@@ -189,6 +234,7 @@ def test_projection_is_bounded_and_empty_safe() -> None:
     assert empty["documented_rules"] == []
     assert empty["entities"] == []
     assert empty["state_machines"] == []
+    assert empty["semantic_hypotheses"] == []
     assert empty["gaps"] == []
 
 
@@ -209,6 +255,8 @@ def test_projection_receipt_reports_truncation_instead_of_silent_cap() -> None:
     assert receipt["counts"]["relationships_total"] == 1
     assert receipt["counts"]["roles_total"] == 2
     assert receipt["counts"]["roles_projected"] == 1
+    assert receipt["counts"]["semantic_hypotheses_total"] == 1
+    assert receipt["counts"]["semantic_hypotheses_projected"] == 1
     assert "world_model_rules_truncated:1/2" in receipt["reason_codes"]
     assert "world_model_roles_truncated:1/2" in receipt["reason_codes"]
 
@@ -232,3 +280,26 @@ def test_projection_env_budget_cannot_narrow_below_floor() -> None:
     receipt = world["projection_receipt"]
     assert receipt["budgets"]["max_rules"] >= 40
     assert receipt["counts"]["rules_projected"] == 2
+
+
+def test_semantic_hypothesis_budget_is_receipted_not_silent() -> None:
+    asset = _asset()
+    second = dict(asset["semantic_candidates"][0])
+    second.update({
+        "candidate_id": "candidate_implicit_second",
+        "name": "第二条隐含语义",
+        "verbatim_quote": "第二条来源锚定的隐含语义。",
+        "evidence_spans": [{"text": "第二条来源锚定的隐含语义。"}],
+    })
+    asset["semantic_candidates"].append(second)
+
+    world = project_knowledge_world_model(
+        asset,
+        max_semantic_hypotheses=1,
+    )
+    receipt = world["projection_receipt"]
+
+    assert len(world["semantic_hypotheses"]) == 1
+    assert receipt["counts"]["semantic_hypotheses_total"] == 2
+    assert receipt["counts"]["semantic_hypotheses_projected"] == 1
+    assert "world_model_semantic_hypotheses_truncated:1/2" in receipt["reason_codes"]

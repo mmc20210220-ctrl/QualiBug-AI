@@ -698,11 +698,15 @@ _SYSTEM_PROMPT = """\
     "verbatim_quote":"原文精确证据",
     "confidence":0.0-1.0}
 8. 没有可抽取内容时返回 {"candidates": []}。
-9. 不得推断、翻译、归纳或创造业务事实。
+9. 实体、字段、关系、状态和角色不得推断、翻译、归纳或创造。规则允许抽取
+   `rule_origin=inferred` 的隐含语义假设，但它不是业务事实：必须逐字锚定原文，
+   且后续只能用于生成待运行验证的实验假设，不能进入正式规则或充当交付证据。
 
 业务规则候选（kind=rule）格式与约束：
-10. 找出明确表达约束、许可、禁止、条件、状态变化、不变量、阈值、时间限制的原文，
-    输出 kind=rule 候选。每个 rule 候选格式：
+10. 同时找出两类 rule 候选：原文直接陈述的规则标记 `explicit`；由原文中的
+    流程顺序、角色分工、因果衔接、跨实体联动或多句组合暗示、但没有直接写成
+    规则的可验证语义标记 `inferred`。`inferred` 只是待证伪假设，不能补造任何
+    原文未出现的实体、角色、动作、字段、接口、数值或业务结论。每个候选格式：
     {"kind":"rule",
      "name":"规则简称（原文术语，可为空字符串）",
      "rule_origin":"explicit|inferred",
@@ -729,9 +733,11 @@ _SYSTEM_PROMPT = """\
      "confidence":0.0-1.0}
 11. rule 候选的 evidence_spans、semantic_spans 中的每个 text 必须是原文连续精确子串，
     不得补全、改写或发明；无法精确引用原文时不得输出该候选。
-12. rule_origin=explicit 只用于原文明确陈述的规则；推断、隐含、示例、问题、
-    讨论、历史描述一律 rule_origin=inferred，不得标为 explicit。
-13. 示例句（例如…/比如…）不得作为规则候选输出。
+12. rule_origin=explicit 只用于原文明确陈述的规则；隐含语义必须标记 inferred，
+    不得伪装成 explicit。问题、讨论、历史描述只有形成可证伪的系统行为假设且
+    所有语义槽都逐字锚定时才能作为 inferred，否则不要输出。
+13. 示例句（例如…/比如…）不得作为 explicit 规则；只有当示例描述目标系统的
+    可验证运行行为且标记 inferred 时才可作为待验证假设，绝不能当作规则事实。
 14. 冲突规则分别输出，不自行裁决。
 15. normalized_suggestion 是标准化建议，不是事实；每个标准化字段必须在
     derivations 中给出 derived_from_text（原文证据）与 normalization_method。
@@ -744,9 +750,11 @@ _SYSTEM_PROMPT = """\
 _USER_PROMPT_TEMPLATE = """\
 从下面的企业资料片段中抽取结构化候选。
 
-优先抽取业务规则（kind=rule）：把原文中每一条明确表达的约束、许可、禁止、
-条件、状态变化、不变量、阈值、时间限制、金额/库存/数量守恒关系，都逐条输出
-为独立的 rule 候选。不要因为规则数量多就省略或合并；一条规则 = 一个候选。
+优先抽取业务规则与隐含语义（kind=rule）：把原文中每一条明确表达的约束、许可、
+禁止、条件、状态变化、不变量、阈值、时间限制、守恒关系标记为 explicit；把由
+流程顺序、角色分工、因果衔接、跨实体联动或多句组合暗示出的可验证含义标记为
+inferred。inferred 只是待证伪假设，不是规则事实；不得补造原文之外的语义。
+不要因为数量多就省略或合并；一条规则或一条隐含假设 = 一个候选。
 
 同时抽取规则涉及到的实体、字段、关系、状态、业务角色作为辅助候选。
 
@@ -1852,12 +1860,18 @@ def validate_rule_candidates(
                 continue
 
         joined_evidence = " ".join(evidence_texts)
-        if _EXAMPLE_LEAD_RE.search(joined_evidence.strip()):
+        if (
+            rule_origin == "explicit"
+            and _EXAMPLE_LEAD_RE.search(joined_evidence.strip())
+        ):
             refuse("REJECTED_AMBIGUOUS_STRUCTURE", "example_sentence_not_a_rule")
             continue
-        if not _RULE_SIGNAL_RE.search(joined_evidence):
-            # An "explicit" claim with no constraint signal at all cannot be
-            # distinguished from an inferred one — reject rather than trust.
+        if rule_origin == "explicit" and not _RULE_SIGNAL_RE.search(joined_evidence):
+            # An explicit claim with no source constraint signal cannot be
+            # distinguished from an inferred meaning — reject rather than
+            # silently upgrade it. A candidate already labelled ``inferred``
+            # may pass this point because it remains an advisory hypothesis and
+            # can never enter formal rule governance.
             refuse(
                 "REJECTED_AMBIGUOUS_STRUCTURE",
                 "no_constraint_signal_in_evidence",
@@ -1872,6 +1886,8 @@ def validate_rule_candidates(
         name = _text(candidate.get("name"))
         raw_locator = _text(candidate.get("source_locator")) or locator_prefix
         validated.append({
+            "candidate_id": _text(candidate.get("candidate_id"))
+            or _stable_rule_candidate_id(source_id, evidence_texts[0]),
             "kind": "rule",
             "name": name,
             "source_id": source_id,

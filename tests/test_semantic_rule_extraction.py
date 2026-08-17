@@ -108,6 +108,97 @@ def test_overdue_order_no_ship_is_prohibition_candidate(monkeypatch) -> None:
     assert rule["extractor_receipt"]["extractor_type"] == "llm"
 
 
+def test_implicit_semantic_candidate_without_explicit_modality_is_admitted_only_as_inferred(
+    monkeypatch,
+) -> None:
+    source = "客服登记退货，仓库验收入库，财务原路退款。"
+    inferred = _rule_candidate(
+        name="仓库验收入库",
+        rule_origin="inferred",
+        evidence_spans=[{"text": source}],
+        semantic_spans={
+            "actor": [{"text": "仓库"}],
+            "object": [{"text": "退货"}],
+            "action": [{"text": "验收入库"}],
+            "temporal": [{"text": "财务原路退款"}],
+        },
+        suggested_rule_family="cross_entity",
+        normalized_suggestion={
+            "actor": "仓库",
+            "object": "退货",
+            "condition": None,
+            "effect": {"operator_family": "sequence_hypothesis", "action": "验收入库"},
+            "threshold": None,
+            "exception": None,
+            "temporal": "财务原路退款",
+        },
+        derivations=[
+            {"normalized_path": "actor", "normalized_value": "仓库",
+             "derived_from_text": "仓库", "normalization_method": "semantic_span_verbatim"},
+            {"normalized_path": "object", "normalized_value": "退货",
+             "derived_from_text": "退货", "normalization_method": "semantic_span_verbatim"},
+            {"normalized_path": "effect.operator_family", "normalized_value": "sequence_hypothesis",
+             "derived_from_text": "验收入库", "normalization_method": "semantic_span_verbatim"},
+            {"normalized_path": "effect.action", "normalized_value": "验收入库",
+             "derived_from_text": "验收入库", "normalization_method": "semantic_span_verbatim"},
+            {"normalized_path": "temporal", "normalized_value": "财务原路退款",
+             "derived_from_text": "财务原路退款", "normalization_method": "semantic_span_verbatim"},
+        ],
+        source_locator="流程说明#退货",
+        verbatim_quote=source,
+    )
+
+    receipt = _run(source, [inferred], monkeypatch)
+
+    assert receipt.status == "COMPLETED"
+    assert len(receipt.rule_candidates_validated) == 1
+    candidate = receipt.rule_candidates_validated[0]
+    assert candidate["rule_origin"] == "inferred"
+    assert candidate["candidate_status"] == "VALIDATED"
+    assert candidate["candidate_id"].startswith("candidate_")
+
+    explicit = dict(inferred, rule_origin="explicit")
+    explicit_receipt = _run(source, [explicit], monkeypatch)
+    assert explicit_receipt.rule_candidates_validated == []
+    assert any(
+        row.get("detail") == "no_constraint_signal_in_evidence"
+        for row in explicit_receipt.rule_candidates_rejected
+    )
+
+
+def test_source_example_can_seed_only_an_inferred_runtime_hypothesis(monkeypatch) -> None:
+    source = "例如：操作员提交申请，复核员完成确认。"
+    candidate = _rule_candidate(
+        name="复核员完成确认",
+        rule_origin="inferred",
+        evidence_spans=[{"text": source}],
+        semantic_spans={
+            "actor": [{"text": "复核员"}],
+            "object": [{"text": "申请"}],
+            "action": [{"text": "完成确认"}],
+        },
+        suggested_rule_family="cross_entity",
+        normalized_suggestion={},
+        derivations=[],
+        verbatim_quote=source,
+    )
+
+    inferred_receipt = _run(source, [candidate], monkeypatch)
+    assert len(inferred_receipt.rule_candidates_validated) == 1
+    assert inferred_receipt.rule_candidates_validated[0]["rule_origin"] == "inferred"
+
+    explicit_receipt = _run(
+        source,
+        [dict(candidate, rule_origin="explicit")],
+        monkeypatch,
+    )
+    assert explicit_receipt.rule_candidates_validated == []
+    assert any(
+        row.get("detail") == "example_sentence_not_a_rule"
+        for row in explicit_receipt.rule_candidates_rejected
+    )
+
+
 def test_only_creator_may_cancel_keeps_role_and_permission(monkeypatch) -> None:
     source = "只有订单创建者方可撤销订单。"
     candidate = _rule_candidate(

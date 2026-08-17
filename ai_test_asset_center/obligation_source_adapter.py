@@ -383,6 +383,22 @@ def _planning_property(
     depth = candidate.get("depth")
     if isinstance(depth, dict) and depth:
         property_spec.setdefault("depth", depth)
+        semantic_hypothesis_refs = [
+            _text(value)
+            for value in _list(depth.get("semantic_hypothesis_refs"))
+            if _text(value)
+        ]
+        if semantic_hypothesis_refs:
+            property_spec.setdefault(
+                "semantic_hypothesis_refs",
+                list(dict.fromkeys(semantic_hypothesis_refs)),
+            )
+            property_spec.setdefault(
+                "semantic_hypothesis_authority",
+                "advisory_only",
+            )
+            property_spec.setdefault("formal_rule_authority", False)
+            property_spec.setdefault("customer_delivery_evidence", False)
     return property_spec
 
 

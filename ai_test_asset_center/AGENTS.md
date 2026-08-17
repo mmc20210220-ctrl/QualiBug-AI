@@ -1001,11 +1001,15 @@ Contract. This section pins only the package-local anchors:
   authority: `enterprise_knowledge_center.project_knowledge_world_model`.
   Explicit entity aliases/identifiers/business fields/provenance, rule binding
   readiness and operation refs, role permissions, cross-source contradictions,
-  and parse/coverage gaps must survive the projection. A rule is verifiable
+  parse/coverage gaps, and validated inferred-semantic candidates must survive
+  the projection. Inferred candidates travel only in `semantic_hypotheses` with
+  `authority=UNVERIFIED_SEMANTIC_HYPOTHESIS`, never in `documented_rules`. A
+  rule is verifiable
   only when the asset carries an explicit operation binding/readiness signal;
   presence in `rule_library` alone is not verification. Structured fact
   retrieval in `reasoning_fact_retrieval.retrieve_grounded_facts` schedules
-  rule, state, relation, entity, permission, conflict, and gap sections fairly
+  rule, unverified-semantic-hypothesis, state, relation, entity, permission,
+  conflict, and gap sections fairly
   and receipts total/emitted/truncated counts per section, so a large rule list
   cannot starve other business evidence or make missing coverage look complete.
   `collect_reasoner_hypotheses` receives the scan's project/root explicitly;
@@ -1040,14 +1044,26 @@ Contract. This section pins only the package-local anchors:
   `kind=rule`: the LLM emits rule candidates
   (evidence_spans[]/semantic_spans/normalized_suggestion/derivations/rule_origin),
   and `validate_rule_candidates` deterministically anchors every evidence
-  span to the source (`source[start:end] == text`), requires semantic-span
+  span to the source (`source[start:end] == text`), assigns a stable
+  `candidate_id`, requires semantic-span
   containment, numeric fidelity (a normalized threshold must appear verbatim
   in the evidence), derivation coverage for every normalized field, and a
-  constraint signal in the evidence — hallucinated
+  constraint signal before any candidate may claim `explicit` — hallucinated
   actors/actions/conditions/thresholds and inferred-as-explicit claims are
-  rejected with named reason codes, never by confidence.
+  rejected with named reason codes, never by confidence. A source-anchored
+  candidate already labelled `inferred` may lack an explicit modality because
+  its role is to preserve Chinese implicit meaning (process order, role/action
+  allocation, causal or cross-entity linkage) as a falsifiable hypothesis; it
+  never becomes a fact by validation alone.
   `rule_origin=explicit|inferred` are kept separate; only explicit may ever
-  enter formal governance. Runtime modes: `off` (regex-only), `shadow`
+  enter formal rule governance. Inferred candidates project through
+  `project_knowledge_world_model.semantic_hypotheses` into a separately labelled
+  `UNVERIFIED SEMANTIC HYPOTHESES` reasoner block. The prompt must copy any used
+  candidate ids into `semantic_hypothesis_refs`; the hypothesis bridge preserves
+  those refs as depth lineage. This channel may design governed runtime
+  experiments but cannot satisfy formal rule authority or customer-delivery
+  evidence, and graph-context activation must not erase it. Runtime modes:
+  `off` (regex-only), `shadow`
   (default: candidates validated and recorded, formal Canonical Rule output
   untouched), `augment` (validated explicit LLM-only candidates are promoted
   into `rule_library` and flow through the existing structurize → implicit

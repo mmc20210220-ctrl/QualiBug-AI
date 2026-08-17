@@ -665,6 +665,7 @@ def _depth_fields(hypothesis: dict[str, Any]) -> dict[str, Any]:
         "symptoms_if_broken",
         "adversarial_angle",
         "negative_space_findings",
+        "semantic_hypothesis_refs",
     ):
         value = hypothesis.get(key)
         if value not in (None, "", [], {}):

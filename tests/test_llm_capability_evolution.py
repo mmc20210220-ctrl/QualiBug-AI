@@ -60,8 +60,34 @@ def test_retrieval_keeps_explicit_and_unmarked_rules_with_source_refs() -> None:
     assert "订单总额必须等于明细行金额之和" in block
     assert "退款金额不得超过原支付金额" in block
     assert "(source: doc:PRD-§3.2)" in block
-    # Inferred rules are attention guidance, not grounded facts.
-    assert "库存数量不得为负" not in block
+    # Inferred rules are kept outside the grounded rule section and are
+    # explicitly labelled as unverified experiment guidance.
+    assert "- [rule] 库存数量不得为负" not in block
+    assert "[UNVERIFIED SEMANTIC HYPOTHESES" in block
+    assert "库存数量不得为负" in block
+    assert "must_not_satisfy_formal_rule_authority" in block
+    assert receipt["sections"]["semantic_hypotheses"]["total"] == 1
+
+
+def test_retrieval_consumes_projected_semantic_hypothesis_with_trace_identity() -> None:
+    payload = {
+        "semantic_hypotheses": [{
+            "candidate_id": "candidate_implicit_return_sequence",
+            "statement": "客服登记退货，仓库验收入库，财务原路退款。",
+            "source": "src:prd@PRD.md#退货流程",
+            "rule_origin": "inferred",
+            "authority": "UNVERIFIED_SEMANTIC_HYPOTHESIS",
+            "formal_rule_authority": False,
+        }],
+    }
+
+    block, receipt = retrieve_grounded_facts(payload)
+
+    assert "candidate_implicit_return_sequence" in block
+    assert "客服登记退货，仓库验收入库，财务原路退款。" in block
+    assert receipt["status"] == "CONSUMED"
+    assert receipt["semantic_hypotheses_total"] == 1
+    assert receipt["semantic_hypotheses_emitted"] == 1
 
 
 def test_retrieval_includes_state_machines_relations_and_entities() -> None:

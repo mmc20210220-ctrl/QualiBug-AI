@@ -644,6 +644,7 @@ def test_adapter_carries_depth_and_flags_uncompiled_cascade() -> None:
             "depth": {
                 "cascade_chain": [{"from": "order", "to": "settlement"}],
                 "source_state": "OVERDUE",
+                "semantic_hypothesis_refs": ["candidate_implicit_lifecycle"],
             },
         }],
         _adapter_ir(),
@@ -654,6 +655,12 @@ def test_adapter_carries_depth_and_flags_uncompiled_cascade() -> None:
     obligation = result["obligations"][0]
     assert obligation["property"]["depth"]["cascade_chain"]
     assert obligation["property"]["depth"]["source_state"] == "OVERDUE"
+    assert obligation["property"]["semantic_hypothesis_refs"] == [
+        "candidate_implicit_lifecycle"
+    ]
+    assert obligation["property"]["semantic_hypothesis_authority"] == "advisory_only"
+    assert obligation["property"]["formal_rule_authority"] is False
+    assert obligation["property"]["customer_delivery_evidence"] is False
     # The cross-entity cascade cannot compile to one operation → explicit gap.
     assert result["depth_uncompiled_count"] == 1
     assert any(

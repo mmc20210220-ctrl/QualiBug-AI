@@ -1415,11 +1415,13 @@ def build_enterprise_business_knowledge_asset(
 _SEVERITY_RANK = {"P0": 0, "P1": 1, "P2": 2}
 
 _DEFAULT_WORLD_MODEL_MAX_RULES = 200
+_DEFAULT_WORLD_MODEL_MAX_SEMANTIC_HYPOTHESES = 128
 _DEFAULT_WORLD_MODEL_MAX_RELATIONSHIPS = 120
 _DEFAULT_WORLD_MODEL_MAX_ROLES = 60
 _DEFAULT_WORLD_MODEL_RULE_STATEMENT_CHARS = 300
 
 _WORLD_MODEL_FLOOR_RULES = 40
+_WORLD_MODEL_FLOOR_SEMANTIC_HYPOTHESES = 32
 _WORLD_MODEL_FLOOR_RELATIONSHIPS = 30
 _WORLD_MODEL_FLOOR_ROLES = 24
 _WORLD_MODEL_FLOOR_STATEMENT_CHARS = 200
@@ -1453,6 +1455,7 @@ def project_knowledge_world_model(
     asset: dict[str, Any] | None,
     *,
     max_rules: int | None = None,
+    max_semantic_hypotheses: int | None = None,
     max_relationships: int | None = None,
     max_roles: int | None = None,
     rule_statement_chars: int | None = None,
@@ -1475,6 +1478,12 @@ def project_knowledge_world_model(
     max_rules = _world_model_budget(
         max_rules, "QUALIBUG_WORLD_MODEL_MAX_RULES",
         _DEFAULT_WORLD_MODEL_MAX_RULES, _WORLD_MODEL_FLOOR_RULES,
+    )
+    max_semantic_hypotheses = _world_model_budget(
+        max_semantic_hypotheses,
+        "QUALIBUG_WORLD_MODEL_MAX_SEMANTIC_HYPOTHESES",
+        _DEFAULT_WORLD_MODEL_MAX_SEMANTIC_HYPOTHESES,
+        _WORLD_MODEL_FLOOR_SEMANTIC_HYPOTHESES,
     )
     max_relationships = _world_model_budget(
         max_relationships, "QUALIBUG_WORLD_MODEL_MAX_RELATIONSHIPS",
@@ -1600,6 +1609,68 @@ def project_knowledge_world_model(
     if rule_statements_truncated:
         reason_codes.append(
             f"world_model_rule_statements_truncated:{rule_statements_truncated}/{len(rules)}"
+        )
+
+    # Validated inferred semantic candidates are intentionally projected into
+    # a separate advisory channel. They remain useful for Chinese implicit-
+    # meaning reasoning without ever being mislabeled as documented rules or
+    # satisfying formal rule/delivery authority.
+    semantic_hypotheses: list[dict[str, Any]] = []
+    semantic_hypotheses_total = 0
+    seen_semantic_hypotheses: set[str] = set()
+    for row in asset.get("semantic_candidates") or []:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("kind") or "").strip().lower() != "rule":
+            continue
+        if str(row.get("rule_origin") or "").strip().lower() != "inferred":
+            continue
+        if str(row.get("candidate_status") or "").strip().upper() != "VALIDATED":
+            continue
+        evidence_spans = [
+            dict(span)
+            for span in (row.get("evidence_spans") or [])
+            if isinstance(span, dict) and str(span.get("text") or "").strip()
+        ]
+        statement = str(
+            row.get("verbatim_quote")
+            or (evidence_spans[0].get("text") if evidence_spans else "")
+            or row.get("name")
+            or ""
+        ).strip()
+        if not statement or not evidence_spans:
+            continue
+        source_id = str(row.get("source_id") or "").strip()
+        locator = str(row.get("source_locator") or "").strip()
+        candidate_id = str(row.get("candidate_id") or "").strip() or (
+            "candidate_" + hashlib.sha256(
+                f"{source_id}\n{locator}\n{statement}".encode("utf-8")
+            ).hexdigest()[:20]
+        )
+        if candidate_id in seen_semantic_hypotheses:
+            continue
+        seen_semantic_hypotheses.add(candidate_id)
+        semantic_hypotheses_total += 1
+        if len(semantic_hypotheses) >= max_semantic_hypotheses:
+            continue
+        semantic_hypotheses.append({
+            "candidate_id": candidate_id,
+            "statement": statement[:rule_statement_chars],
+            "source": f"{source_id}@{locator}" if locator else source_id,
+            "source_refs": _source_refs(row),
+            "evidence_spans": evidence_spans,
+            "semantic_spans": dict(row.get("semantic_spans") or {}),
+            "normalized_suggestion": dict(row.get("normalized_suggestion") or {}),
+            "suggested_rule_family": str(row.get("suggested_rule_family") or ""),
+            "rule_origin": "inferred",
+            "authority": "UNVERIFIED_SEMANTIC_HYPOTHESIS",
+            "formal_rule_authority": False,
+            "customer_delivery_evidence": False,
+        })
+    if semantic_hypotheses_total > len(semantic_hypotheses):
+        reason_codes.append(
+            "world_model_semantic_hypotheses_truncated:"
+            f"{len(semantic_hypotheses)}/{semantic_hypotheses_total}"
         )
 
     state_machines: list[dict[str, Any]] = []
@@ -1733,6 +1804,7 @@ def project_knowledge_world_model(
 
     return {
         "documented_rules": rules,
+        "semantic_hypotheses": semantic_hypotheses,
         "state_machines": state_machines,
         "entities": entities,
         "roles": roles,
@@ -1744,6 +1816,7 @@ def project_knowledge_world_model(
             "schema_version": "qualibug.world-model-projection-receipt.v1",
             "budgets": {
                 "max_rules": max_rules,
+                "max_semantic_hypotheses": max_semantic_hypotheses,
                 "max_relationships": max_relationships,
                 "max_roles": max_roles,
                 "rule_statement_chars": rule_statement_chars,
@@ -1751,6 +1824,8 @@ def project_knowledge_world_model(
             "counts": {
                 "rules_total": rules_total,
                 "rules_projected": len(rules),
+                "semantic_hypotheses_total": semantic_hypotheses_total,
+                "semantic_hypotheses_projected": len(semantic_hypotheses),
                 "relationships_total": relationships_total,
                 "relationships_projected": len(relationships),
                 "roles_total": roles_total,

@@ -154,6 +154,9 @@ def test_mainline_reasoner_hypotheses_become_source_bound_obligations(
     assert report["world_model"]["documented_rules"] == len(
         world.get("documented_rules") or []
     )
+    assert report["world_model"]["semantic_hypotheses"] == len(
+        world.get("semantic_hypotheses") or []
+    )
 
     obligation_ids = {
         row.get("obligation_id")

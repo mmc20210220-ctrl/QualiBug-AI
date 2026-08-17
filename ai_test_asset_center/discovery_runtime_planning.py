@@ -1027,6 +1027,9 @@ def build_discovery_plan(
             _reasoner_world_model_report = {
                 "entities": len(_reasoner_world.get("entities") or []),
                 "documented_rules": len(_reasoner_world.get("documented_rules") or []),
+                "semantic_hypotheses": len(
+                    _reasoner_world.get("semantic_hypotheses") or []
+                ),
                 "state_machines": len(_reasoner_world.get("state_machines") or []),
                 "roles": len(_reasoner_world.get("roles") or []),
                 "relationships": len(_reasoner_world.get("relationships") or []),

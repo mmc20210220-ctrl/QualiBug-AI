@@ -659,7 +659,12 @@ def _merge_hypothesis_pair(current: dict[str, Any], incoming: dict[str, Any]) ->
         if merged_evidence:
             merged["evidence"] = merged_evidence
 
-    for field in ("reproduction_steps", "related_endpoints", "evidence_refs"):
+    for field in (
+        "reproduction_steps",
+        "related_endpoints",
+        "evidence_refs",
+        "semantic_hypothesis_refs",
+    ):
         values = _merge_unique_lists(base.get(field, []), extra.get(field, []))
         if values:
             merged[field] = values
@@ -1425,7 +1430,16 @@ def _stage_reason_all_v2(self, prd_text: str, api_spec: str,
         fact_payload: Any = None
         if isinstance(reader_output, dict):
             graph_pack_dict = reader_output.get("_graph_evidence_pack")
-            fact_payload = graph_pack_dict if isinstance(graph_pack_dict, dict) else reader_output
+            if isinstance(graph_pack_dict, dict):
+                fact_payload = dict(graph_pack_dict)
+                # Graph selection is allowed to replace the large grounded
+                # corpus, but it must not silently erase the separately governed
+                # inferred-semantic advisory channel from the world model.
+                fact_payload["semantic_hypotheses"] = list(
+                    reader_output.get("semantic_hypotheses") or []
+                )
+            else:
+                fact_payload = reader_output
         if isinstance(fact_payload, dict) and fact_payload:
             fact_block, fact_receipt = retrieve_grounded_facts(fact_payload)
     except Exception as exc:

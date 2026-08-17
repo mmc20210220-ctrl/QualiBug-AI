@@ -23,6 +23,13 @@ import re
 from typing import Any
 
 FACT_BLOCK_HEADER = "\n\n[GROUNDED BUSINESS FACTS (source-anchored)]\n"
+SEMANTIC_HYPOTHESIS_BLOCK_HEADER = (
+    "\n\n[UNVERIFIED SEMANTIC HYPOTHESES (source-anchored, not facts)]\n"
+    "- authority=advisory_only; must_not_satisfy_formal_rule_authority; "
+    "must_not_satisfy_customer_delivery_evidence; use_only_to_design_governed_runtime_experiments; "
+    "delivery_requires_reproducible_runtime_observation_receipts; "
+    "copy_used_candidate_ids_to_semantic_hypothesis_refs\n"
+)
 
 # The source-anchored fact block is the ONLY channel that carries the
 # world-model projection's documented_rules into the Reasoner with correct
@@ -135,6 +142,64 @@ def _extract_rules(payload: dict[str, Any]) -> tuple[list[str], int]:
             if len(lines) >= max_rules:
                 continue
     return lines, rules_total
+
+
+def _extract_semantic_hypotheses(payload: dict[str, Any]) -> list[str]:
+    """Source-anchored inferred meanings for experiment ideation only.
+
+    These rows are never rendered as ``[rule]`` and never enter the grounded
+    fact count as formal authority. The first emitted row carries the explicit
+    safety contract so no reasoner can confuse an inferred meaning with a
+    declared business rule or customer-delivery evidence.
+    """
+    rows: list[dict[str, Any]] = []
+    rows.extend(
+        item for item in _list(payload.get("semantic_hypotheses"))
+        if isinstance(item, dict)
+    )
+    for key in ("business_rules", "rules", "invariants", "rule_library", "documented_rules"):
+        rows.extend(
+            item
+            for item in _list(payload.get(key))
+            if isinstance(item, dict)
+            and _text(item.get("rule_origin")).lower() == "inferred"
+        )
+
+    lines: list[str] = []
+    seen: set[str] = set()
+    for item in rows:
+        if item.get("formal_rule_authority") is True:
+            continue
+        statement = _text(
+            item.get("statement")
+            or item.get("normalized_text")
+            or item.get("text")
+            or item.get("rule")
+            or item.get("verbatim_quote")
+        )
+        if not statement:
+            continue
+        candidate_id = _text(item.get("candidate_id") or item.get("id"))
+        identity = candidate_id or f"{_source_ref(item)}\n{statement}"
+        if identity in seen:
+            continue
+        seen.add(identity)
+        parts = [
+            f"candidate_id={_bounded(candidate_id, 100)}" if candidate_id else "",
+            f"statement={_bounded(statement)}",
+            (
+                f"family={_bounded(item.get('suggested_rule_family'), 80)}"
+                if _text(item.get("suggested_rule_family"))
+                else ""
+            ),
+        ]
+        ref = _source_ref(item)
+        if ref:
+            parts.append(f"source={_bounded(ref, 160)}")
+        lines.append("- [semantic_hypothesis] " + "; ".join(part for part in parts if part))
+    if lines:
+        lines[0] = SEMANTIC_HYPOTHESIS_BLOCK_HEADER + lines[0]
+    return lines
 
 
 def _extract_state_machines(payload: dict[str, Any]) -> list[str]:
@@ -357,8 +422,10 @@ def retrieve_grounded_facts(
         return "", receipt
     try:
         rule_lines, rules_total = _extract_rules(payload)
+        semantic_hypothesis_lines = _extract_semantic_hypotheses(payload)
         sections = [
             ("rules", rule_lines),
+            ("semantic_hypotheses", semantic_hypothesis_lines),
             ("state_machines", _extract_state_machines(payload)),
             ("relations", _extract_relations(payload)),
             ("entities", _extract_entities(payload)),
@@ -410,6 +477,13 @@ def retrieve_grounded_facts(
             "rules_emitted": emitted_by_section["rules"],
             "rules_truncated": max(0, rules_total - emitted_by_section["rules"]),
             "max_rules": _max_rules(),
+            "semantic_hypotheses_total": len(semantic_hypothesis_lines),
+            "semantic_hypotheses_emitted": emitted_by_section["semantic_hypotheses"],
+            "semantic_hypotheses_truncated": max(
+                0,
+                len(semantic_hypothesis_lines)
+                - emitted_by_section["semantic_hypotheses"],
+            ),
         }
         return block, receipt
     except Exception as exc:
