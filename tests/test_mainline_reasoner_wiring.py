@@ -251,3 +251,152 @@ def test_mainline_reasoner_failure_degrades_with_failed_receipt(
     assert report["obligations_added"] == 0
     # Deterministic obligation pool must survive the reasoner failure.
     assert bundle.obligations.get("obligations") is not None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Mainline Reasoner content-addressed reuse gate
+# (Enterprise Understanding Lifecycle Contract: unchanged enterprise material
+# must not be resent to an LLM.  The REUSED receipt must prove that no new LLM
+# comprehension happened; a changed input must miss and re-invoke the LLM.)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _reuse_inputs(tmp_path: Path, *, prd_text: str = "Orders must be created and listed.") -> DiscoveryMainlineInputs:
+    # A configured provider activates the fingerprint gate; the asset build is
+    # kept deterministic/offline by disabling LLM semantic extraction, so the
+    # tests exercise the gate without reaching a live provider.
+    base = _inputs(
+        tmp_path,
+        extra_context={
+            "enable_semantic_extraction": False,
+            "semantic_rule_extraction_mode": "off",
+        },
+    )
+    return DiscoveryMainlineInputs(
+        project=base.project,
+        root=base.root,
+        prd_text=prd_text,
+        api_spec_text=base.api_spec_text,
+        db_schema_text=base.db_schema_text,
+        approved_base_url=base.approved_base_url,
+        campaign_context=base.campaign_context,
+    )
+
+
+def _enable_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LLM_BASE_URL", "http://127.0.0.1:9999")
+    monkeypatch.setenv("LLM_API_KEY", "test-key")
+    monkeypatch.setenv("LLM_MODEL", "test-model")
+
+
+def _reuse_state_path(tmp_path: Path) -> Path:
+    from ai_test_asset_center.enterprise_knowledge_center._utils import _paths
+
+    return _paths("PROBE-1", tmp_path)["reasoner_reuse"]
+
+
+def test_mainline_reasoner_unchanged_input_reuses_persisted_hypotheses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("QUALIBUG_MAINLINE_REASONER_DISABLED", raising=False)
+    _enable_provider(monkeypatch)
+    calls = _patch_bridge(
+        monkeypatch,
+        obligations=[{"obligation_id": "obl_reasoner_probe_1"}],
+    )
+
+    first = planning.build_discovery_plan(
+        _reuse_inputs(tmp_path), _campaign()
+    )
+    assert calls["collect"] == 1
+    assert first.obligations.get("mainline_reasoner_report")["status"] == "ok"
+    assert _reuse_state_path(tmp_path).exists()
+
+    second = planning.build_discovery_plan(
+        _reuse_inputs(tmp_path), _campaign()
+    )
+    # The unchanged run must skip the LLM entirely.
+    assert calls["collect"] == 1
+    report = second.obligations.get("mainline_reasoner_report")
+    assert report is not None
+    assert report["status"] == "REUSED"
+    assert report["hypotheses_generated"] == 1
+    assert report["obligations_added"] == 1
+    fingerprint = report.get("fingerprint_receipt")
+    assert fingerprint is not None
+    assert fingerprint["status"] == "hit"
+    assert fingerprint["reason"] == "input_unchanged"
+    assert fingerprint["persisted_by_run_id"] == "RUN-1"
+    # Replayed hypotheses flow through the same governed bridge.
+    obligation_ids = {
+        row.get("obligation_id")
+        for row in second.obligations.get("obligations", [])
+        if isinstance(row, dict)
+    }
+    assert "obl_reasoner_probe_1" in obligation_ids
+
+
+def test_mainline_reasoner_changed_input_reinvokes_llm(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("QUALIBUG_MAINLINE_REASONER_DISABLED", raising=False)
+    _enable_provider(monkeypatch)
+    calls = _patch_bridge(
+        monkeypatch,
+        obligations=[{"obligation_id": "obl_reasoner_probe_1"}],
+    )
+
+    planning.build_discovery_plan(
+        _reuse_inputs(tmp_path, prd_text="Orders must be created and listed."),
+        _campaign(),
+    )
+    planning.build_discovery_plan(
+        _reuse_inputs(tmp_path, prd_text="Orders must be created, listed, and refunded."),
+        _campaign(),
+    )
+
+    # A changed source revision must miss and re-invoke the LLM.
+    assert calls["collect"] == 2
+    # The persisted reuse state tracks only the last successful input; the
+    # third run submits yet another (earlier-looking) revision, so it must
+    # miss again and re-invoke rather than reuse a mismatched input.
+    report = planning.build_discovery_plan(
+        _reuse_inputs(tmp_path, prd_text="Orders must be created and listed."),
+        _campaign(),
+    ).obligations.get("mainline_reasoner_report")
+    assert calls["collect"] == 3
+    assert report is not None
+    assert report["status"] == "ok"
+    assert report["fingerprint_receipt"]["status"] == "miss"
+    assert report["fingerprint_receipt"]["reason"] == "input_changed"
+
+
+def test_mainline_reasoner_failed_prior_state_never_reused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("QUALIBUG_MAINLINE_REASONER_DISABLED", raising=False)
+    _enable_provider(monkeypatch)
+    calls = _patch_bridge(
+        monkeypatch,
+        obligations=[{"obligation_id": "obl_reasoner_probe_1"}],
+    )
+
+    planning.build_discovery_plan(_reuse_inputs(tmp_path), _campaign())
+    assert calls["collect"] == 1
+
+    # A prior run that finished degraded/failed is never frozen as reusable
+    # state: the honest gate must re-invoke the LLM.
+    state_path = _reuse_state_path(tmp_path)
+    payload = json.loads(state_path.read_text(encoding="utf-8"))
+    payload["status"] = "degraded"
+    state_path.write_text(
+        json.dumps(payload, ensure_ascii=False), encoding="utf-8"
+    )
+
+    second = planning.build_discovery_plan(_reuse_inputs(tmp_path), _campaign())
+    assert calls["collect"] == 2
+    report = second.obligations.get("mainline_reasoner_report")
+    assert report is not None
+    assert report["status"] == "ok"
+    assert report["fingerprint_receipt"]["status"] == "miss"
+    assert report["fingerprint_receipt"]["reason"] == "prior_status_degraded"

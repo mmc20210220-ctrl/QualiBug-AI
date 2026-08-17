@@ -359,6 +359,7 @@ def _paths(project_id: str, root: Path) -> dict[str, Path]:
         "asset": defect_workspace / "enterprise_business_knowledge_asset.json",
         "probe_catalog": defect_workspace / "enterprise_business_knowledge_probe_catalog.json",
         "evidence_bundle": defect_workspace / "enterprise_business_knowledge_evidence_bundle.json",
+        "reasoner_reuse": defect_workspace / "mainline_reasoner_reuse_state.json",
         "output": output,
         "asset_copy": output / "enterprise_business_knowledge_asset.json",
         "report": output / "enterprise_business_knowledge_report.html",

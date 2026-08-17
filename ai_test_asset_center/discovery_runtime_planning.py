@@ -70,6 +70,76 @@ def _text(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _apply_mainline_reasoner_hypotheses(
+    *,
+    hypotheses: list[dict],
+    operations: list[dict],
+    behavior_ir: dict[str, Any],
+    obligations: list[dict],
+    report: dict[str, Any],
+) -> None:
+    """Bridge reasoner hypotheses into the obligation pool and enrich the
+    mainline reasoner receipt.
+
+    Shared by the fresh-LLM path and the REUSED replay path so a replayed run
+    exercises the identical governed bridge (same dedupe, same receipt
+    projection) as a real comprehension run.
+    """
+    if not hypotheses:
+        return
+    from .hypothesis_slice_bridge import hypotheses_to_obligations
+
+    _adapted, _bridge_funnel = hypotheses_to_obligations(
+        hypotheses,
+        api_endpoints=operations,
+        behavior_ir=behavior_ir,
+        origin="mainline_reasoner",
+    )
+    _existing_ids = {
+        _text(o.get("obligation_id")) for o in obligations if isinstance(o, dict)
+    }
+    _reasoner_obligations = []
+    for _r_obl in _list(_adapted.get("obligations")):
+        if not isinstance(_r_obl, dict):
+            continue
+        _r_obl = dict(_r_obl)
+        _r_obl["derivation"] = "mainline_reasoner"
+        if (
+            _text(_r_obl.get("obligation_id"))
+            and _text(_r_obl.get("obligation_id")) in _existing_ids
+        ):
+            continue
+        _reasoner_obligations.append(_r_obl)
+        _existing_ids.add(_text(_r_obl.get("obligation_id")))
+    obligations.extend(_reasoner_obligations)
+    report["obligations_added"] = len(_reasoner_obligations)
+    report["bridge_funnel"] = {
+        key: _bridge_funnel.get(key)
+        for key in (
+            "input",
+            "bound",
+            "dropped_no_endpoint",
+            "adapted_obligation_count",
+            "adapter_coverage_gap_count",
+        )
+        if key in _bridge_funnel
+    }
+    report["adapter_coverage_gaps"] = [
+        dict(gap)
+        for gap in _list(_adapted.get("coverage_gaps"))[:50]
+        if isinstance(gap, dict)
+    ]
+    report["total_obligations_after_reasoner"] = len(obligations)
+    _planning_logger.info(
+        "mainline_reasoner_augmentation status=%s hypotheses=%s "
+        "bound=%s obligations_added=%s",
+        report["status"],
+        len(hypotheses),
+        report["bridge_funnel"].get("bound"),
+        report["obligations_added"],
+    )
+
+
 def _num(value: Any) -> float:
     try:
         return float(value)
@@ -1010,6 +1080,12 @@ def build_discovery_plan(
     ):
         try:
             from .stage_reason_all_v2 import collect_reasoner_hypotheses
+            from .reasoner_input_fingerprint import (
+                compute_reasoner_input_fingerprint,
+                load_reasoner_reuse_state,
+                persist_reasoner_reuse_state,
+            )
+            from .enterprise_knowledge_center._utils import _now as _utc_now
 
             _reasoner_api_text = _text(
                 inputs.campaign_context.get("_source_verification_text")
@@ -1021,13 +1097,6 @@ def build_discovery_plan(
             # business_world prompt slot degrades to ``{}``: a directly
             # observable code-path break independent of historical scores.
             _reasoner_world = project_knowledge_world_model(asset)
-            _reasoner_hypotheses, _reasoner_meta = collect_reasoner_hypotheses(
-                inputs.prd_text,
-                _reasoner_api_text,
-                reader_output=_reasoner_world,
-                project_id=inputs.project,
-                root=inputs.root,
-            )
             _reasoner_world_model_report = {
                 "entities": len(_reasoner_world.get("entities") or []),
                 "documented_rules": len(_reasoner_world.get("documented_rules") or []),
@@ -1050,99 +1119,179 @@ def build_discovery_plan(
                 # bridge budget is never silently dropped from the scan receipt.
                 "projection_receipt": _reasoner_world.get("projection_receipt") or {},
             }
-            mainline_reasoner_report = {
-                "schema_version": "qualibug.mainline-reasoner-receipt.v1",
-                "status": _text(_reasoner_meta.get("status")) or "empty",
-                "hypotheses_generated": len(_reasoner_hypotheses),
-                "provider_meta": {
-                    key: _reasoner_meta.get(key)
-                    for key in (
-                        "reason",
-                        "error_class",
-                        "error_code",
-                        "total_engines",
-                        "successful_engine_count",
-                        "failed_engine_count",
-                        "failed_engine_names",
-                        "engine_error_class_counts",
-                        "max_hypotheses_per_engine",
-                        # Learning-loop observability (closed-loop consumption
-                        # state must be visible in the scan receipt, not
-                        # dropped at the reasoner boundary).
-                        "learned_memory_receipt",
-                        "engine_attention_receipt",
-                        "fact_retrieval_receipt",
-                        "semantic_dedup_receipt",
-                        "graph_context",
-                    )
-                    if key in _reasoner_meta
-                },
-                "elapsed_seconds": round(
-                    time.perf_counter() - _reasoner_start, 3
-                ),
-                "obligations_added": 0,
-                "world_model": _reasoner_world_model_report,
-                "bridge_funnel": {},
+            # Content-addressed reuse gate: the Reasoner is the only mainline
+            # stage that re-invokes LLM comprehension on every run regardless
+            # of source revision.  When the full deterministic input (raw PRD
+            # text + raw API text + projected world model + model +
+            # temperature) matches a prior successful real execution, skip the
+            # LLM and replay the persisted hypotheses through the same bridge
+            # (Enterprise Understanding Lifecycle Contract: unchanged material
+            # must not be resent to an LLM).
+            _reasoner_fingerprint = compute_reasoner_input_fingerprint(
+                inputs.prd_text,
+                _reasoner_api_text,
+                _reasoner_world,
+            )
+            _reasoner_fingerprint_receipt: dict[str, Any] = {
+                "status": "disabled",
+                "reason": "provider_not_configured_or_gate_off",
             }
-            if _reasoner_hypotheses:
-                from .hypothesis_slice_bridge import hypotheses_to_obligations
-
-                _adapted, _bridge_funnel = hypotheses_to_obligations(
-                    _reasoner_hypotheses,
-                    api_endpoints=operations,
-                    behavior_ir=behavior_ir,
-                    origin="mainline_reasoner",
+            _reasoner_prior: dict[str, Any] | None = None
+            if _reasoner_fingerprint is not None:
+                _reasoner_prior = load_reasoner_reuse_state(
+                    inputs.project, inputs.root
                 )
-                _existing_ids = {
-                    _text(o.get("obligation_id"))
-                    for o in obligations
-                    if isinstance(o, dict)
-                }
-                _reasoner_obligations = []
-                for _r_obl in _list(_adapted.get("obligations")):
-                    if not isinstance(_r_obl, dict):
-                        continue
-                    _r_obl = dict(_r_obl)
-                    _r_obl["derivation"] = "mainline_reasoner"
-                    if (
-                        _text(_r_obl.get("obligation_id"))
-                        and _text(_r_obl.get("obligation_id"))
-                        in _existing_ids
-                    ):
-                        continue
-                    _reasoner_obligations.append(_r_obl)
-                    _existing_ids.add(_text(_r_obl.get("obligation_id")))
-                obligations.extend(_reasoner_obligations)
-                mainline_reasoner_report["obligations_added"] = len(
-                    _reasoner_obligations
-                )
-                mainline_reasoner_report["bridge_funnel"] = {
-                    key: _bridge_funnel.get(key)
-                    for key in (
-                        "input",
-                        "bound",
-                        "dropped_no_endpoint",
-                        "adapted_obligation_count",
-                        "adapter_coverage_gap_count",
-                    )
-                    if key in _bridge_funnel
-                }
-                mainline_reasoner_report["adapter_coverage_gaps"] = [
-                    dict(gap)
-                    for gap in _list(_adapted.get("coverage_gaps"))[:50]
-                    if isinstance(gap, dict)
+                if _reasoner_prior is None:
+                    _reasoner_fingerprint_receipt = {
+                        "status": "miss",
+                        "reason": "no_prior_reuse_state",
+                        "sha256": _reasoner_fingerprint["sha256"],
+                    }
+                elif (
+                    _reasoner_prior.get("sha256")
+                    != _reasoner_fingerprint["sha256"]
+                ):
+                    _reasoner_fingerprint_receipt = {
+                        "status": "miss",
+                        "reason": "input_changed",
+                        "sha256": _reasoner_fingerprint["sha256"],
+                    }
+                elif str(_reasoner_prior.get("status") or "") not in {
+                    "ok",
+                    "empty",
+                }:
+                    _reasoner_fingerprint_receipt = {
+                        "status": "miss",
+                        "reason": (
+                            "prior_status_"
+                            + str(_reasoner_prior.get("status") or "unknown")
+                        ),
+                        "sha256": _reasoner_fingerprint["sha256"],
+                    }
+                else:
+                    _reasoner_fingerprint_receipt = {
+                        "status": "hit",
+                        "reason": "input_unchanged",
+                        "sha256": _reasoner_fingerprint["sha256"],
+                        "persisted_at_utc": _reasoner_prior.get(
+                            "persisted_at_utc"
+                        ),
+                        "persisted_by_run_id": _reasoner_prior.get("run_id"),
+                        "persisted_by_campaign_id": _reasoner_prior.get(
+                            "campaign_id"
+                        ),
+                        "reuse_schema": _reasoner_prior.get("schema"),
+                    }
+            _reasoner_hit = _reasoner_fingerprint_receipt.get("status") == "hit"
+            if _reasoner_hit:
+                # Replay, not fresh comprehension: the receipt is stamped
+                # REUSED so the scan consumer can tell no new LLM comprehension
+                # happened on this run.
+                _reasoner_hypotheses = [
+                    dict(row)
+                    for row in _list(_reasoner_prior.get("hypotheses"))
+                    if isinstance(row, dict)
                 ]
-                mainline_reasoner_report[
-                    "total_obligations_after_reasoner"
-                ] = len(obligations)
-                _planning_logger.info(
-                    "mainline_reasoner_augmentation status=%s hypotheses=%s "
-                    "bound=%s obligations_added=%s",
-                    mainline_reasoner_report["status"],
-                    len(_reasoner_hypotheses),
-                    mainline_reasoner_report["bridge_funnel"].get("bound"),
-                    mainline_reasoner_report["obligations_added"],
+                mainline_reasoner_report = {
+                    "schema_version": "qualibug.mainline-reasoner-receipt.v1",
+                    "status": "REUSED",
+                    "hypotheses_generated": len(_reasoner_hypotheses),
+                    "elapsed_seconds": round(
+                        time.perf_counter() - _reasoner_start, 3
+                    ),
+                    "obligations_added": 0,
+                    "world_model": _reasoner_world_model_report,
+                    "bridge_funnel": {},
+                    "fingerprint_receipt": _reasoner_fingerprint_receipt,
+                }
+            else:
+                _reasoner_hypotheses, _reasoner_meta = collect_reasoner_hypotheses(
+                    inputs.prd_text,
+                    _reasoner_api_text,
+                    reader_output=_reasoner_world,
+                    project_id=inputs.project,
+                    root=inputs.root,
                 )
+                mainline_reasoner_report = {
+                    "schema_version": "qualibug.mainline-reasoner-receipt.v1",
+                    "status": _text(_reasoner_meta.get("status")) or "empty",
+                    "hypotheses_generated": len(_reasoner_hypotheses),
+                    "provider_meta": {
+                        key: _reasoner_meta.get(key)
+                        for key in (
+                            "reason",
+                            "error_class",
+                            "error_code",
+                            "total_engines",
+                            "successful_engine_count",
+                            "failed_engine_count",
+                            "failed_engine_names",
+                            "engine_error_class_counts",
+                            "max_hypotheses_per_engine",
+                            # Learning-loop observability (closed-loop
+                            # consumption state must be visible in the scan
+                            # receipt, not dropped at the reasoner boundary).
+                            "learned_memory_receipt",
+                            "engine_attention_receipt",
+                            "fact_retrieval_receipt",
+                            "semantic_dedup_receipt",
+                            "graph_context",
+                        )
+                        if key in _reasoner_meta
+                    },
+                    "elapsed_seconds": round(
+                        time.perf_counter() - _reasoner_start, 3
+                    ),
+                    "obligations_added": 0,
+                    "world_model": _reasoner_world_model_report,
+                    "bridge_funnel": {},
+                    "fingerprint_receipt": _reasoner_fingerprint_receipt,
+                }
+                # Persist ONLY a real successful comprehension: ok/empty status
+                # (empty = zero hypotheses, still a deterministic outcome of
+                # this exact input) with the run identity that produced it.
+                # A degraded or failed run is never frozen as reusable state.
+                if (
+                    _text(_reasoner_meta.get("status")) in {"ok", "empty"}
+                    and _reasoner_fingerprint is not None
+                ):
+                    _persist_ok = persist_reasoner_reuse_state(
+                        {
+                            "sha256": _reasoner_fingerprint["sha256"],
+                            "status": _text(_reasoner_meta.get("status")),
+                            "hypotheses_generated": len(_reasoner_hypotheses),
+                            "hypotheses": _reasoner_hypotheses,
+                            "run_id": _text(
+                                inputs.campaign_context.get("run_id")
+                            ),
+                            "campaign_id": _text(
+                                inputs.campaign_context.get("campaign_id")
+                            ),
+                            "strategy_fingerprint": _text(
+                                inputs.campaign_context.get(
+                                    "strategy_fingerprint"
+                                )
+                            ),
+                            "project_id": inputs.project,
+                            "persisted_at_utc": _utc_now(),
+                        },
+                        project_id=inputs.project,
+                        root=inputs.root,
+                    )
+                    _persist_receipt = dict(_reasoner_fingerprint_receipt)
+                    _persist_receipt["persist_status"] = (
+                        "persisted" if _persist_ok else "persist_failed"
+                    )
+                    mainline_reasoner_report[
+                        "fingerprint_receipt"
+                    ] = _persist_receipt
+            _apply_mainline_reasoner_hypotheses(
+                hypotheses=_reasoner_hypotheses,
+                operations=operations,
+                behavior_ir=behavior_ir,
+                obligations=obligations,
+                report=mainline_reasoner_report,
+            )
         except Exception as exc:
             # Degradation is never silent: the FAILED receipt travels with the
             # planning bundle into product artifacts and the error is logged
