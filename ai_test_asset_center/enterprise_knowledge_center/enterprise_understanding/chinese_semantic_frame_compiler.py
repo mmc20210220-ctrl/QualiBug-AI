@@ -1,14 +1,14 @@
-"""Chinese Semantic Frame enrichment — clause structure, list inheritance,
+"""Chinese Semantic Frame enrichment — clause structure, list-scope inheritance,
 table coordinates (SPEC: QUALIBUG-CHINESE-SEMANTIC-ROOT-FIX-V1, P0-B).
 
 Contract:
 - This stage enriches EXISTING frames (qualibug.chinese-semantic-frame.v1)
   with the clause structure the parser found for their source block: list
-  parent conditions are inherited by list children, table row/column headers
-  become actor/condition mention candidates for table cells, enumeration
-  action candidates are added to action mentions, and exception nodes are
-  merged. Nothing here re-parses raw text and nothing here binds semantics to
-  technical objects (that is P0-D grounding).
+  parent conditions and exception scopes are inherited by list children,
+  table row/column headers become actor/condition mention candidates for table
+  cells, enumeration action candidates are added to action mentions, and own
+  block exception nodes are merged. Nothing here binds semantics to technical
+  objects (that is P0-D grounding).
 - The frame's fact-derived slots stay authoritative: enrichment only ADDS
   mentions/conditions the fact missed ("不丢"), never removes or overrides.
   When the enumeration interpretation is AMBIGUOUS the raw text is kept and
@@ -127,6 +127,41 @@ def _conditions_of_block(
     ]
 
 
+def _exceptions_of_block(
+    asset: dict[str, Any],
+    block: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Source-bound exceptions declared by one structural ancestor block."""
+    from .chinese_clause_parser import clause_tree_for_block
+
+    tree = clause_tree_for_block(asset, _text(block.get("block_id")))
+    if not tree:
+        try:
+            tree = parse_block_text(
+                _text(block.get("text")),
+                source_id=_text(block.get("source_id")),
+                block_id=_text(block.get("block_id")),
+                block_type=_text(block.get("block_type")),
+                locator=_text(block.get("locator")),
+            )
+        except ValueError:
+            return []
+    return [
+        {
+            "exception_id": _text(row.get("exception_id")),
+            "raw": _norm(row.get("raw")),
+            "kind": _text(row.get("kind")),
+            "clauses": [
+                dict(clause)
+                for clause in _list(row.get("clauses"))
+                if isinstance(clause, dict)
+            ],
+        }
+        for row in _list(tree.get("exceptions"))
+        if isinstance(row, dict) and _norm(row.get("raw"))
+    ]
+
+
 def _next_condition_id(conditions: list[dict[str, Any]]) -> str:
     highest = 0
     for row in conditions:
@@ -164,8 +199,9 @@ def _enrich_frame_structure(
     block_type = _text(block.get("block_type"))
     frame_type = _text(frame.get("frame_type"))
 
-    # ── 1. list parent condition inheritance (SPEC §7.3) ──
+    # ── 1. list parent condition/exception scope inheritance (SPEC §7.3) ──
     list_parent_conditions: list[dict[str, Any]] = []
+    list_parent_exceptions: list[dict[str, Any]] = []
     if block_type == "LIST_ITEM":
         list_context = _dict(block.get("list_context"))
         ancestor_chain = [
@@ -184,6 +220,20 @@ def _enrich_frame_structure(
                     _norm(row.get("raw")) for row in list_parent_conditions
                 }:
                     list_parent_conditions.append(raw)
+            for exception in _exceptions_of_block(asset, ancestor):
+                identity = (exception["raw"], exception["kind"])
+                if identity not in {
+                    (row["raw"], row["kind"])
+                    for row in list_parent_exceptions
+                }:
+                    list_parent_exceptions.append(
+                        {
+                            **exception,
+                            "source_id": _text(ancestor.get("source_id")),
+                            "document_block_id": _text(ancestor.get("block_id")),
+                            "locator": _text(ancestor.get("locator")),
+                        }
+                    )
         if list_parent_conditions:
             conditions = frame["conditions"]
             existing_raws = {_norm(row.get("raw")) for row in conditions}
@@ -206,6 +256,40 @@ def _enrich_frame_structure(
                 )
                 existing_raws.add(inherited["raw"])
             frame["conditions"] = conditions
+        if list_parent_exceptions:
+            frame_exceptions = frame["exceptions"]
+            existing_identities = {
+                (_norm(row.get("raw")), _text(row.get("kind")))
+                for row in frame_exceptions
+                if isinstance(row, dict)
+            }
+            for inherited in list_parent_exceptions:
+                identity = (inherited["raw"], inherited["kind"])
+                if identity in existing_identities:
+                    continue
+                frame_exceptions.append(
+                    {
+                        "exception_id": inherited["exception_id"]
+                        or f"exception:{len(frame_exceptions) + 1}",
+                        "raw": inherited["raw"],
+                        "logic": "AND",
+                        "clauses": [dict(row) for row in inherited["clauses"]],
+                        "kind": inherited["kind"],
+                        "origin": "list_parent_exception_inheritance",
+                        "resolution_status": "RESOLVED",
+                        "evidence": [
+                            {
+                                "origin": "list_parent_exception_inheritance",
+                                "source_id": inherited["source_id"],
+                                "document_block_id": inherited["document_block_id"],
+                                "locator": inherited["locator"],
+                            }
+                        ],
+                    }
+                )
+                existing_identities.add(identity)
+            frame["exceptions"] = frame_exceptions
+        structure["list_parent_exception_count"] = len(list_parent_exceptions)
 
     # ── 2. table row/column header context (SPEC §7.2) ──
     table_context = _dict(block.get("table_context"))
@@ -372,6 +456,7 @@ def enrich_frames_with_clause_structure(asset: dict[str, Any]) -> dict[str, Any]
     enriched = 0
     unlocated = 0
     no_signal = 0
+    list_parent_exception_count = 0
     reason_counts: Counter = Counter()
     for frame in frames:
         structure = _enrich_frame_structure(asset, frame)
@@ -384,6 +469,9 @@ def enrich_frames_with_clause_structure(asset: dict[str, Any]) -> dict[str, Any]
             no_signal += 1
         for code in _list(structure.get("reason_codes")):
             reason_counts[_text(code)] += 1
+        list_parent_exception_count += int(
+            structure.get("list_parent_exception_count", 0) or 0
+        )
         frame["clause_structure"] = structure
         errors = validate_semantic_frame(frame)
         if errors:
@@ -398,6 +486,7 @@ def enrich_frames_with_clause_structure(asset: dict[str, Any]) -> dict[str, Any]
             "enriched_count": enriched,
             "unlocated_count": unlocated,
             "no_signal_count": no_signal,
+            "list_parent_exception_count": list_parent_exception_count,
             "reason_code_counts": dict(sorted(reason_counts.items())),
             "signature_recomputed": True,
         }

@@ -154,6 +154,46 @@ def test_list_child_inherits_parent_condition() -> None:
         assert validate_semantic_frame(frame) == []
 
 
+def test_list_child_inherits_parent_exception_scope_with_source_lineage() -> None:
+    h1 = _heading("h1", "操作规则", 1)
+    li1 = _list_item("li1", "除管理员外：", 2, "h1", 0)
+    li2 = _list_item("li2", "1. 不得删除订单。", 3, "h1", 1)
+    fact = _fact(fact_id="f:li2", statement="1. 不得删除订单。", block_id="li2")
+    asset = _asset_with_frames(facts=[fact], blocks=[h1, li1, li2])
+
+    frame = _frames_by_origin(asset)["f:li2"]
+    inherited = [
+        row
+        for row in frame["exceptions"]
+        if row.get("origin") == "list_parent_exception_inheritance"
+    ]
+    assert [(row["raw"], row["kind"]) for row in inherited] == [
+        ("管理员", "EXCLUSION")
+    ]
+    assert inherited[0]["evidence"] == [
+        {
+            "origin": "list_parent_exception_inheritance",
+            "source_id": "s1",
+            "document_block_id": "li1",
+            "locator": "r.docx#block=2",
+        }
+    ]
+    assert frame["clause_structure"]["list_parent_exception_count"] == 1
+    assert asset["chinese_semantic_frame_ledger"]["enrichment_receipt"][
+        "list_parent_exception_count"
+    ] == 1
+    assert "除管理员外" not in {row["raw"] for row in frame["conditions"]}
+    assert frame["resolution"]["semantic_signature"] == semantic_signature(frame)
+    assert validate_semantic_frame(frame) == []
+
+    first_exceptions = [dict(row) for row in frame["exceptions"]]
+    first_structure = dict(frame["clause_structure"])
+    asset = enrich_frames_with_clause_structure(asset)
+    rerun = _frames_by_origin(asset)["f:li2"]
+    assert rerun["exceptions"] == first_exceptions
+    assert rerun["clause_structure"] == first_structure
+
+
 def test_table_cell_gets_row_and_column_header_mentions() -> None:
     h1 = _heading("h1", "权限", 1)
     table = {"block_id": "t1", "type": "TABLE", "parent_id": "h1", "order": 2,

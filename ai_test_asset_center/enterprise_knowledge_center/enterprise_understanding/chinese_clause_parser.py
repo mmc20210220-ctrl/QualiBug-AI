@@ -571,13 +571,15 @@ def parse_block_text(
         base, modal_start, two_part_condition, until_condition
     )
 
-    # List header condition: a LIST_ITEM ending with ：/： IS the condition of
+    # List header condition: a LIST_ITEM ending with ：/: IS the condition of
     # its children ("已取消订单：") — parsed as a condition, never an action.
+    # Use the exception-stripped base so an exception-only scope header such as
+    # "除X外：" is not also misclassified as a positive condition.
     list_header = ""
     if block_type == "LIST_ITEM":
-        colon = _COLON_END.search(sentence)
+        colon = _COLON_END.search(base)
         if colon:
-            list_header = _norm(sentence[: colon.start()])
+            list_header = _norm(base[: colon.start()])
 
     clauses: list[dict[str, Any]] = []
     enumeration: dict[str, Any] = {"joiner": "", "part_count": 0, "interpretation": "EMPTY"}

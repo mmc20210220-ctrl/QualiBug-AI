@@ -117,6 +117,12 @@ def test_list_header_is_a_condition_never_an_action() -> None:
     assert child["modality"]["type"] == "MUST_NOT"
     assert [row["action_mention"] for row in child["clauses"]] == ["支付"]
 
+    exception_scope = _tree("除管理员外：", block_type="LIST_ITEM")
+    assert exception_scope["conditions"] == []
+    assert [
+        (row["raw"], row["kind"]) for row in exception_scope["exceptions"]
+    ] == [("管理员", "EXCLUSION")]
+
 
 def test_vague_text_never_forced_into_facts() -> None:
     # SPEC §18.4 negatives: vague wording must not become a definite rule.
