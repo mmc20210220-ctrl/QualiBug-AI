@@ -25,6 +25,23 @@ def _query_operation() -> dict:
     }
 
 
+def _validation_body_operation() -> dict:
+    return {
+        "id": "create-order",
+        "method": "POST",
+        "path": "/api/orders",
+        "request_schema": {
+            "type": "object",
+            "properties": {
+                "userId": {"type": "string", "description": "the acting user ID"},
+                "amount": {"type": "number"},
+            },
+            "required": ["userId", "amount"],
+        },
+        "request_example": {"userId": "{userId}", "amount": 10},
+    }
+
+
 def test_query_scope_is_sealed_per_step_and_removed_from_global_binding() -> None:
     from ai_test_asset_center.ownership_binding_scope_authority import (
         seal_ownership_binding_scopes,
@@ -188,3 +205,92 @@ def test_typed_jwt_identity_is_used_and_conflicting_typed_claims_block() -> None
     )
     assert conflict["status"] == "UNRESOLVED"
     assert conflict["reason_code"] == "ACTOR_IDENTITY_JWT_TYPED_CLAIM_CONFLICT"
+
+
+def test_validation_body_ownership_seals_step_actor_and_removes_global_binding() -> None:
+    from ai_test_asset_center.ownership_binding_scope_authority import (
+        seal_ownership_binding_scopes,
+    )
+
+    exp = {
+        "binding_plan": [
+            {
+                "target": "userId",
+                "status": "runtime_resolvable",
+                "source_priority": "ownership_identity_param",
+                "body_template_paths": ["userId"],
+            }
+        ],
+        "control_plan": [
+            {
+                "step_id": "control_1",
+                "operation_ref": "create-order",
+                "actor_ref": "actor-a",
+                "body": {"userId": "{userId}", "amount": 10},
+            }
+        ],
+        "treatment_plan": [
+            {
+                "step_id": "treatment_1",
+                "operation_ref": "create-order",
+                "actor_ref": "actor-b",
+                "body": {"userId": "{userId}", "amount": 999999},
+            }
+        ],
+    }
+    sealed, receipt = seal_ownership_binding_scopes(
+        exp,
+        obligation={"risk_family": "validation", "property": {}},
+        behavior_ir={"operations": [_validation_body_operation()]},
+    )
+
+    assert sealed["binding_plan"] == []
+    assert sealed["control_plan"][0]["body"]["userId"] == (
+        "actor_identity_ref:actor-a:userId"
+    )
+    assert sealed["treatment_plan"][0]["body"]["userId"] == (
+        "actor_identity_ref:actor-b:userId"
+    )
+    assert receipt["status"] == "SEALED"
+    assert receipt["removed_body_targets"] == ["userId"]
+    assert receipt["removed_query_targets"] == []
+
+
+def test_runtime_resolves_validation_body_to_different_actor_ids() -> None:
+    from ai_test_asset_center.actor_scoped_query_binding import (
+        project_actor_scoped_query_bindings,
+    )
+
+    control, treatment, receipt = project_actor_scoped_query_bindings(
+        control_plan=[
+            {
+                "step_id": "control_1",
+                "operation_ref": "create-order",
+                "actor_ref": "actor-a",
+                "body": {"userId": "actor_identity_ref:actor-a:userId", "amount": 10},
+            }
+        ],
+        treatment_plan=[
+            {
+                "step_id": "treatment_1",
+                "operation_ref": "create-order",
+                "actor_ref": "actor-b",
+                "body": {
+                    "userId": "actor_identity_ref:actor-b:userId",
+                    "amount": 999999,
+                },
+            }
+        ],
+        ops={"create-order": _validation_body_operation()},
+        actors={
+            "actor-a": {"id": "actor-a", "account_id": "U-A"},
+            "actor-b": {"id": "actor-b", "account_id": "U-B"},
+        },
+        tokens={},
+    )
+
+    assert control[0]["body"]["userId"] == "U-A"
+    assert treatment[0]["body"]["userId"] == "U-B"
+    assert receipt["status"] == "PROJECTED"
+    assert "U-A" not in repr(receipt)
+    assert "U-B" not in repr(receipt)

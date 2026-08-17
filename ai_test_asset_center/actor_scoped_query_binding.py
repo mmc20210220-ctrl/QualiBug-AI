@@ -175,6 +175,90 @@ def _query_coordinate(
     return "", "", ""
 
 
+def _project_body_identity_coordinates(
+    body: Any,
+    *,
+    step_actor_ref: str,
+    operation: dict[str, Any],
+    actors: dict[str, dict[str, Any]],
+    tokens: dict[str, str],
+) -> tuple[Any, list[str], list[str], list[dict[str, Any]]]:
+    """Resolve ``actor_identity_ref`` coordinates anywhere in a step body.
+
+    Compile-time sealing replaces body ownership placeholders with per-step
+    actor coordinates; this mirrors the query projection so each arm's body
+    carries its own runtime-observed identity, never a shared global owner.
+    """
+
+    ownership_params = set(_ownership_params_declared_on_operation(operation))
+    projected_targets: list[str] = []
+    unresolved_targets: list[str] = []
+    step_rows: list[dict[str, Any]] = []
+
+    def walk(node: Any) -> Any:
+        if isinstance(node, dict):
+            return {key: walk(child) for key, child in node.items()}
+        if isinstance(node, list):
+            return [walk(child) for child in node]
+        if not isinstance(node, str):
+            return node
+        coordinate_actor, target, coordinate_source = _query_coordinate(
+            node,
+            step_actor_ref=step_actor_ref,
+        )
+        if not target:
+            return node
+        if (
+            target not in ownership_params
+            or _ownership_binder_location(operation, name=target) != "body"
+        ):
+            return node
+
+        if coordinate_actor != step_actor_ref:
+            unresolved_targets.append(target)
+            step_rows.append(
+                {
+                    "target": target,
+                    "location": "body",
+                    "status": "UNRESOLVED",
+                    "reason_code": "ACTOR_IDENTITY_REF_STEP_ACTOR_MISMATCH",
+                    "coordinate_source": coordinate_source,
+                }
+            )
+            return UNRESOLVED_PLACEHOLDER
+
+        identity_receipt = resolve_actor_runtime_identity(
+            coordinate_actor,
+            actors=actors,
+            tokens=tokens,
+        )
+        resolved = _text(identity_receipt.get("status")) == "RESOLVED"
+        if resolved:
+            projected_targets.append(target)
+        else:
+            unresolved_targets.append(target)
+        step_rows.append(
+            {
+                "target": target,
+                "location": "body",
+                "status": _text(identity_receipt.get("status")),
+                "reason_code": _text(identity_receipt.get("reason_code")),
+                "identity_authority": _text(identity_receipt.get("authority")),
+                "identity_fingerprint": _text(
+                    identity_receipt.get("identity_fingerprint")
+                ),
+                "coordinate_source": coordinate_source,
+            }
+        )
+        return (
+            _text(identity_receipt.get("identity_value"))
+            if resolved
+            else UNRESOLVED_PLACEHOLDER
+        )
+
+    return walk(body), projected_targets, unresolved_targets, step_rows
+
+
 def project_actor_scoped_query_bindings(
     *,
     control_plan: list[Any],
@@ -193,11 +277,10 @@ def project_actor_scoped_query_bindings(
                 continue
             operation_ref = _text(raw_step.get("operation_ref"))
             operation = _dict(ops.get(operation_ref))
-            query = _dict(raw_step.get("query"))
-            if not operation or not query:
-                # No query projection is needed; keep the exact step object so
-                # identity-based ``consumed_barrier_steps`` filtering still sees
-                # the same object the barrier executor consumed.
+            if not operation:
+                # No projection is possible without the operation's ownership
+                # vocabulary; keep the exact step object so identity-based
+                # ``consumed_barrier_steps`` filtering still sees it.
                 projected.append(raw_step)
                 continue
             ownership_params = set(
@@ -207,11 +290,12 @@ def project_actor_scoped_query_bindings(
                 projected.append(raw_step)
                 continue
 
-            # Only deep-copy the step that actually gets its query projected:
-            # the projection mutates ``step["query"]`` and must not touch the
-            # sealed experiment plan.
+            # Only deep-copy the step that actually gets a coordinate projected:
+            # the projection mutates ``step["query"]``/``step["body"]`` and must
+            # not touch the sealed experiment plan.
             step = deepcopy(raw_step)
             step_actor_ref = _text(step.get("actor_ref"))
+            query = _dict(raw_step.get("query"))
             new_query = dict(query)
             projected_targets: list[str] = []
             unresolved_targets: list[str] = []
@@ -268,8 +352,29 @@ def project_actor_scoped_query_bindings(
                     }
                 )
 
+            body = raw_step.get("body")
+            if body is not None:
+                (
+                    new_body,
+                    body_projected,
+                    body_unresolved,
+                    body_rows,
+                ) = _project_body_identity_coordinates(
+                    body,
+                    step_actor_ref=step_actor_ref,
+                    operation=operation,
+                    actors=actors,
+                    tokens=tokens,
+                )
+                if body_projected or body_unresolved:
+                    step["body"] = new_body
+                    projected_targets.extend(body_projected)
+                    unresolved_targets.extend(body_unresolved)
+                    step_rows.extend(body_rows)
+
             if projected_targets or unresolved_targets:
-                step["query"] = new_query
+                if "query" in raw_step:
+                    step["query"] = new_query
                 step["actor_query_binding_projection"] = {
                     "schema_version": SCHEMA_VERSION,
                     "actor_ref": step_actor_ref,
@@ -288,7 +393,11 @@ def project_actor_scoped_query_bindings(
                         **step["actor_query_binding_projection"],
                     }
                 )
-            projected.append(step)
+                projected.append(step)
+            else:
+                # No coordinate was projected; keep the exact original object so
+                # identity-based ``consumed_barrier_steps`` filtering still sees it.
+                projected.append(raw_step)
         return projected
 
     control = project_plan(list(control_plan or []), "control")

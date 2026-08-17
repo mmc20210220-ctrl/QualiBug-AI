@@ -80,7 +80,8 @@ def _restore_binding_shape(
         experiment["binding_plan"] = rows
 
 
-def _query_actor_ref(actor_ref: str, target: str) -> str:
+def _actor_identity_ref(actor_ref: str, target: str) -> str:
+    """Opaque per-step actor identity coordinate (query- or body-located)."""
     return f"{ACTOR_IDENTITY_REF_PREFIX}{_text(actor_ref)}:{_text(target)}"
 
 
@@ -156,7 +157,7 @@ def _project_query_steps(
                         }
                     )
                     continue
-                new_query[key] = _query_actor_ref(actor_ref, target)
+                new_query[key] = _actor_identity_ref(actor_ref, target)
                 replacements += 1
             if replacements:
                 step["query"] = new_query
@@ -186,11 +187,111 @@ def _project_query_steps(
     return projected_count, rows, non_query_use, query_scope_seen
 
 
+def _replace_body_target_placeholders(
+    value: Any,
+    *,
+    target: str,
+    actor_ref: str,
+) -> tuple[Any, int]:
+    """Replace ``{target}`` placeholders anywhere in a body with the actor coordinate."""
+
+    wanted = _text(target)
+    replacements = 0
+
+    def walk(node: Any) -> Any:
+        nonlocal replacements
+        if isinstance(node, dict):
+            return {key: walk(child) for key, child in node.items()}
+        if isinstance(node, list):
+            return [walk(child) for child in node]
+        if _is_target_placeholder(node, wanted):
+            replacements += 1
+            return _actor_identity_ref(actor_ref, target)
+        return node
+
+    return walk(value), replacements
+
+
+def _project_body_steps(
+    experiment: dict[str, Any],
+    *,
+    target: str,
+    operations: dict[str, dict[str, Any]],
+) -> tuple[int, list[dict[str, Any]], bool]:
+    """Project body-located ownership placeholders to per-step actor coordinates.
+
+    A validation/visibility write's ``{ownerId}``/``{userId}`` body field is the
+    acting arm's own identity — exactly like a query ``?userId={userId}`` — not
+    an experiment-global shared owner. Seal it per-step so each arm addresses
+    its own actor and remove the target from the global binding plan.
+    """
+
+    projected_count = 0
+    rows: list[dict[str, Any]] = []
+    body_scope_seen = False
+    for phase in ("precondition", "control", "treatment"):
+        new_plan: list[Any] = []
+        for raw in _list(experiment.get(f"{phase}_plan")):
+            if not isinstance(raw, dict):
+                new_plan.append(raw)
+                continue
+            step = deepcopy(raw)
+            operation_ref = _text(step.get("operation_ref"))
+            operation = _dict(operations.get(operation_ref))
+            if not operation or target not in set(
+                _ownership_params_declared_on_operation(operation)
+            ):
+                new_plan.append(step)
+                continue
+            if _ownership_binder_location(operation, name=target) != "body":
+                new_plan.append(step)
+                continue
+            actor_ref = _text(step.get("actor_ref"))
+            body = step.get("body")
+            if body is None:
+                new_plan.append(step)
+                continue
+            new_body, replacements = _replace_body_target_placeholders(
+                body,
+                target=target,
+                actor_ref=actor_ref,
+            )
+            if not replacements:
+                new_plan.append(step)
+                continue
+            body_scope_seen = True
+            step["body"] = new_body
+            step["ownership_body_scope"] = {
+                "schema_version": SCHEMA_VERSION,
+                "scope": "step_actor_body",
+                "actor_ref": actor_ref,
+                "target": target,
+                "identity_value_persisted": False,
+            }
+            projected_count += replacements
+            rows.append(
+                {
+                    "phase": phase,
+                    "step_id": _text(step.get("step_id") or step.get("id")),
+                    "operation_ref": operation_ref,
+                    "actor_ref": actor_ref,
+                    "target": target,
+                    "scope": "step_actor_body",
+                    "status": "SEALED",
+                    "replacement_count": replacements,
+                    "identity_value_persisted": False,
+                }
+            )
+            new_plan.append(step)
+        experiment[f"{phase}_plan"] = new_plan
+    return projected_count, rows, body_scope_seen
+
+
 def _prune_query_binding_dag_nodes(
     experiment: dict[str, Any],
     targets: set[str],
 ) -> dict[str, list[str]]:
-    """Remove only runtime-read nodes for query-local targets from existing DAGs."""
+    """Remove only runtime-read nodes for arm-local (query/body) targets from existing DAGs."""
 
     pruned: dict[str, list[str]] = {}
     if not targets:
@@ -266,6 +367,7 @@ def seal_ownership_binding_scopes(
     receipt_rows: list[dict[str, Any]] = []
     issues: list[dict[str, Any]] = []
     removed_query_targets: set[str] = set()
+    removed_body_targets: set[str] = set()
 
     for raw_binding in bindings:
         binding = dict(raw_binding)
@@ -359,9 +461,36 @@ def seal_ownership_binding_scopes(
             governed.append(binding)
             continue
 
+        # Acting-actor body scope: a body-located ownership identity param on a
+        # non-authorization obligation (validation/visibility/…) is the arm's
+        # own identity, sealed per-step. This is the missing semantic channel
+        # the UNPROVEN fallthrough below previously failed closed on.
+        body_count, body_rows, body_scope_seen = _project_body_steps(
+            result,
+            target=target,
+            operations=operations,
+        )
+        receipt_rows.extend(body_rows)
+        issues.extend(row for row in body_rows if row.get("status") == "BLOCKED")
+
+        if body_scope_seen and not query_scope_seen:
+            removed_body_targets.add(target)
+            receipt_rows.append(
+                {
+                    "target": target,
+                    "scope": "step_actor_body",
+                    "status": "REMOVED_FROM_GLOBAL_BINDING_PLAN",
+                    "global_binding_required": False,
+                    "projected_placeholder_count": body_count,
+                    "identity_value_persisted": False,
+                }
+            )
+            continue
+
         # Remaining body ownership cases need a separately defined semantic
-        # channel (for example validation's acting-actor body). Do not invent a
-        # global owner coordinate merely because a binding row exists.
+        # channel beyond per-step actor identity (a mixed query+body target, or
+        # a body ownership param the acting-actor channel cannot cover). Do not
+        # invent a global owner coordinate merely because a binding row exists.
         issue = {
             "target": target,
             "scope": "unclassified_ownership_binding",
@@ -375,7 +504,7 @@ def seal_ownership_binding_scopes(
     _restore_binding_shape(result, governed, binding_shape)
     pruned_nodes = _prune_query_binding_dag_nodes(
         result,
-        removed_query_targets,
+        removed_query_targets | removed_body_targets,
     )
     receipt = {
         "schema_version": SCHEMA_VERSION,
@@ -383,6 +512,7 @@ def seal_ownership_binding_scopes(
         "rows": receipt_rows,
         "issues": issues,
         "removed_query_targets": sorted(removed_query_targets),
+        "removed_body_targets": sorted(removed_body_targets),
         "pruned_fixture_dag_nodes": pruned_nodes,
         "source_order_selection_allowed": False,
         "identity_value_persisted": False,
