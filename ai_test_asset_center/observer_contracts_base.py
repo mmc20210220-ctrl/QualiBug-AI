@@ -2343,14 +2343,6 @@ def _observe_temporal_window(
         "elapsed_ms": None,
         "window_ms": None,
     }
-    if not timeline:
-        return _receipt(
-            observer_id="temporal_window",
-            status="INDETERMINATE",
-            reason_code="TEMPORAL_TIMELINE_MISSING",
-            evidence=evidence,
-        )
-
     assertion_row = _dict(assertion)
     prop = _dict(assertion_row.get("property"))
     window_ms: int | None = None
@@ -2376,6 +2368,93 @@ def _observe_temporal_window(
             evidence=evidence,
         )
     evidence["window_ms"] = window_ms
+
+    if not timeline:
+        # Source action-deadline protocols reuse the governed process-wait
+        # runtime. Its receipt is stronger than a reconstructed timeline: it
+        # names the exact source wait, elapsed time, convergence and bounded
+        # timeout. Consume only the assertion-bound wait; unrelated waits must
+        # never satisfy this Oracle.
+        wait_ref = _text(
+            assertion_row.get("wait_contract_ref")
+            or prop.get("wait_contract_ref")
+        )
+        wait_receipts = [
+            row
+            for row in _list(observations.get("process_graph_wait_receipts"))
+            if isinstance(row, dict)
+            and wait_ref
+            and _text(row.get("wait_id")) == wait_ref
+        ]
+        if len(wait_receipts) != 1:
+            return _receipt(
+                observer_id="temporal_window",
+                status="INDETERMINATE",
+                reason_code=(
+                    "TEMPORAL_PROCESS_WAIT_RECEIPT_AMBIGUOUS"
+                    if len(wait_receipts) > 1
+                    else "TEMPORAL_TIMELINE_MISSING"
+                ),
+                evidence=evidence,
+            )
+        wait_receipt = _dict(wait_receipts[0])
+        converged = wait_receipt.get("converged")
+        timed_out = wait_receipt.get("timed_out")
+        if not isinstance(converged, bool) or not isinstance(timed_out, bool):
+            return _receipt(
+                observer_id="temporal_window",
+                status="INDETERMINATE",
+                reason_code="TEMPORAL_PROCESS_WAIT_RECEIPT_INVALID",
+                evidence=evidence,
+            )
+        if not converged and not timed_out:
+            return _receipt(
+                observer_id="temporal_window",
+                status="INDETERMINATE",
+                reason_code=(
+                    _text(wait_receipt.get("reason_code"))
+                    or "TEMPORAL_PROCESS_WAIT_NOT_MEASURED"
+                ),
+                evidence=evidence,
+            )
+        try:
+            elapsed_ms = int(wait_receipt.get("elapsed_ms"))
+        except (TypeError, ValueError):
+            return _receipt(
+                observer_id="temporal_window",
+                status="FAILED",
+                reason_code="TEMPORAL_PROCESS_WAIT_RECEIPT_INVALID",
+                evidence=evidence,
+            )
+        if elapsed_ms < 0:
+            return _receipt(
+                observer_id="temporal_window",
+                status="FAILED",
+                reason_code="TEMPORAL_PROCESS_WAIT_RECEIPT_INVALID",
+                evidence=evidence,
+            )
+        evidence.update(
+            {
+                "elapsed_ms": elapsed_ms,
+                "converged": converged,
+                "within_window": bool(
+                    converged and elapsed_ms <= window_ms
+                ),
+                "timed_out": timed_out,
+                "wait_contract_ref": wait_ref,
+                "wait_attempt_count": int(
+                    wait_receipt.get("attempt_count") or 0
+                ),
+                "wait_receipt_reason_code": _text(
+                    wait_receipt.get("reason_code")
+                ),
+            }
+        )
+        return _receipt(
+            observer_id="temporal_window",
+            status="OBSERVED",
+            evidence=evidence,
+        )
 
     trigger_events = [
         row for row in timeline

@@ -6968,6 +6968,18 @@ def build_behavior_ir_from_knowledge_asset(
     model["coverage_gaps"] = _dedupe_nodes(model["coverage_gaps"])
     model["conflicts"] = _dedupe_nodes(model["conflicts"])
 
+    # Source-authoritative process topology is the sole bridge from a Chinese
+    # temporal clause to executable anchor/completion semantics.  Preserve it
+    # on Behavior IR for both semantic projection and the existing multi-step
+    # compiler; absence stays absence and is never reconstructed from wording.
+    _source_process_graphs = [
+        dict(row)
+        for row in _list(data.get("business_process_graphs"))
+        if isinstance(row, dict)
+    ]
+    if _source_process_graphs:
+        model["process_graphs"] = _source_process_graphs
+
     # ── Chinese Semantic Frame channel (P0-A) ──
     # The asset's frame ledger (qualibug.chinese-semantic-frame-ledger.v1) is
     # the Chinese-semantics SSOT projection. Only GROUNDED frame slots may
@@ -7013,6 +7025,16 @@ def build_behavior_ir_from_knowledge_asset(
         def _frame_invariant_builder(contribution: dict[str, Any]) -> dict[str, Any]:
             """Canonicalize grounded operation refs into Behavior IR identity."""
             expression = dict(_dict(contribution.get("expression")))
+            for reference_field in (
+                "anchor_operation_ref",
+                "completion_operation_ref",
+                "completion_observer",
+            ):
+                reference = _text(expression.get(reference_field))
+                if reference:
+                    expression[reference_field] = _frame_index.get(
+                        reference.lower(), reference
+                    )
             operation_refs = sorted(
                 {
                     _frame_index.get(_text(ref).lower(), _text(ref))
@@ -7066,6 +7088,7 @@ def build_behavior_ir_from_knowledge_asset(
             relation_builder=_frame_relation_builder,
             invariant_builder=_frame_invariant_builder,
             ref_resolver=_frame_ref_resolver,
+            process_graphs=_source_process_graphs,
         )
         model["relations"] = [
             normalize_relation(row) for row in _dedupe_nodes(model["relations"])

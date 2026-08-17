@@ -188,6 +188,27 @@ def test_build_behavior_ir_without_frame_ledger_is_unchanged() -> None:
     assert validate_behavior_ir(ir) == []
 
 
+def test_behavior_ir_preserves_governed_process_graph_authority() -> None:
+    asset = _compiled_asset()
+    asset["business_process_graphs"] = [
+        {
+            "status": "COMPILED",
+            "execution_graph_id": "graph:source-deadline",
+            "process_id": "process:source-deadline",
+            "nodes": [],
+            "edges": [],
+            "wait_contracts": [],
+            "source_refs": ["fact:source-deadline"],
+        }
+    ]
+
+    ir = build_behavior_ir_from_knowledge_asset(asset)
+
+    assert ir["process_graphs"] == asset["business_process_graphs"]
+    assert ir["process_graphs"] is not asset["business_process_graphs"]
+    assert validate_behavior_ir(ir) == []
+
+
 def test_composition_root_is_wired_to_frame_projection() -> None:
     # The composition root imports and invokes the projection (closed loop).
     module = importlib.import_module(

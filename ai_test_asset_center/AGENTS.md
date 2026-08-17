@@ -194,7 +194,7 @@ by replacing host methods:
 | Scan-envelope account ownership (workspace reconciliation) | `db_persistence.py` (`ensure_workspace_owned_project`) + `private_pilot_scan_handlers.py` (`_handle_v12_scan`) |
 | Completion & funnel SSOT | `qualibug.obligation-attempt-ledger.v1` (sealed by the discovery mainline) |
 | Discovery funnel closure | `discovery_funnel.py` |
-| Chinese semantic frame SSOT (P0-A) | `enterprise_understanding/chinese_semantic_schema.py` (frame schema `qualibug.chinese-semantic-frame.v1`, slot statuses, reason codes, semantic signature; constraint signatures include typed coordinates but exclude raw wording, source lineage and resolution metadata) + `chinese_semantic_receipts.py` (typed content-addressed receipts) + `chinese_semantic_ledger_adapter.py` (fact → frame projection, `qualibug.chinese-semantic-frame-ledger.v1`) + `chinese_semantic_behavior_ir_adapter.py` (frame → Behavior IR projection) |
+| Chinese semantic frame SSOT (P0-A) | `enterprise_understanding/chinese_semantic_schema.py` (frame schema `qualibug.chinese-semantic-frame.v1`, slot statuses, reason codes, semantic signature; constraint signatures include typed coordinates but exclude raw wording, source lineage and resolution metadata) + `chinese_semantic_receipts.py` (typed content-addressed receipts) + `chinese_semantic_ledger_adapter.py` (fact → frame projection, `qualibug.chinese-semantic-frame-ledger.v1`) + `chinese_semantic_behavior_ir_adapter.py` (frame → Behavior IR projection; fixed action-deadline clauses bind only to one exact source-backed `TIMED_WAIT` whose target operation, typed window, observer, predicate and bounded policy all resolve) |
 | Chinese clause structure (P0-B) | `enterprise_understanding/chinese_context_envelope.py` (block coordinates over `document_structure_assets`: section paths, list-stack ancestor chains, table row/column headers with header-cell block/locator lineage, unique quote lookup — structure only, zero business inference) + `chinese_clause_parser.py` (atomic clause trees `qualibug.chinese-clause-tree.v1`: enumeration action candidates, negation scope, condition leaves, exception nodes, explicit anchored duration windows; exception-only list headers are never duplicated as positive conditions; language-function words/units only, no industry vocabulary) + `chinese_semantic_frame_compiler.py` (frame enrichment: list-parent condition/exception/time-scope inheritance with source-block lineage, table header mention and typed-time injection, enumeration mentions, own-block time/exception merge; signature recomputed; idempotent; inherited/table/own time counts receipted) |
 | Chinese context resolution (P0-C) | `enterprise_understanding/chinese_context_resolver.py` (frame-level omitted-actor recovery from unique evidence — only-if subject, unique prior frame in the same section, unique section heading; typed mention-level coreference: 该X/本X/此X explicit same-sentence nouns, bare pronouns need exactly one current/prior typed candidate, and a unique prior object may fill only an empty object slot with source-frame lineage; context-injected actors cannot self-corroborate; `document_context` section/list/neighbor population; UNKNOWN never force-bound; raw text never rewritten) |
 | Concept & grounding (P0-D) | `enterprise_understanding/business_concept_registry.py` (explicit-evidence concept layer: label→canonical with priority understanding_model > identity_registry > permission_matrix > data_tables; similarity never merges) + `chinese_semantic_grounding.py` (evidence chains per SPEC §12.2: actor = permission matrix > roles > UI contract > concept registry; operation = rule ref > summary verbatim > description > rule_to_interface > formal UI contract > structural entity+CRUD; entity = declared object labels/aliases; state = field-description enum / state machines; scope = ownership phrases → structured OWN; every binding has a typed GROUNDED/AMBIGUOUS/UNKNOWN receipt) |
@@ -290,12 +290,19 @@ sensitive day/week/month/year/working-day windows remain visibly unresolved
 semantics; multiple operation candidates never use a first-item choice. The
 invariant carries the exact constraint evidence, canonical operation id,
 `frame_family_evidence.frame_type=TIME_WINDOW_CONSTRAINT`, and compiles to a
-temporal obligation requiring the `temporal_window` observer. Its source
-anchor is still language-level evidence (`anchor_grounding_status=UNRESOLVED`):
-the action-deadline experiment protocol must remain
-`BLOCKED_MISSING_BINDING` until a distinct anchor operation and completion
-observer are grounded, and must never reinterpret the window as generic
-eventual consistency. Grounded refs are emitted in IR-resolvable
+temporal obligation requiring the `temporal_window` observer. A source anchor
+starts as language-level evidence (`anchor_grounding_status=UNRESOLVED`). It
+becomes `BOUND` only when `business_process_graphs` contains exactly one
+compiled, source-backed `TIMED_WAIT` with the same typed raw/anchor/duration/
+`window_ms` identity, the constrained operation as its target node, a distinct
+source node operation, and a declared read observer + terminal predicate +
+bounded async policy. Zero, incomplete or multiple matches remain visible as
+`TEMPORAL_PROCESS_WAIT_UNRESOLVED`,
+`TEMPORAL_COMPLETION_OBSERVER_UNRESOLVED`, or
+`TEMPORAL_PROCESS_WAIT_AMBIGUOUS`; raw-text/path similarity and document order
+are never binding authority. `behavior_ir_core` preserves those governed
+process graphs on Behavior IR so the action-deadline compiler can reuse the
+existing multi-step/wait scheduler. Grounded refs are emitted in IR-resolvable
 forms — actor role names, `METHOD:path` operation forms (interface ids
 converted), declared entity labels/aliases (the IR builder keeps ASCII entity
 names only; Chinese mentions resolve only through the operator-declared
@@ -822,15 +829,19 @@ Evolution Contract):
   receipts, entity-state snapshot evidence, and assertion DSL
   `before_values`/`after_values` derived from real governed before/after
   observations.
-- Temporal executable experiments must use a dedicated `temporal_write`
-  protocol plus `temporal_window` typed observer, not a generic HTTP
-  treatment. Temporal windows must come from source-grounded
+- Temporal executable experiments must use either the dedicated
+  `temporal_write` protocol or, for a Chinese action deadline, the existing
+  source-backed multi-step process/wait protocol plus the `temporal_window`
+  typed observer; never a generic HTTP treatment. Temporal windows must come from source-grounded
   assertion/property evidence; runtime convergence evidence must come from
-  actual trigger/final-observed timeline events and feed assertion DSL
+  actual trigger/final-observed timeline events or the exact assertion-bound
+  `process_graph_wait_receipt` and feed assertion DSL
   `converged`/`within_window`. A Chinese source action-deadline window is not
-  an eventual-consistency contract: without exact anchor-operation and
-  completion-observer bindings it remains visibly blocked, even when its
-  constrained action operation and numeric window are grounded.
+  executable without exact anchor operation, completion operation, process
+  graph, timed-wait, completion observer, terminal predicate and window-equal
+  bounded policy bindings. A timeout is measured as `converged=false` and
+  `within_window=false`; a transport/binding failure remains indeterminate,
+  never a fabricated deadline violation.
 - Cleanup requirement detection must compare all non-server-managed business
   fields on the same observed entity, not only fields echoed by the write
   response. A write response that returns only an identity still requires

@@ -66,9 +66,65 @@ def _grounded_frame(
 
 def _resolver_accepts_all(*, accepted: set[str] | None = None) -> object:
     accepted_set = accepted if accepted is not None else {
-        "actor:user", "entity:order", "op:query",
+        "actor:user", "entity:order", "op:query", "op:submit",
+        "op:query-status",
     }
     return lambda kind, ref: ref in accepted_set
+
+
+def _timed_process_graph(*, graph_id: str = "graph:deadline") -> dict:
+    return {
+        "status": "COMPILED",
+        "execution_graph_id": graph_id,
+        "process_id": graph_id,
+        "nodes": [
+            {
+                "node_id": "step:submit",
+                "operation_ref": "op:submit",
+                "actor_ref": "actor:user",
+            },
+            {
+                "node_id": "step:query",
+                "operation_ref": "op:query",
+                "actor_ref": "actor:user",
+            },
+        ],
+        "wait_contracts": [
+            {
+                "wait_id": "wait:query-deadline",
+                "wait_kind": "TIMED_WAIT",
+                "status": "BOUND",
+                "source_backed": True,
+                "source_node_id": "step:submit",
+                "target_node_id": "step:query",
+                "observer_operation_ref": "op:query-status",
+                "predicate": {
+                    "json_path": "$.state",
+                    "operator": "equals",
+                    "expected_value": "DONE",
+                },
+                "async_policy": {
+                    "enabled": True,
+                    "expected_max_delay_ms": 3_600_000,
+                    "poll_interval_ms": 1_000,
+                    "max_attempts": 3_600,
+                    "required_stable_observations": 1,
+                    "terminal_condition": "source_declared_predicate",
+                },
+                "time_window_constraints": [
+                    {
+                        "raw": "提交后1小时内",
+                        "anchor": "提交后",
+                        "duration": "1小时",
+                        "window_ms": 3_600_000,
+                        "source_backed": True,
+                    }
+                ],
+                "source_refs": [{"source_id": "source:test", "locator": "r#b1"}],
+            }
+        ],
+        "source_refs": [{"source_id": "source:test", "locator": "r#b1"}],
+    }
 
 
 def test_grounded_frames_emit_owns_permits_denies() -> None:
@@ -207,6 +263,83 @@ def test_grounded_fixed_time_window_emits_temporal_invariant() -> None:
         ref.get("kind") == "chinese_semantic_time_constraint"
         and ref.get("locator") == "r#b1"
         for ref in invariant["source_refs"]
+    )
+
+
+def test_fixed_time_window_binds_only_to_unique_source_process_wait() -> None:
+    frame = _grounded_frame(
+        frame_id="csf:timed-bound", frame_type="PERMISSION_RULE",
+        modality="MAY", operation="op:query",
+    )
+    frame["time_constraints"] = [
+        {
+            "raw": "提交后1小时内",
+            "anchor": "提交后",
+            "relation": "WITHIN",
+            "duration": "1小时",
+            "window_ms": 3_600_000,
+            "source_backed": True,
+            "resolution_status": "RESOLVED",
+        }
+    ]
+    frame["resolution"]["semantic_signature"] = semantic_signature(frame)
+
+    result = project_semantic_frames_to_behavior_ir(
+        [frame],
+        ref_resolver=_resolver_accepts_all(),
+        process_graphs=[_timed_process_graph()],
+    )
+
+    invariant = next(
+        row for row in result["contributions"]
+        if row["contribution_kind"] == "INVARIANT"
+    )
+    expression = invariant["expression"]
+    assert expression["anchor_grounding_status"] == "BOUND"
+    assert expression["completion_grounding_status"] == "BOUND"
+    assert expression["anchor_operation_ref"] == "op:submit"
+    assert expression["completion_operation_ref"] == "op:query"
+    assert expression["completion_observer"] == "op:query-status"
+    assert expression["process_graph_ref"] == "graph:deadline"
+    assert expression["wait_contract_ref"] == "wait:query-deadline"
+
+
+def test_ambiguous_process_wait_never_guesses_temporal_anchor() -> None:
+    frame = _grounded_frame(
+        frame_id="csf:timed-ambiguous", frame_type="PERMISSION_RULE",
+        modality="MAY", operation="op:query",
+    )
+    frame["time_constraints"] = [
+        {
+            "raw": "提交后1小时内",
+            "anchor": "提交后",
+            "relation": "WITHIN",
+            "duration": "1小时",
+            "window_ms": 3_600_000,
+            "source_backed": True,
+            "resolution_status": "RESOLVED",
+        }
+    ]
+    frame["resolution"]["semantic_signature"] = semantic_signature(frame)
+
+    result = project_semantic_frames_to_behavior_ir(
+        [frame],
+        ref_resolver=_resolver_accepts_all(),
+        process_graphs=[
+            _timed_process_graph(graph_id="graph:deadline-1"),
+            _timed_process_graph(graph_id="graph:deadline-2"),
+        ],
+    )
+
+    invariant = next(
+        row for row in result["contributions"]
+        if row["contribution_kind"] == "INVARIANT"
+    )
+    assert invariant["expression"]["anchor_grounding_status"] == "UNRESOLVED"
+    assert "anchor_operation_ref" not in invariant["expression"]
+    assert any(
+        row["reason_code"] == "TEMPORAL_PROCESS_WAIT_AMBIGUOUS"
+        for row in result["skips"]
     )
 
 

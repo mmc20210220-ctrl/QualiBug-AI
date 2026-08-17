@@ -2717,6 +2717,159 @@ def compile_family_protocol(
         }
 
     if family == "temporal":
+        expression = _dict(property_spec.get("expression"))
+        window_ms = expression.get("window_ms") or property_spec.get("window_ms")
+        if _text(expression.get("temporal_semantics")) == "action_deadline":
+            binding_fields = (
+                "anchor_operation_ref",
+                "completion_operation_ref",
+                "completion_observer",
+                "process_graph_ref",
+                "wait_contract_ref",
+            )
+            if (
+                any(not _text(expression.get(field)) for field in binding_fields)
+                or _text(expression.get("anchor_grounding_status")) != "BOUND"
+                or _text(expression.get("completion_grounding_status")) != "BOUND"
+            ):
+                return {
+                    "status": "BLOCKED",
+                    "reason_code": "BLOCKED_MISSING_BINDING",
+                    "detail": (
+                        "temporal_action_deadline_requires_anchor_and_completion_binding"
+                    ),
+                }
+            if operation_ref != _text(expression.get("completion_operation_ref")):
+                return {
+                    "status": "BLOCKED",
+                    "reason_code": "BLOCKED_MISSING_BINDING",
+                    "detail": "temporal_completion_operation_identity_mismatch",
+                }
+            if (
+                isinstance(window_ms, bool)
+                or not isinstance(window_ms, (int, float))
+                or int(window_ms) != window_ms
+                or int(window_ms) <= 0
+            ):
+                return {
+                    "status": "BLOCKED",
+                    "reason_code": "BLOCKED_MISSING_ASSERTION",
+                    "detail": "temporal_window_ms_missing_or_invalid",
+                }
+            graph_ref = _text(expression.get("process_graph_ref"))
+            graph_candidates = [
+                row
+                for row in _list(_dict(behavior_ir).get("process_graphs"))
+                if isinstance(row, dict)
+                and _text(row.get("status")) == "COMPILED"
+                and _text(
+                    row.get("execution_graph_id") or row.get("process_id")
+                ) == graph_ref
+            ]
+            if len(graph_candidates) != 1:
+                return {
+                    "status": "BLOCKED",
+                    "reason_code": "BLOCKED_MISSING_BINDING",
+                    "detail": "temporal_process_graph_not_uniquely_resolved",
+                }
+            raw_graph = _dict(graph_candidates[0])
+            wait_ref = _text(expression.get("wait_contract_ref"))
+            wait_candidates = [
+                row
+                for row in _list(raw_graph.get("wait_contracts"))
+                if isinstance(row, dict)
+                and _text(row.get("wait_id") or row.get("contract_id")) == wait_ref
+            ]
+            if len(wait_candidates) != 1:
+                return {
+                    "status": "BLOCKED",
+                    "reason_code": "BLOCKED_MISSING_BINDING",
+                    "detail": "temporal_wait_contract_not_uniquely_resolved",
+                }
+            raw_wait = _dict(wait_candidates[0])
+            nodes = {
+                _text(row.get("node_id")): row
+                for row in _list(raw_graph.get("nodes"))
+                if isinstance(row, dict) and _text(row.get("node_id"))
+            }
+            source_node = _dict(nodes.get(_text(raw_wait.get("source_node_id"))))
+            target_node = _dict(nodes.get(_text(raw_wait.get("target_node_id"))))
+            policy = _dict(
+                raw_wait.get("async_policy") or raw_wait.get("poll_policy")
+            )
+            wait_windows = [
+                row
+                for row in _list(raw_wait.get("time_window_constraints"))
+                if isinstance(row, dict)
+                and row.get("source_backed") is True
+                and row.get("window_ms") == int(window_ms)
+            ]
+            if not (
+                raw_wait.get("source_backed") is True
+                and _text(raw_wait.get("wait_kind")) == "TIMED_WAIT"
+                and _text(raw_wait.get("status")) == "BOUND"
+                and _text(raw_wait.get("source_node_id"))
+                != _text(raw_wait.get("target_node_id"))
+                and _text(source_node.get("operation_ref"))
+                == _text(expression.get("anchor_operation_ref"))
+                and _text(source_node.get("operation_ref")) != operation_ref
+                and _text(target_node.get("operation_ref")) == operation_ref
+                and _text(
+                    raw_wait.get("observer_operation_ref")
+                    or raw_wait.get("read_operation_ref")
+                ) == _text(expression.get("completion_observer"))
+                and len(wait_windows) == 1
+                and policy.get("enabled") is True
+                and policy.get("expected_max_delay_ms") == int(window_ms)
+            ):
+                return {
+                    "status": "BLOCKED",
+                    "reason_code": "BLOCKED_MISSING_BINDING",
+                    "detail": "temporal_process_wait_binding_contract_mismatch",
+                }
+            from .multi_step_protocol import compile_multi_step_process_protocol
+
+            process_property = {
+                **property_spec,
+                "process_graph_ref": graph_ref,
+            }
+            process_result = compile_multi_step_process_protocol(
+                {
+                    "risk_family": family,
+                    "operation_ref": operation_ref,
+                    "control_actor_ref": control_actor_ref,
+                    "treatment_actor_ref": treatment_actor_ref,
+                    "property_spec": process_property,
+                    "behavior_ir": _dict(behavior_ir),
+                }
+            )
+            if _text(process_result.get("status")) != "COMPILED":
+                return process_result
+            observers = [
+                dict(row)
+                for row in _list(process_result.get("observers"))
+                if isinstance(row, dict)
+            ]
+            if not any(
+                _text(row.get("observer_id")) == "temporal_window"
+                for row in observers
+            ):
+                observers.append({"observer_id": "temporal_window"})
+            return {
+                **process_result,
+                "observers": observers,
+                "assertion": {
+                    "kind": "eventual_consistency",
+                    "temporal_semantics": "action_deadline",
+                    "window_ms": int(window_ms),
+                    "wait_contract_ref": wait_ref,
+                    "process_graph_ref": graph_ref,
+                    "anchor_operation_ref": _text(
+                        expression.get("anchor_operation_ref")
+                    ),
+                    "completion_operation_ref": operation_ref,
+                },
+            }
         if method not in {"POST", "PUT", "PATCH", "DELETE"}:
             return {
                 "status": "BLOCKED",
@@ -2729,25 +2882,6 @@ def compile_family_protocol(
                 "status": "BLOCKED",
                 "reason_code": "BLOCKED_MISSING_BINDING",
                 "detail": "temporal_requires_source_request_example",
-            }
-        expression = _dict(property_spec.get("expression"))
-        window_ms = expression.get("window_ms") or property_spec.get("window_ms")
-        if _text(expression.get("temporal_semantics")) == "action_deadline":
-            if not (
-                _text(expression.get("anchor_operation_ref"))
-                and _text(expression.get("completion_observer"))
-            ):
-                return {
-                    "status": "BLOCKED",
-                    "reason_code": "BLOCKED_MISSING_BINDING",
-                    "detail": (
-                        "temporal_action_deadline_requires_anchor_and_completion_binding"
-                    ),
-                }
-            return {
-                "status": "BLOCKED",
-                "reason_code": "BLOCKED_MISSING_ASSERTION",
-                "detail": "temporal_action_deadline_protocol_unimplemented",
             }
         # Date-range temporal: expression has date_field/bounds but no window_ms
         date_field = _text(expression.get("date_field") or expression.get("field") or expression.get("start_date"))

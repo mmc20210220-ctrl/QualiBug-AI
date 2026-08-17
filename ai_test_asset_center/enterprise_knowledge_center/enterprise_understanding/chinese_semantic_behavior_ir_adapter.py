@@ -199,10 +199,142 @@ def _ref_resolves(
     return bool(ref_resolver(kind, ref))
 
 
+def _temporal_constraint_identity(value: dict[str, Any]) -> tuple[Any, ...] | None:
+    """Return the exact typed identity shared by frame and process evidence."""
+    row = _dict(value)
+    window_ms = row.get("window_ms")
+    raw = _text(row.get("raw"))
+    anchor = _text(row.get("anchor"))
+    duration = _text(row.get("duration"))
+    if (
+        row.get("source_backed") is not True
+        or isinstance(window_ms, bool)
+        or not isinstance(window_ms, (int, float))
+        or int(window_ms) != window_ms
+        or int(window_ms) <= 0
+        or not raw
+        or not anchor
+        or not duration
+    ):
+        return None
+    return raw, anchor, duration, int(window_ms)
+
+
+def _source_process_wait_binding(
+    constraint: dict[str, Any],
+    *,
+    operation_ref: str,
+    process_graphs: Iterable[dict[str, Any]],
+    ref_resolver: Callable[[str, str], bool] | None,
+) -> tuple[dict[str, Any], str]:
+    """Bind one temporal clause to one exact observer-backed process wait.
+
+    Raw-language similarity is deliberately forbidden.  A candidate must
+    carry the same typed time-window identity, name the constrained operation
+    as its target node, and expose a source-declared observer, predicate and
+    bounded polling policy.  Zero or multiple candidates remain visible.
+    """
+    identity = _temporal_constraint_identity(constraint)
+    if identity is None:
+        return {}, "TEMPORAL_PROCESS_WAIT_UNRESOLVED"
+    complete: list[dict[str, Any]] = []
+    incomplete_match = False
+    for graph_value in process_graphs:
+        graph = _dict(graph_value)
+        if _text(graph.get("status")) != "COMPILED":
+            continue
+        graph_ref = _text(
+            graph.get("execution_graph_id") or graph.get("process_id")
+        )
+        if not graph_ref or not (
+            _list(graph.get("source_refs"))
+            or _list(graph.get("evidence"))
+        ):
+            continue
+        nodes = {
+            _text(row.get("node_id")): row
+            for row in _list(graph.get("nodes"))
+            if isinstance(row, dict) and _text(row.get("node_id"))
+        }
+        for wait_value in _list(graph.get("wait_contracts")):
+            wait = _dict(wait_value)
+            if (
+                _text(wait.get("wait_kind")) != "TIMED_WAIT"
+                or _text(wait.get("status")) != "BOUND"
+                or wait.get("source_backed") is not True
+            ):
+                continue
+            if not any(
+                _temporal_constraint_identity(_dict(window)) == identity
+                for window in _list(wait.get("time_window_constraints"))
+                if isinstance(window, dict)
+            ):
+                continue
+            source_node_id = _text(wait.get("source_node_id"))
+            target_node_id = _text(wait.get("target_node_id"))
+            source_node = _dict(nodes.get(source_node_id))
+            target_node = _dict(nodes.get(target_node_id))
+            if _text(target_node.get("operation_ref")) != operation_ref:
+                continue
+            anchor_operation_ref = _text(source_node.get("operation_ref"))
+            observer_operation_ref = _text(
+                wait.get("observer_operation_ref")
+                or wait.get("read_operation_ref")
+            )
+            predicate = _dict(
+                wait.get("predicate") or wait.get("terminal_predicate")
+            )
+            async_policy = _dict(
+                wait.get("async_policy") or wait.get("poll_policy")
+            )
+            if not (
+                anchor_operation_ref
+                and source_node_id != target_node_id
+                and anchor_operation_ref != operation_ref
+                and observer_operation_ref
+                and predicate
+                and async_policy.get("enabled") is True
+                and async_policy.get("expected_max_delay_ms") == identity[3]
+                and _ref_resolves(
+                    anchor_operation_ref, "operation", ref_resolver
+                )
+                and _ref_resolves(
+                    observer_operation_ref, "operation", ref_resolver
+                )
+                and _text(wait.get("wait_id") or wait.get("contract_id"))
+            ):
+                incomplete_match = True
+                continue
+            complete.append(
+                {
+                    "anchor_operation_ref": anchor_operation_ref,
+                    "completion_operation_ref": operation_ref,
+                    "completion_observer": observer_operation_ref,
+                    "process_graph_ref": graph_ref,
+                    "wait_contract_ref": _text(
+                        wait.get("wait_id") or wait.get("contract_id")
+                    ),
+                    "anchor_grounding_status": "BOUND",
+                    "completion_grounding_status": "BOUND",
+                }
+            )
+    unique = {
+        _canonical_json(row): row for row in complete
+    }
+    if len(unique) == 1:
+        return next(iter(unique.values())), ""
+    if len(unique) > 1:
+        return {}, "TEMPORAL_PROCESS_WAIT_AMBIGUOUS"
+    if incomplete_match:
+        return {}, "TEMPORAL_COMPLETION_OBSERVER_UNRESOLVED"
+    return {}, "TEMPORAL_PROCESS_WAIT_UNRESOLVED"
+
+
 def project_semantic_frames_to_behavior_ir(
     frames: Iterable[dict[str, Any]],
     *,
     ref_resolver: Callable[[str, str], bool] | None = None,
+    process_graphs: Iterable[dict[str, Any]] = (),
 ) -> dict[str, Any]:
     """Project grounded frame slots into typed relation contributions.
 
@@ -217,6 +349,10 @@ def project_semantic_frames_to_behavior_ir(
 
     def _count_reason(code: str) -> None:
         reason_counts[code] = reason_counts.get(code, 0) + 1
+
+    source_process_graphs = [
+        row for row in process_graphs if isinstance(row, dict)
+    ]
 
     for frame in frames:
         if not isinstance(frame, dict):
@@ -459,6 +595,24 @@ def project_semantic_frames_to_behavior_ir(
                 "temporal_semantics": "action_deadline",
                 "anchor_grounding_status": "UNRESOLVED",
             }
+            if source_process_graphs:
+                binding, binding_reason = _source_process_wait_binding(
+                    constraint,
+                    operation_ref=operation_ref,
+                    process_graphs=source_process_graphs,
+                    ref_resolver=ref_resolver,
+                )
+                if binding:
+                    expression.update(binding)
+                else:
+                    _count_reason(binding_reason)
+                    skips.append(
+                        {
+                            "frame_id": frame_id,
+                            "constraint_index": constraint_index,
+                            "reason_code": binding_reason,
+                        }
+                    )
             contributions.append(
                 {
                     "contribution_kind": "INVARIANT",
@@ -549,6 +703,7 @@ def apply_semantic_frames_to_behavior_ir(
     relation_builder: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     invariant_builder: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     ref_resolver: Callable[[str, str], bool] | None = None,
+    process_graphs: Iterable[dict[str, Any]] = (),
 ) -> dict[str, Any]:
     """Merge frame contributions into a Behavior IR model (dedup by node id).
 
@@ -556,7 +711,11 @@ def apply_semantic_frames_to_behavior_ir(
     relations are added. Returns the projection receipt and stores it on the
     model as ``semantic_frame_projection_receipt``.
     """
-    result = project_semantic_frames_to_behavior_ir(frames, ref_resolver=ref_resolver)
+    result = project_semantic_frames_to_behavior_ir(
+        frames,
+        ref_resolver=ref_resolver,
+        process_graphs=process_graphs,
+    )
     relations = [row for row in _list(model.get("relations")) if isinstance(row, dict)]
     invariants = [row for row in _list(model.get("invariants")) if isinstance(row, dict)]
     relation_ids = {_text(row.get("id")) for row in relations if _text(row.get("id"))}

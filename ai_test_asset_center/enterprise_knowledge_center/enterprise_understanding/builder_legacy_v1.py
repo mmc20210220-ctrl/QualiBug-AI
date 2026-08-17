@@ -611,6 +611,25 @@ def _waits_from_relation(relation: dict[str, Any], predecessor: str, successor: 
     waits: list[dict[str, Any]] = []
     if relation_type == "AWAITS" or "ASYNC_MESSAGE" in markers or "TIMED_WAIT" in markers or temporal or windows:
         wait_kind = "TIMED_WAIT" if ("TIMED_WAIT" in markers or windows) else "MESSAGE_WAIT"
+        # A single source window may carry the readback contract needed by the
+        # existing process-wait runtime.  Preserve only explicitly declared
+        # fields; multiple windows remain unbound instead of selecting one by
+        # document order.
+        declared_window = windows[0] if len(windows) == 1 else {}
+        observer_contract = {
+            key: declared_window[key]
+            for key in (
+                "observer_operation_ref",
+                "read_operation_ref",
+                "predicate",
+                "terminal_predicate",
+                "async_policy",
+                "poll_policy",
+                "actor_ref",
+                "system_ref",
+            )
+            if declared_window.get(key) not in (None, "", {}, [])
+        }
         waits.append(
             {
                 "wait_id": stable_id(
@@ -631,7 +650,14 @@ def _waits_from_relation(relation: dict[str, Any], predecessor: str, successor: 
                 "source_system_ref": text(relation.get("source_system_ref")),
                 "target_system_ref": text(relation.get("target_system_ref")),
                 "binding_refs": [dict(row) for row in as_list(relation.get("binding_refs")) if isinstance(row, dict)],
+                "source_refs": unique_text(
+                    [
+                        *as_list(relation.get("source_refs")),
+                        *as_list(relation.get("fact_refs")),
+                    ]
+                ),
                 "source_backed": True,
+                **observer_contract,
             }
         )
     return waits

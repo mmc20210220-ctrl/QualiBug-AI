@@ -990,6 +990,12 @@ def _composite_graph(
                 )
             )
         else:
+            # The executable wait compiler owns runtime semantics and accepts
+            # exact graph node identities, not object/process aliases.  The
+            # composite projection has already proven both endpoints unique,
+            # so preserve that proof as the canonical source/target binding.
+            row["source_node_id"] = awaited[0]
+            row["target_node_id"] = awaiting[0]
             row["status"] = "BOUND"
         waits.append(row)
 

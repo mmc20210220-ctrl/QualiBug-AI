@@ -3534,6 +3534,38 @@ def test_temporal_window_observer_emits_eventual_consistency_evidence() -> None:
     assert receipt["evidence"]["elapsed_ms"] == 250
 
 
+def test_temporal_window_observer_projects_exact_process_wait_timeout() -> None:
+    receipts = observe_experiment_requirements(
+        {
+            "assertions": [{
+                "assertion_id": "assert-source-deadline",
+                "kind": "eventual_consistency",
+                "window_ms": 1000,
+                "wait_contract_ref": "wait:source-deadline",
+            }],
+            "observers": [{"observer_id": "temporal_window"}],
+        },
+        observations={
+            "process_graph_wait_receipts": [
+                {
+                    "wait_id": "wait:source-deadline",
+                    "elapsed_ms": 1000,
+                    "attempt_count": 10,
+                    "converged": False,
+                    "timed_out": True,
+                    "reason_code": "READBACK_ASYNC_TIMEOUT",
+                }
+            ]
+        },
+    )
+
+    receipt = receipts[0]
+    assert receipt["status"] == "OBSERVED"
+    assert receipt["evidence"]["converged"] is False
+    assert receipt["evidence"]["within_window"] is False
+    assert receipt["evidence"]["wait_contract_ref"] == "wait:source-deadline"
+
+
 def test_temporal_obligation_compiles_temporal_write_protocol() -> None:
     obligation = _idempotency_obligation()
     obligation["obligation_id"] = "obl-temporal-protocol"
@@ -3604,6 +3636,145 @@ def test_source_action_deadline_blocks_without_anchor_and_completion_binding() -
         experiment["compile_receipt"]["detail"]
         == "temporal_action_deadline_requires_anchor_and_completion_binding"
     )
+
+
+def test_source_action_deadline_reuses_observer_backed_process_wait_protocol() -> None:
+    obligation = _idempotency_obligation()
+    obligation["obligation_id"] = "obl-temporal-source-deadline-bound"
+    obligation["risk_family"] = "temporal"
+    obligation["required_operations"] = ["op-list"]
+    obligation["property"] = {
+        "operation_ref": "op-list",
+        "actor_ref": "actor-writer",
+        "template": "invariant_temporal",
+        "invariant_ref": "inv-source-deadline-bound",
+        "expression": {
+            "kind": "temporal",
+            "window_ms": 1000,
+            "temporal_semantics": "action_deadline",
+            "anchor_operation_ref": "op-create",
+            "completion_operation_ref": "op-list",
+            "completion_observer": "op-read",
+            "process_graph_ref": "graph:source-deadline",
+            "wait_contract_ref": "wait:source-deadline",
+            "anchor_grounding_status": "BOUND",
+            "completion_grounding_status": "BOUND",
+        },
+    }
+    ir = _idempotency_ir()
+    ir["relations"] = [
+        {
+            "id": "rel-delete-compensates-create",
+            "relation_type": "compensates",
+            "from_ref": "op-delete",
+            "to_ref": "op-create",
+            "operation_ref": "op-delete",
+            "source_refs": [
+                {"source_id": "requirements", "locator": "rule:cleanup"}
+            ],
+        }
+    ]
+    ir["process_graphs"] = [
+        {
+            "status": "COMPILED",
+            "execution_graph_id": "graph:source-deadline",
+            "process_id": "graph:source-deadline",
+            "nodes": [
+                {
+                    "node_id": "step:create",
+                    "operation_ref": "op-create",
+                    "actor_ref": "actor-writer",
+                    "compensation_operation_ref": "op-delete",
+                    "output_binding_specs": [
+                        {
+                            "canonical_field_id": "id",
+                            "target": "id",
+                            "json_path": "$.id",
+                        }
+                    ],
+                },
+                {
+                    "node_id": "step:list",
+                    "operation_ref": "op-list",
+                    "actor_ref": "actor-writer",
+                    "input_binding_refs": [
+                        {
+                            "producer_node_id": "step:create",
+                            "producer_output_field": "id",
+                            "target": "id",
+                        }
+                    ],
+                },
+            ],
+            "edges": [
+                {
+                    "edge_id": "edge:deadline",
+                    "source_node_id": "step:create",
+                    "target_node_id": "step:list",
+                    "relation_type": "DEPENDS_ON",
+                }
+            ],
+            "wait_contracts": [
+                {
+                    "wait_id": "wait:source-deadline",
+                    "wait_kind": "TIMED_WAIT",
+                    "status": "BOUND",
+                    "source_backed": True,
+                    "source_node_id": "step:create",
+                    "target_node_id": "step:list",
+                    "observer_operation_ref": "op-read",
+                    "actor_ref": "actor-writer",
+                    "system_ref": "",
+                    "predicate": {
+                        "status_codes": [200],
+                        "json_path": "$.state",
+                        "operator": "equals",
+                        "expected_value": "DONE",
+                    },
+                    "async_policy": {
+                        "enabled": True,
+                        "expected_max_delay_ms": 1000,
+                        "poll_interval_ms": 100,
+                        "max_attempts": 10,
+                        "required_stable_observations": 1,
+                        "terminal_condition": "source_declared_predicate",
+                    },
+                    "time_window_constraints": [
+                        {
+                            "raw": "提交后1秒内",
+                            "anchor": "提交后",
+                            "duration": "1秒",
+                            "window_ms": 1000,
+                            "source_backed": True,
+                        }
+                    ],
+                }
+            ],
+            "source_refs": [
+                {"source_id": "requirements", "locator": "rule:deadline"}
+            ],
+        }
+    ]
+
+    experiment = compile_experiment_for_obligation(
+        obligation,
+        behavior_ir=ir,
+        environment_type="test",
+    )
+
+    assert experiment["compile_receipt"]["status"] == "COMPILED", experiment["compile_receipt"]
+    assert experiment["assertions"][0]["kind"] == "eventual_consistency"
+    assert experiment["assertions"][0]["temporal_semantics"] == "action_deadline"
+    assert experiment["assertions"][0]["window_ms"] == 1000
+    target = next(
+        row for row in experiment["treatment_plan"]
+        if row["step_id"] == "step:list"
+    )
+    assert target["wait_contract"]["wait_id"] == "wait:source-deadline"
+    assert target["_execution_graph"]["wait_runtime_contract"]["status"] == "COMPILED"
+    assert "temporal_window" in {
+        row["observer_id"] for row in experiment["observers"]
+    }
 
 
 def test_temporal_executor_feeds_window_evidence_to_contract_oracle(

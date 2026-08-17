@@ -118,6 +118,9 @@ REASON_CODES = frozenset(
         "TEMPORAL_DURATION_UNREPRESENTABLE",  # fixed duration cannot be losslessly represented in ms
         "TEMPORAL_WINDOW_UNCOMPILED",  # typed constraint has no executable fixed window
         "TEMPORAL_RELATION_UNSUPPORTED",  # temporal relation is outside implemented protocol
+        "TEMPORAL_PROCESS_WAIT_UNRESOLVED",  # no exact source process-wait binding
+        "TEMPORAL_PROCESS_WAIT_AMBIGUOUS",  # more than one exact process-wait binding
+        "TEMPORAL_COMPLETION_OBSERVER_UNRESOLVED",  # wait lacks observer/predicate/policy
     }
 )
 

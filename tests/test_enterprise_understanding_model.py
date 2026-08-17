@@ -636,7 +636,22 @@ def test_timed_wait_and_cross_system_markers_project_orchestration() -> None:
                     "anchor": "支付",
                     "relation": "之后",
                     "duration": "24小时",
+                    "window_ms": 86_400_000,
                     "source_backed": True,
+                    "observer_operation_ref": "GET:/api/outbound/{id}",
+                    "predicate": {
+                        "json_path": "$.status",
+                        "operator": "equals",
+                        "expected_value": "DONE",
+                    },
+                    "async_policy": {
+                        "enabled": True,
+                        "expected_max_delay_ms": 86_400_000,
+                        "poll_interval_ms": 60_000,
+                        "max_attempts": 1_440,
+                        "required_stable_observations": 1,
+                        "terminal_condition": "source_declared_predicate",
+                    },
                 }
             ],
         ),
@@ -650,7 +665,11 @@ def test_timed_wait_and_cross_system_markers_project_orchestration() -> None:
     )
     assert "CROSS_SYSTEM" in multi["process_features"]
     assert "TIMED_WAIT" in multi["process_features"]
-    assert any(row["wait_kind"] == "TIMED_WAIT" for row in multi["waits"])
+    wait = next(row for row in multi["waits"] if row["wait_kind"] == "TIMED_WAIT")
+    assert wait["observer_operation_ref"] == "GET:/api/outbound/{id}"
+    assert wait["predicate"]["expected_value"] == "DONE"
+    assert wait["async_policy"]["expected_max_delay_ms"] == 86_400_000
+    assert wait["source_refs"]
 
 
 def test_explicit_join_marker_projects_multi_object_join() -> None:

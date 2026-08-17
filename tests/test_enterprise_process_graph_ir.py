@@ -218,4 +218,6 @@ def test_expands_multi_object_process_and_preserves_wait_contract():
     assert wait["status"] == "BOUND"
     assert len(wait["awaited_node_refs"]) == 1
     assert len(wait["awaiting_node_refs"]) == 1
+    assert wait["source_node_id"] == wait["awaited_node_refs"][0]
+    assert wait["target_node_id"] == wait["awaiting_node_refs"][0]
     assert {node["system_ref"] for node in composite["nodes"]} == {"erp", "payment"}
