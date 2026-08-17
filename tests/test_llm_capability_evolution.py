@@ -159,6 +159,9 @@ def test_retrieval_receipts_rule_truncation_instead_of_silent_drop() -> None:
     assert receipt["rules_emitted"] >= 64  # default budget, not a legacy 24 cap
     assert receipt["rules_truncated"] == 200 - receipt["rules_emitted"]
     assert receipt["max_rules"] == receipt["rules_emitted"] or receipt["rules_emitted"] < receipt["rules_total"]
+    assert receipt["sections"]["rules"]["sources_total"] == 200
+    assert receipt["sections"]["rules"]["sources_emitted"] == receipt["rules_emitted"]
+    assert receipt["sections"]["rules"]["sources_truncated"] == 200 - receipt["rules_emitted"]
     # The default rule budget must clear the historical 24-rule ceiling.
     assert receipt["max_rules"] >= 64
 
@@ -204,6 +207,52 @@ def test_retrieval_fairly_preserves_permissions_conflicts_and_gaps() -> None:
     assert receipt["sections"]["conflicts"]["emitted"] == 1
     assert receipt["sections"]["gaps"]["emitted"] == 1
     assert receipt["facts_truncated"] > 0
+
+
+def test_retrieval_budget_is_fair_across_sources_within_each_semantic_channel() -> None:
+    semantic_payload = {
+        "semantic_hypotheses": [
+            {
+                "candidate_id": f"candidate_verbose_{index}",
+                "statement": f"长文档隐含语义 {index}",
+                "source": "src:verbose-prd",
+                "rule_origin": "inferred",
+                "formal_rule_authority": False,
+            }
+            for index in range(5)
+        ] + [{
+            "candidate_id": "candidate_short_source",
+            "statement": "短文档隐含语义",
+            "source": "src:short-api",
+            "rule_origin": "inferred",
+            "formal_rule_authority": False,
+        }],
+    }
+
+    semantic_block, semantic_receipt = retrieve_grounded_facts(
+        semantic_payload,
+        max_facts=2,
+    )
+
+    assert "src:verbose-prd" in semantic_block
+    assert "src:short-api" in semantic_block
+    assert "cross_source_reasoning_must_preserve_every_used_candidate_id_and_source" in semantic_block
+    assert "surface_conflicts_without_harmonizing_them" in semantic_block
+    assert semantic_receipt["sections"]["semantic_hypotheses"]["sources_total"] == 2
+    assert semantic_receipt["sections"]["semantic_hypotheses"]["sources_emitted"] == 2
+
+    rule_payload = {
+        "documented_rules": [
+            {"rule": f"长文档显式规则 {index}", "source": "src:verbose-prd"}
+            for index in range(5)
+        ] + [{"rule": "短文档显式规则", "source": "src:short-api"}],
+    }
+    rule_block, rule_receipt = retrieve_grounded_facts(rule_payload, max_facts=2)
+
+    assert "src:verbose-prd" in rule_block
+    assert "src:short-api" in rule_block
+    assert rule_receipt["sections"]["rules"]["sources_total"] == 2
+    assert rule_receipt["sections"]["rules"]["sources_emitted"] == 2
 
 
 def test_retrieval_redacts_credentials() -> None:

@@ -303,3 +303,70 @@ def test_semantic_hypothesis_budget_is_receipted_not_silent() -> None:
     assert receipt["counts"]["semantic_hypotheses_total"] == 2
     assert receipt["counts"]["semantic_hypotheses_projected"] == 1
     assert "world_model_semantic_hypotheses_truncated:1/2" in receipt["reason_codes"]
+
+
+def test_projection_budgets_are_fair_across_enterprise_sources() -> None:
+    """One verbose document must not erase every other source before reasoning."""
+    asset = _asset()
+    asset["rule_library"] = [
+        {
+            "rule_id": f"rule:verbose:{index}",
+            "source_id": "src:verbose-prd",
+            "statement": f"长文档显式规则 {index}",
+            "severity": "P0",
+        }
+        for index in range(6)
+    ] + [{
+        "rule_id": "rule:short:1",
+        "source_id": "src:short-api",
+        "statement": "短文档显式规则",
+        "severity": "P2",
+    }]
+    template = asset["semantic_candidates"][0]
+    asset["semantic_candidates"] = [
+        {
+            **template,
+            "candidate_id": f"candidate_verbose_{index}",
+            "source_id": "src:verbose-prd",
+            "verbatim_quote": f"长文档隐含语义 {index}",
+            "evidence_spans": [{"text": f"长文档隐含语义 {index}"}],
+        }
+        for index in range(6)
+    ] + [{
+        **template,
+        "candidate_id": "candidate_short_source",
+        "source_id": "src:short-api",
+        "verbatim_quote": "短文档隐含语义",
+        "evidence_spans": [{"text": "短文档隐含语义"}],
+    }]
+
+    world = project_knowledge_world_model(
+        asset,
+        max_rules=2,
+        max_semantic_hypotheses=2,
+    )
+    receipt = world["projection_receipt"]
+
+    assert {row["source"].split("@", 1)[0] for row in world["documented_rules"]} == {
+        "src:verbose-prd",
+        "src:short-api",
+    }
+    assert {row["source"].split("@", 1)[0] for row in world["semantic_hypotheses"]} == {
+        "src:verbose-prd",
+        "src:short-api",
+    }
+    assert receipt["counts"]["rule_sources_total"] == 2
+    assert receipt["counts"]["rule_sources_projected"] == 2
+    assert receipt["counts"]["semantic_hypothesis_sources_total"] == 2
+    assert receipt["counts"]["semantic_hypothesis_sources_projected"] == 2
+
+    limited = project_knowledge_world_model(
+        asset,
+        max_rules=1,
+        max_semantic_hypotheses=1,
+    )["projection_receipt"]
+    assert "world_model_rule_sources_truncated:1/2" in limited["reason_codes"]
+    assert (
+        "world_model_semantic_hypothesis_sources_truncated:1/2"
+        in limited["reason_codes"]
+    )

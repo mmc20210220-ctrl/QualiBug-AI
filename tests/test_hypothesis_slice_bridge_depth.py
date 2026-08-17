@@ -46,7 +46,10 @@ def test_bridge_preserves_depth_fields_on_candidate() -> None:
         "source_state": "OVERDUE",
         "target_entity": "settlement",
         "cascade_check": "settlement must not proceed for an overdue order",
-        "semantic_hypothesis_refs": ["candidate_implicit_lifecycle"],
+        "semantic_hypothesis_refs": [
+            "candidate_implicit_lifecycle_prd",
+            "candidate_implicit_lifecycle_api",
+        ],
         "verification_method": {
             "method": "POST",
             "path": "/resources",
@@ -68,7 +71,10 @@ def test_bridge_preserves_depth_fields_on_candidate() -> None:
     assert depth["source_state"] == "OVERDUE"
     assert depth["target_entity"] == "settlement"
     assert depth["cascade_check"] == "settlement must not proceed for an overdue order"
-    assert depth["semantic_hypothesis_refs"] == ["candidate_implicit_lifecycle"]
+    assert depth["semantic_hypothesis_refs"] == [
+        "candidate_implicit_lifecycle_prd",
+        "candidate_implicit_lifecycle_api",
+    ]
     assert "step1" in depth["verification_steps"]
     assert "step2" in depth["verification_steps"]
     assert depth["operation_refs"] == ["createResource", "getResource"]

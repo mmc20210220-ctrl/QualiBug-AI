@@ -644,7 +644,10 @@ def test_adapter_carries_depth_and_flags_uncompiled_cascade() -> None:
             "depth": {
                 "cascade_chain": [{"from": "order", "to": "settlement"}],
                 "source_state": "OVERDUE",
-                "semantic_hypothesis_refs": ["candidate_implicit_lifecycle"],
+                "semantic_hypothesis_refs": [
+                    "candidate_implicit_lifecycle_prd",
+                    "candidate_implicit_lifecycle_api",
+                ],
             },
         }],
         _adapter_ir(),
@@ -656,7 +659,8 @@ def test_adapter_carries_depth_and_flags_uncompiled_cascade() -> None:
     assert obligation["property"]["depth"]["cascade_chain"]
     assert obligation["property"]["depth"]["source_state"] == "OVERDUE"
     assert obligation["property"]["semantic_hypothesis_refs"] == [
-        "candidate_implicit_lifecycle"
+        "candidate_implicit_lifecycle_prd",
+        "candidate_implicit_lifecycle_api",
     ]
     assert obligation["property"]["semantic_hypothesis_authority"] == "advisory_only"
     assert obligation["property"]["formal_rule_authority"] is False

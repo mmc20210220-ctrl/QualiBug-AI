@@ -1426,6 +1426,45 @@ _WORLD_MODEL_FLOOR_RELATIONSHIPS = 30
 _WORLD_MODEL_FLOOR_ROLES = 24
 _WORLD_MODEL_FLOOR_STATEMENT_CHARS = 200
 
+def _projection_source_identity(row: dict[str, Any]) -> str:
+    """Return the declared source identity used only for fair scheduling."""
+    source_id = str(row.get("source_id") or "").strip()
+    if source_id:
+        return source_id
+    for ref in row.get("source_refs") or []:
+        if not isinstance(ref, dict):
+            continue
+        identity = str(
+            ref.get("source_id")
+            or ref.get("document")
+            or ref.get("source")
+            or ""
+        ).strip()
+        if identity:
+            return identity
+    return ""
+
+
+def _source_fair_projection_rows(
+    rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Round-robin source queues without inventing or changing evidence."""
+    queues: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        key = _projection_source_identity(row) or "__unknown_projection_source__"
+        queues.setdefault(key, []).append(row)
+    ordered: list[dict[str, Any]] = []
+    index = 0
+    while True:
+        emitted = False
+        for queue in queues.values():
+            if index < len(queue):
+                ordered.append(queue[index])
+                emitted = True
+        if not emitted:
+            return ordered
+        index += 1
+
 
 def _world_model_budget(
     kw: int | None,
@@ -1567,7 +1606,7 @@ def project_knowledge_world_model(
 
     seen_statements: set[str] = set()
     rules: list[dict[str, Any]] = []
-    rules_total = 0
+    eligible_rule_rows: list[dict[str, Any]] = []
     rule_statements_truncated = 0
     for row in sorted(
         (asset.get("rule_library") or []),
@@ -1579,9 +1618,16 @@ def project_knowledge_world_model(
         if not statement or statement in seen_statements:
             continue
         seen_statements.add(statement)
-        rules_total += 1
-        if len(rules) >= max_rules:
-            continue
+        eligible_rule_rows.append(row)
+    rules_total = len(eligible_rule_rows)
+    rule_sources_total = len({
+        identity
+        for row in eligible_rule_rows
+        if (identity := _projection_source_identity(row))
+    })
+    projected_rule_rows = _source_fair_projection_rows(eligible_rule_rows)[:max_rules]
+    for row in projected_rule_rows:
+        statement = str(row.get("statement") or "").strip()
         locator = str(row.get("source_locator") or "").strip()
         source = str(row.get("source_id") or "")
         if len(statement) > rule_statement_chars:
@@ -1604,8 +1650,18 @@ def project_knowledge_world_model(
             "binding_readiness": binding_readiness,
             "source_refs": _source_refs(row),
         })
+    rule_sources_projected = len({
+        identity
+        for row in projected_rule_rows
+        if (identity := _projection_source_identity(row))
+    })
     if rules_total > len(rules):
         reason_codes.append(f"world_model_rules_truncated:{len(rules)}/{rules_total}")
+    if rule_sources_projected < rule_sources_total:
+        reason_codes.append(
+            "world_model_rule_sources_truncated:"
+            f"{rule_sources_projected}/{rule_sources_total}"
+        )
     if rule_statements_truncated:
         reason_codes.append(
             f"world_model_rule_statements_truncated:{rule_statements_truncated}/{len(rules)}"
@@ -1616,7 +1672,7 @@ def project_knowledge_world_model(
     # meaning reasoning without ever being mislabeled as documented rules or
     # satisfying formal rule/delivery authority.
     semantic_hypotheses: list[dict[str, Any]] = []
-    semantic_hypotheses_total = 0
+    eligible_semantic_rows: list[dict[str, Any]] = []
     seen_semantic_hypotheses: set[str] = set()
     for row in asset.get("semantic_candidates") or []:
         if not isinstance(row, dict):
@@ -1650,9 +1706,35 @@ def project_knowledge_world_model(
         if candidate_id in seen_semantic_hypotheses:
             continue
         seen_semantic_hypotheses.add(candidate_id)
-        semantic_hypotheses_total += 1
-        if len(semantic_hypotheses) >= max_semantic_hypotheses:
-            continue
+        eligible_semantic_rows.append(row)
+    semantic_hypotheses_total = len(eligible_semantic_rows)
+    semantic_hypothesis_sources_total = len({
+        identity
+        for row in eligible_semantic_rows
+        if (identity := _projection_source_identity(row))
+    })
+    projected_semantic_rows = _source_fair_projection_rows(
+        eligible_semantic_rows
+    )[:max_semantic_hypotheses]
+    for row in projected_semantic_rows:
+        evidence_spans = [
+            dict(span)
+            for span in (row.get("evidence_spans") or [])
+            if isinstance(span, dict) and str(span.get("text") or "").strip()
+        ]
+        statement = str(
+            row.get("verbatim_quote")
+            or (evidence_spans[0].get("text") if evidence_spans else "")
+            or row.get("name")
+            or ""
+        ).strip()
+        source_id = str(row.get("source_id") or "").strip()
+        locator = str(row.get("source_locator") or "").strip()
+        candidate_id = str(row.get("candidate_id") or "").strip() or (
+            "candidate_" + hashlib.sha256(
+                f"{source_id}\n{locator}\n{statement}".encode("utf-8")
+            ).hexdigest()[:20]
+        )
         semantic_hypotheses.append({
             "candidate_id": candidate_id,
             "statement": statement[:rule_statement_chars],
@@ -1667,10 +1749,21 @@ def project_knowledge_world_model(
             "formal_rule_authority": False,
             "customer_delivery_evidence": False,
         })
+    semantic_hypothesis_sources_projected = len({
+        identity
+        for row in projected_semantic_rows
+        if (identity := _projection_source_identity(row))
+    })
     if semantic_hypotheses_total > len(semantic_hypotheses):
         reason_codes.append(
             "world_model_semantic_hypotheses_truncated:"
             f"{len(semantic_hypotheses)}/{semantic_hypotheses_total}"
+        )
+    if semantic_hypothesis_sources_projected < semantic_hypothesis_sources_total:
+        reason_codes.append(
+            "world_model_semantic_hypothesis_sources_truncated:"
+            f"{semantic_hypothesis_sources_projected}/"
+            f"{semantic_hypothesis_sources_total}"
         )
 
     state_machines: list[dict[str, Any]] = []
@@ -1824,8 +1917,12 @@ def project_knowledge_world_model(
             "counts": {
                 "rules_total": rules_total,
                 "rules_projected": len(rules),
+                "rule_sources_total": rule_sources_total,
+                "rule_sources_projected": rule_sources_projected,
                 "semantic_hypotheses_total": semantic_hypotheses_total,
                 "semantic_hypotheses_projected": len(semantic_hypotheses),
+                "semantic_hypothesis_sources_total": semantic_hypothesis_sources_total,
+                "semantic_hypothesis_sources_projected": semantic_hypothesis_sources_projected,
                 "relationships_total": relationships_total,
                 "relationships_projected": len(relationships),
                 "roles_total": roles_total,

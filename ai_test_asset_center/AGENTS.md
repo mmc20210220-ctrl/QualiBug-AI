@@ -1009,9 +1009,12 @@ Contract. This section pins only the package-local anchors:
   presence in `rule_library` alone is not verification. Structured fact
   retrieval in `reasoning_fact_retrieval.retrieve_grounded_facts` schedules
   rule, unverified-semantic-hypothesis, state, relation, entity, permission,
-  conflict, and gap sections fairly
-  and receipts total/emitted/truncated counts per section, so a large rule list
-  cannot starve other business evidence or make missing coverage look complete.
+  conflict, and gap sections fairly. Within the explicit-rule and
+  unverified-semantic-hypothesis channels, both the world-model projection and
+  fact retrieval round-robin by declared source identity before applying their
+  receipted budgets; source-total/projected/emitted counts expose any lost
+  document coverage. Thus neither a large rule list nor one verbose document
+  may starve other business evidence or make missing coverage look complete.
   `collect_reasoner_hypotheses` receives the scan's project/root explicitly;
   chunk and learned-memory retrieval use that authority before process-global
   environment state, preventing cross-project drift. `ReasonerPolicy`
@@ -1059,8 +1062,10 @@ Contract. This section pins only the package-local anchors:
   enter formal rule governance. Inferred candidates project through
   `project_knowledge_world_model.semantic_hypotheses` into a separately labelled
   `UNVERIFIED SEMANTIC HYPOTHESES` reasoner block. The prompt must copy any used
-  candidate ids into `semantic_hypothesis_refs`; the hypothesis bridge preserves
-  those refs as depth lineage. This channel may design governed runtime
+  candidate ids into `semantic_hypothesis_refs`; when it combines meanings from
+  multiple sources it must preserve every used candidate id and source and must
+  surface conflicts rather than harmonize them. The hypothesis bridge preserves
+  the complete ref list as depth lineage. This channel may design governed runtime
   experiments but cannot satisfy formal rule authority or customer-delivery
   evidence, and graph-context activation must not erase it. Runtime modes:
   `off` (regex-only), `shadow`

@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import os
 import re
-from typing import Any
+from typing import Any, NamedTuple
 
 FACT_BLOCK_HEADER = "\n\n[GROUNDED BUSINESS FACTS (source-anchored)]\n"
 SEMANTIC_HYPOTHESIS_BLOCK_HEADER = (
@@ -28,7 +28,9 @@ SEMANTIC_HYPOTHESIS_BLOCK_HEADER = (
     "- authority=advisory_only; must_not_satisfy_formal_rule_authority; "
     "must_not_satisfy_customer_delivery_evidence; use_only_to_design_governed_runtime_experiments; "
     "delivery_requires_reproducible_runtime_observation_receipts; "
-    "copy_used_candidate_ids_to_semantic_hypothesis_refs\n"
+    "copy_used_candidate_ids_to_semantic_hypothesis_refs; "
+    "cross_source_reasoning_must_preserve_every_used_candidate_id_and_source; "
+    "surface_conflicts_without_harmonizing_them\n"
 )
 
 # The source-anchored fact block is the ONLY channel that carries the
@@ -44,6 +46,11 @@ MAX_BLOCK_CHARS = 24000
 MAX_FACT_CHARS = 220
 _MAX_RULES_DEFAULT = 64
 _MAX_RULES_FLOOR = 24
+
+
+class _FactRow(NamedTuple):
+    text: str
+    source_identity: str = ""
 
 
 def _max_rules() -> int:
@@ -106,7 +113,48 @@ def _source_ref(fact: dict[str, Any]) -> str:
     return _text(raw)[:160]
 
 
-def _extract_rules(payload: dict[str, Any]) -> tuple[list[str], int]:
+def _fact_source_identity(fact: dict[str, Any]) -> str:
+    """Declared source identity for scheduling; never rendered as new evidence."""
+    direct = _text(fact.get("source_id"))
+    if direct:
+        return direct
+    raw = fact.get("source_refs") or fact.get("source_ref") or fact.get("provenance")
+    refs = raw if isinstance(raw, list) else [raw] if raw else []
+    for ref in refs:
+        ref_dict = _dict(ref)
+        identity = _text(
+            ref_dict.get("source_id")
+            or ref_dict.get("document")
+            or ref_dict.get("source")
+        )
+        if identity:
+            return identity
+    source = fact.get("source")
+    if isinstance(source, str):
+        return _text(source).split("@", 1)[0]
+    return ""
+
+
+def _source_fair_fact_rows(rows: list[_FactRow]) -> list[_FactRow]:
+    """Round-robin declared source queues while preserving within-source order."""
+    queues: dict[str, list[_FactRow]] = {}
+    for row in rows:
+        key = row.source_identity or "__unknown_source__"
+        queues.setdefault(key, []).append(row)
+    ordered: list[_FactRow] = []
+    index = 0
+    while True:
+        emitted = False
+        for queue in queues.values():
+            if index < len(queue):
+                ordered.append(queue[index])
+                emitted = True
+        if not emitted:
+            return ordered
+        index += 1
+
+
+def _extract_rules(payload: dict[str, Any]) -> tuple[list[_FactRow], int]:
     """Business rules / invariants with source refs. Only verbatim text.
 
     Accepts both the Behavior-IR-shaped model dict (``business_rules`` /
@@ -119,9 +167,8 @@ def _extract_rules(payload: dict[str, Any]) -> tuple[list[str], int]:
     Returns ``(lines, rules_total)`` so the caller can receipt emitted-vs-total
     instead of silently dropping the overflow.
     """
-    lines: list[str] = []
+    rows: list[_FactRow] = []
     rules_total = 0
-    max_rules = _max_rules()
     for key in ("business_rules", "rules", "invariants", "rule_library", "documented_rules"):
         for item in _list(payload.get(key)):
             item_dict = _dict(item)
@@ -135,16 +182,15 @@ def _extract_rules(payload: dict[str, Any]) -> tuple[list[str], int]:
                 # explicit or unmarked source-declared rules qualify.
                 continue
             rules_total += 1
-            if len(lines) >= max_rules:
-                continue
             ref = _source_ref(item_dict)
-            lines.append(f"- [rule] {_bounded(text)}" + (f" (source: {ref})" if ref else ""))
-            if len(lines) >= max_rules:
-                continue
-    return lines, rules_total
+            rows.append(_FactRow(
+                f"- [rule] {_bounded(text)}" + (f" (source: {ref})" if ref else ""),
+                _fact_source_identity(item_dict),
+            ))
+    return _source_fair_fact_rows(rows), rules_total
 
 
-def _extract_semantic_hypotheses(payload: dict[str, Any]) -> list[str]:
+def _extract_semantic_hypotheses(payload: dict[str, Any]) -> list[_FactRow]:
     """Source-anchored inferred meanings for experiment ideation only.
 
     These rows are never rendered as ``[rule]`` and never enter the grounded
@@ -165,7 +211,7 @@ def _extract_semantic_hypotheses(payload: dict[str, Any]) -> list[str]:
             and _text(item.get("rule_origin")).lower() == "inferred"
         )
 
-    lines: list[str] = []
+    lines: list[_FactRow] = []
     seen: set[str] = set()
     for item in rows:
         if item.get("formal_rule_authority") is True:
@@ -196,9 +242,16 @@ def _extract_semantic_hypotheses(payload: dict[str, Any]) -> list[str]:
         ref = _source_ref(item)
         if ref:
             parts.append(f"source={_bounded(ref, 160)}")
-        lines.append("- [semantic_hypothesis] " + "; ".join(part for part in parts if part))
+        lines.append(_FactRow(
+            "- [semantic_hypothesis] " + "; ".join(part for part in parts if part),
+            _fact_source_identity(item),
+        ))
+    lines = _source_fair_fact_rows(lines)
     if lines:
-        lines[0] = SEMANTIC_HYPOTHESIS_BLOCK_HEADER + lines[0]
+        lines[0] = _FactRow(
+            SEMANTIC_HYPOTHESIS_BLOCK_HEADER + lines[0].text,
+            lines[0].source_identity,
+        )
     return lines
 
 
@@ -390,16 +443,16 @@ def _extract_gaps(payload: dict[str, Any]) -> list[str]:
 
 
 def _fair_fact_rows(
-    sections: list[tuple[str, list[str]]],
-) -> list[tuple[str, str]]:
+    sections: list[tuple[str, list[_FactRow]]],
+) -> list[tuple[str, _FactRow]]:
     """Deterministic round-robin so a large rule list cannot starve a surface."""
-    rows: list[tuple[str, str]] = []
+    rows: list[tuple[str, _FactRow]] = []
     index = 0
     while True:
         emitted = False
-        for name, lines in sections:
-            if index < len(lines):
-                rows.append((name, lines[index]))
+        for name, section_rows in sections:
+            if index < len(section_rows):
+                rows.append((name, section_rows[index]))
                 emitted = True
         if not emitted:
             return rows
@@ -421,32 +474,48 @@ def retrieve_grounded_facts(
     if not isinstance(payload, dict) or not payload:
         return "", receipt
     try:
-        rule_lines, rules_total = _extract_rules(payload)
+        all_rule_lines, rules_total = _extract_rules(payload)
+        rule_lines = all_rule_lines[:_max_rules()]
         semantic_hypothesis_lines = _extract_semantic_hypotheses(payload)
+
+        def _plain_rows(lines: list[str]) -> list[_FactRow]:
+            return [_FactRow(line) for line in lines]
+
         sections = [
             ("rules", rule_lines),
             ("semantic_hypotheses", semantic_hypothesis_lines),
-            ("state_machines", _extract_state_machines(payload)),
-            ("relations", _extract_relations(payload)),
-            ("entities", _extract_entities(payload)),
-            ("permissions", _extract_permissions(payload)),
-            ("conflicts", _extract_conflicts(payload)),
-            ("gaps", _extract_gaps(payload)),
+            ("state_machines", _plain_rows(_extract_state_machines(payload))),
+            ("relations", _plain_rows(_extract_relations(payload))),
+            ("entities", _plain_rows(_extract_entities(payload))),
+            ("permissions", _plain_rows(_extract_permissions(payload))),
+            ("conflicts", _plain_rows(_extract_conflicts(payload))),
+            ("gaps", _plain_rows(_extract_gaps(payload))),
         ]
         section_totals = {
             name: (rules_total if name == "rules" else len(lines))
             for name, lines in sections
         }
+        section_source_totals = {
+            name: len({
+                row.source_identity for row in (
+                    all_rule_lines if name == "rules" else lines
+                ) if row.source_identity
+            })
+            for name, lines in sections
+        }
         emitted_by_section = {name: 0 for name, _ in sections}
+        emitted_sources_by_section = {name: set() for name, _ in sections}
         bounded_lines: list[str] = []
         chars = 0
         fact_limit = max(1, min(int(max_facts or MAX_FACTS), 128))
-        for section_name, line in _fair_fact_rows(sections):
-            line = line[:max_chars - chars]
+        for section_name, row in _fair_fact_rows(sections):
+            line = row.text[:max_chars - chars]
             if len(line) <= 0:
                 break
             bounded_lines.append(line)
             emitted_by_section[section_name] += 1
+            if row.source_identity:
+                emitted_sources_by_section[section_name].add(row.source_identity)
             chars += len(line) + 1
             if len(bounded_lines) >= fact_limit:
                 break
@@ -458,8 +527,15 @@ def retrieve_grounded_facts(
                 "total": section_totals[name],
                 "emitted": emitted_by_section[name],
                 "truncated": max(0, section_totals[name] - emitted_by_section[name]),
+                "sources_total": section_source_totals[name],
+                "sources_emitted": len(emitted_sources_by_section[name]),
+                "sources_truncated": max(
+                    0,
+                    section_source_totals[name]
+                    - len(emitted_sources_by_section[name]),
+                ),
             }
-            for name, _ in sections
+            for name, lines in sections
         }
         facts_total = sum(section_totals.values())
         receipt = {
