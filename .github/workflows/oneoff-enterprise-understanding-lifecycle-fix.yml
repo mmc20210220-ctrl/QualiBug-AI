@@ -1,0 +1,67 @@
+name: One-off enterprise understanding lifecycle fix
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  apply-root-fix:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Apply root lifecycle fix
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('ai_test_asset_center/discovery_runtime_planning.py')
+          text = path.read_text(encoding='utf-8')
+
+          old_import = '''        build_enterprise_business_knowledge_asset,\n        build_runtime_source_knowledge_overlay,'''
+          new_import = '''        build_enterprise_business_knowledge_asset,\n        build_runtime_source_knowledge_overlay,\n        load_enterprise_business_knowledge_asset,'''
+          if old_import not in text:
+              raise SystemExit('expected enterprise knowledge import block not found')
+          text = text.replace(old_import, new_import, 1)
+
+          old_build = '''    asset = build_enterprise_business_knowledge_asset(\n        inputs.project,\n        inputs.root,\n        options={'''
+          new_build = '''    # Enterprise understanding has its own lifecycle. A Test Run consumes the\n    # persisted snapshot and must not rebuild unchanged enterprise material.\n    # Initial bootstrap is the only Run-side full build; source revisions are\n    # owned by the existing incremental refresh authority in the knowledge center.\n    asset = load_enterprise_business_knowledge_asset(\n        inputs.project,\n        inputs.root,\n    ) or build_enterprise_business_knowledge_asset(\n        inputs.project,\n        inputs.root,\n        options={'''
+          if old_build not in text:
+              raise SystemExit('expected unconditional enterprise knowledge build not found')
+          text = text.replace(old_build, new_build, 1)
+          path.write_text(text, encoding='utf-8')
+          PY
+
+          python -m py_compile ai_test_asset_center/discovery_runtime_planning.py
+
+          python - <<'PY'
+          import ast
+          from pathlib import Path
+
+          path = Path('ai_test_asset_center/discovery_runtime_planning.py')
+          source = path.read_text(encoding='utf-8')
+          ast.parse(source)
+          load_pos = source.index('asset = load_enterprise_business_knowledge_asset(')
+          fallback_pos = source.index('or build_enterprise_business_knowledge_asset(', load_pos)
+          assert load_pos < fallback_pos
+          assert source.count('asset = build_enterprise_business_knowledge_asset(') == 0
+          print('enterprise understanding lifecycle syntax/ownership checks: OK')
+          PY
+      - name: Commit root fix
+        shell: bash
+        run: |
+          if git diff --quiet -- ai_test_asset_center/discovery_runtime_planning.py; then
+            echo 'No code change required.'
+            exit 0
+          fi
+          git config user.name 'qualibug-lifecycle-fix'
+          git config user.email 'actions@users.noreply.github.com'
+          git add ai_test_asset_center/discovery_runtime_planning.py
+          git commit -m 'fix(discovery): reuse persisted enterprise understanding on repeated runs'
+          git push origin HEAD:main
