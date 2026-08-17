@@ -199,6 +199,23 @@ def build_reasoner_graph_context(
     """
 
     project_context = project_behavior_ir_for_graph(behavior_ir)
+    input_counts = {
+        key: len(value)
+        for key, value in project_context.items()
+        if isinstance(value, list)
+    }
+    # sync_context always creates PRD/API SourceDocument nodes. Without this
+    # guard an empty persisted business model could therefore look graph_ready
+    # merely because those bookkeeping nodes exist, incorrectly taking active
+    # mode away from the raw PRD/API fallback.
+    if not any(input_counts.values()):
+        return {
+            "status": "EMPTY",
+            "pack": {},
+            "stats": {},
+            "input_counts": input_counts,
+            "reason": "persisted_business_graph_input_empty",
+        }
     try:
         graph = CognitiveMemoryGraph(
             project_id=project_id,
@@ -217,22 +234,14 @@ def build_reasoner_graph_context(
             "status": "READY" if bool(pack.get("graph_ready")) else "EMPTY",
             "pack": pack,
             "stats": stats,
-            "input_counts": {
-                key: len(value)
-                for key, value in project_context.items()
-                if isinstance(value, list)
-            },
+            "input_counts": input_counts,
         }
     except Exception as exc:
         return {
             "status": "FAILED",
             "pack": {},
             "stats": {},
-            "input_counts": {
-                key: len(value)
-                for key, value in project_context.items()
-                if isinstance(value, list)
-            },
+            "input_counts": input_counts,
             "error": f"{type(exc).__name__}: {str(exc)[:200]}",
         }
 
@@ -322,6 +331,7 @@ def _persisted_asset_graph_bridge(
         "source": "persisted_enterprise_knowledge_asset",
         "input_counts": dict(bridge.get("input_counts") or {}),
         "error": _text(bridge.get("error")),
+        "reason": _text(bridge.get("reason")),
     }
     return enriched, dict(enriched["_graph_context_bridge"])
 
