@@ -236,9 +236,6 @@ def derive_unit_execution_arms(
         ]
         if not variant_ids:
             continue
-        # Representative's own compiled experiments (primary + its input
-        # variants) are the arm sources: same semantic surface, actor-only
-        # difference.
         rep_experiments = [
             exp
             for exp in _experiment_rows
@@ -257,13 +254,6 @@ def derive_unit_execution_arms(
                 continue
             existing = by_obligation.get(variant_id)
             if _arm_compile_status(existing) == "COMPILED":
-                # The variant already has its own compiled experiment (e.g.
-                # representative-compile fallback): deriving an arm would
-                # create a second compiled experiment claiming the same
-                # obligation id, and the plan row would reference the arm
-                # while the identity index keeps the old experiment —
-                # ``compiled_experiment_mismatch``. Bind the plan row to the
-                # variant's own experiment instead (zero coverage loss).
                 arm_own_compile_count += 1
                 _append_arm_selected_row(
                     obligation_plan,
@@ -301,7 +291,6 @@ def derive_unit_execution_arms(
             for variant_id in variant_ids[_UNIT_ARM_CAP:]:
                 arm_fallback_obligation_ids.append(variant_id)
                 arm_fallback_unit_ids[variant_id] = unit_id
-    # Fail-closed fallback compile for undeliverable arms
     fallback_compiled_selected_count = 0
     if arm_fallback_obligation_ids:
         fallback_arm_obligations = [
@@ -325,13 +314,6 @@ def derive_unit_execution_arms(
             experiment_pack["compiled_count"] = int(
                 experiment_pack.get("compiled_count") or 0
             ) + int(arm_fallback_pack.get("compiled_count") or 0)
-            # 回退路径完整: fallback-compiled experiments must enter the same
-            # compiled pool + identity index as every other compiled experiment
-            # (execution reads by_obligation), and every COMPILED one is
-            # selected this round — the unit was selected, its variant keeps an
-            # executable face, zero coverage loss. Experiments that still came
-            # back non-COMPILED stay honest BLOCKED: they are never added to
-            # selected and can never pass the intent gate.
             for fallback_exp in _list(arm_fallback_pack.get("experiments")):
                 if not isinstance(fallback_exp, dict):
                     continue
@@ -360,7 +342,6 @@ def derive_unit_execution_arms(
                 arm_fallback_pack.get("compiled_count"),
                 fallback_compiled_selected_count,
             )
-    # Merge arms into the experiment index and the selected set
     if arm_experiments:
         experiment_pack["experiments"] = (
             list(_list(experiment_pack.get("experiments"))) + arm_experiments
@@ -372,9 +353,6 @@ def derive_unit_execution_arms(
         for arm in arm_experiments:
             arm_id = _text(arm.get("obligation_id"))
             if arm_id:
-                # Force-index: the arm is the authoritative compiled face for
-                # this obligation id in this round, so the identity index can
-                # never diverge from the selected row's experiment_id.
                 by_obligation[arm_id] = arm
             _append_arm_selected_row(
                 obligation_plan,
@@ -420,14 +398,11 @@ def build_discovery_plan(
     from .enterprise_knowledge_center import (
         build_enterprise_business_knowledge_asset,
         build_runtime_source_knowledge_overlay,
+        load_enterprise_business_knowledge_asset,
         merge_knowledge_asset_overlay,
         project_knowledge_world_model,
     )
 
-    # Test-suite kill switch for the semantic recall channel: mirrors
-    # QUALIBUG_MAINLINE_REASONER_DISABLED and QUALIBUG_AGENT_SEMANTIC_LINKING_DISABLED
-    # so deterministic unit tests never reach a live provider. Production default
-    # remains augment (default-ON) when the env var is absent.
     _semantic_recall_disabled = (
         str(os.environ.get("QUALIBUG_SEMANTIC_EXTRACTION_DISABLED") or "")
         .strip()
@@ -435,15 +410,13 @@ def build_discovery_plan(
         in {"1", "true", "yes"}
     )
 
-    asset = build_enterprise_business_knowledge_asset(
+    asset = load_enterprise_business_knowledge_asset(
+        inputs.project,
+        inputs.root,
+    ) or build_enterprise_business_knowledge_asset(
         inputs.project,
         inputs.root,
         options={
-            # SPEC §12/§13: rule-extraction mode is operator-declared via
-            # campaign context. Default augment (default-ON comprehension):
-            # validated explicit LLM rule candidates are promoted through the
-            # deterministic evidence/no-conflict/traceability gates. An explicit
-            # rule_promotion_gates_met=False is the kill switch → shadow.
             "semantic_rule_extraction_mode": (
                 "off"
                 if _semantic_recall_disabled
@@ -473,23 +446,10 @@ def build_discovery_plan(
         db_schema_text=inputs.db_schema_text,
     )
     asset = merge_knowledge_asset_overlay(asset, runtime_source_overlay)
-    # Structurize any new rules from the overlay that lack causal chains
     from .enterprise_knowledge_center import _structurize_rule_causal_chains
     asset["rule_library"] = _structurize_rule_causal_chains(
         asset.get("rule_library") or []
     )
-    # ── Semantic contract binding (interface-documented contract rules) ──
-    # Per-endpoint contract lines (关键契约/业务约束) inside the API document
-    # are parsed as plain rules but the authoritative rule→interface channels
-    # cannot bind pure-Chinese statements, so state/idempotency/conservation
-    # semantics never reach an executable operation. The adapter re-attaches
-    # them to the interface they are documented at (section line range /
-    # verbatim containment / CJK action terms), structures conservation
-    # equations and state preconditions, and binds state-machine transitions
-    # to the operations whose contracts mention the TO state. Pure enrichment:
-    # it never invents rules, operations, actors or fields; every edge carries
-    # a named evidence channel. Runs before the Behavior IR build so the
-    # existing rule_to_interface channel and compiler consume the semantics.
     from .enterprise_knowledge_center.semantic_contract_binding import (
         apply_semantic_contract_binding,
     )
@@ -559,16 +519,6 @@ def build_discovery_plan(
         inputs.campaign_context,
     )
 
-    # ── Source-contract auto-derivation (four-link breadth closure) ──
-    # Detect explicit latency / stability / event contracts that already exist
-    # in the source material (operation descriptions, PRD/API text) and bind
-    # them verbatim into the asset, so performance/stability/event defect
-    # classes become reachable without a manually declared JSON contract.
-    # Derivation is extraction only: every contract is anchored to an exact
-    # verbatim statement and an exact operation + actor identity; anything
-    # unprovable is skipped with a receipt entry.  Never invents budgets,
-    # fields, or claims the source does not state.  Execution still requires
-    # the operator-declared adapter and approved runtime contract.
     contract_derivation_receipt: dict[str, Any] = {
         "schema_version": "qualibug.contract-auto-derivation.v1",
         "status": "SKIPPED",
@@ -592,12 +542,6 @@ def build_discovery_plan(
             "status": "FAILED",
             "reason": f"{type(exc).__name__}:{str(exc)[:160]}",
         }
-    # Resolve adapter capability BEFORE the IR is built, so the IR's observation
-    # surfaces and the experiment compiler's adapter set come from one computation.
-    # They used to disagree: the IR hardcoded db_snapshot as unavailable while this
-    # same resolver returned db_sql for a project with a declared database, and the
-    # observer gate reads the IR -- so data-layer assertions blocked as
-    # BLOCKED_MISSING_OBSERVER against a database the product could query.
     from .adapter_capability import (
         observation_surfaces_for_adapters,
         resolve_available_adapters,
@@ -609,13 +553,6 @@ def build_discovery_plan(
         _dict(inputs.campaign_context.get("_runtime_contract")),
     )
 
-    # ── Adapter-declared observation surfaces ──
-    # A customer-declared database turns the db_sql adapter on. The persistence
-    # surface (observer + assertion kinds + risk family) is installed HERE, on the
-    # planning authority, so the obligation compiler, the observer gate and the
-    # executor answer one question: an entity with a source-declared table compiles
-    # into a persistence observation only when the surface is actually installed.
-    # Idempotent; registers without opening any connection.
     adapter_surface_install_receipt = {
         "schema_version": "qualibug.adapter-surface-install.v1",
         "status": "NOT_REQUESTED",
@@ -672,7 +609,6 @@ def build_discovery_plan(
         "invariant_operation_binding": invariant_binding_receipt,
     }
 
-    # ── Binding Closure: construct unified binding ledger from Behavior IR ──
     from .binding_ledger import BindingLedger
     from .binding_builder import build_all_bindings
     from .binding_conflict_resolver import detect_and_resolve_all
@@ -694,11 +630,6 @@ def build_discovery_plan(
         if isinstance(row, dict)
     ]
 
-    # ── Behavior IR coverage gap → source-backed obligations ──
-    # Augment obligations with coverage-driven obligations for Behavior IR
-    # nodes that have zero existing obligation coverage. This is a single-variable
-    # optimization: it only adds obligations, does not change compilation,
-    # execution, oracle, or evaluation.
     coverage_report: dict[str, Any] = {}
     try:
         from .behavior_ir_hypothesis_coverage import (
@@ -725,22 +656,12 @@ def build_discovery_plan(
             },
         }
     except Exception as exc:
-        # Coverage enrichment is a progressive enhancement; its failure must not
-        # abort the mainline. Log and continue with original obligations.
         coverage_report = {
             "coverage_obligations_added": 0,
             "coverage_error": f"{type(exc).__name__}: {str(exc)[:200]}",
         }
 
-    # ── Exhaustive obligation matrix (Phase 4.1) ──
-    # Generate comprehensive obligations from Behavior IR structure:
-    # auth matrix, boundary validation, state integrity, isolation,
-    # idempotency, conservation, invariant checks.
     matrix_report: dict[str, Any] = {}
-
-    # ── Read-only state audit obligations (Phase 3-A) ──
-    # For invariants with no operation binding, map entity type to GET
-    # endpoint and generate read-only audit obligations. Safe: no writes.
     state_audit_report: dict[str, Any] = {}
     try:
         from .state_audit_planner import build_readonly_state_audit_obligations
@@ -766,12 +687,6 @@ def build_discovery_plan(
             "state_audit_error": f"{type(exc).__name__}: {str(exc)[:200]}",
         }
 
-    # ── Account-enumeration guard obligations (anonymous identity queries) ──
-    # For identity-locator GET/HEAD operations with no declared permit/deny
-    # relation (anonymous-reachable by definition), generate single-arm
-    # privacy guard obligations: the anonymous response must not carry account
-    # attributes. Read-only by construction; flows through the existing
-    # response-side privacy field-policy channel.
     account_enumeration_report: dict[str, Any] = {}
     try:
         from .account_enumeration_guard import (
@@ -799,16 +714,6 @@ def build_discovery_plan(
             "account_enumeration_error": f"{type(exc).__name__}: {str(exc)[:200]}",
         }
 
-    # ── Credential-gated write guard obligations (unauthenticated writes) ──
-    # For WRITE operations whose own contract demands verification-based
-    # authentication (回调必须验签 / 必须完成验证码或等价身份校验) but declares
-    # no permit/deny relation (anonymous-reachable by definition), generate
-    # single-arm authorization guard obligations: the anonymous write must be
-    # rejected. The treatment body aims the identity-locator field at a real
-    # runtime account and a callback surface's status field carries the
-    # success literal — the forged state-change shape. Rejection-only by
-    # construction; flows through the authorization protocol channel with the
-    # dedicated credential_gated_write template.
     credential_gated_write_report: dict[str, Any] = {}
     try:
         from .credential_gated_write_guard import (
@@ -839,20 +744,6 @@ def build_discovery_plan(
             "credential_gated_write_error": f"{type(exc).__name__}: {str(exc)[:200]}",
         }
 
-    # ── Credential-boundary guard obligations (auth/backdoor surfaces) ──
-    # Authentication/backdoor defects are runtime divergences between an
-    # endpoint's DECLARED access contract and its observed enforcement: the
-    # source states the correct contract (权限：管理员 / 必须完成验证码校验), so
-    # no rule→operation binding can surface them. Two structure-only arms:
-    #  - Arm A: a role-declared credential surface (token/password/login/
-    #    impersonate/debug-sign …) must REJECT anonymous callers — an accepted
-    #    anonymous call lets anyone mint/impersonate/change credentials.
-    #  - Arm B: a declared verification-code login must actually verify the
-    #    code — a wrong code must be rejected (any-code-login weakness).
-    # Both are rejection-only single-arm obligations flowing through the
-    # existing credential_gated_write / validation protocol channels; no
-    # endpoint names, no industry terms (driven by the operation's own
-    # contract text + generic security vocabulary).
     credential_boundary_report: dict[str, Any] = {}
     try:
         from .credential_boundary_guard import (
@@ -883,11 +774,6 @@ def build_discovery_plan(
             "credential_boundary_error": f"{type(exc).__name__}: {str(exc)[:200]}",
         }
 
-    # ── Cross-document conflict obligations ──
-    # Consume conflicts detected by enterprise_knowledge_center between
-    # different source documents. Each conflict becomes a test obligation
-    # targeting the contradiction (e.g. field required in PRD but nullable
-    # in DB schema → test that the API enforces the declared constraint).
     conflict_report: dict[str, Any] = {}
     try:
         from .behavior_ir_hypothesis_coverage import _stable_id as _cov_stable_id
@@ -901,12 +787,9 @@ def build_discovery_plan(
             entity = _text(conflict.get("entity"))
             if not conflict_type or not entity:
                 continue
-            # Map conflict type to risk family for obligation routing
             risk_family_map = {
                 "field_required_mismatch": "consistency",
                 "permission_contradiction": "authorization",
-                # Never emit bare compile-family ``invariant`` — that path has no
-                # assertion kind and dies as invariant_assertion_kind_missing.
                 "rule_contradiction": "validation",
             }
             risk_family = risk_family_map.get(conflict_type, "consistency")
@@ -972,19 +855,6 @@ def build_discovery_plan(
             "conflict_error": f"{type(exc).__name__}: {str(exc)[:200]}",
         }
 
-    # ── Mainline LLM Reasoner augmentation ──
-    # Comprehension is the measured bottleneck of the discovery harness: the
-    # deterministic obligation compiler only expresses what the Behavior IR
-    # already encodes. The 11-engine Reasoner (stage_reason_all_v2) was only
-    # reachable from side loops, so the mainline never consumed LLM business
-    # reasoning and discovery breadth was structurally capped.
-    #
-    # Wiring contract: hypotheses NEVER become obligations directly. They must
-    # bind to a documented endpoint and join the Behavior IR through exact
-    # source-declared relations (hypothesis_slice_bridge +
-    # obligation_source_adapter). Unbound hypotheses are dropped and counted
-    # in the receipt, so this path adds comprehension without weakening any
-    # source-grounding, fail-closed, or evidence rule.
     mainline_reasoner_report: dict[str, Any] = {
         "schema_version": "qualibug.mainline-reasoner-receipt.v1",
         "status": "NOT_REQUESTED",
@@ -1011,11 +881,6 @@ def build_discovery_plan(
                 inputs.campaign_context.get("_source_verification_text")
             ) or inputs.api_spec_text
             _reasoner_start = time.perf_counter()
-            # Comprehension bridge: project the source-derived knowledge asset
-            # into the Reasoner's business-world contract.  Without this the
-            # 11 engines see only truncated raw PRD/API text and every
-            # business_world prompt slot degrades to ``{}``: a directly
-            # observable code-path break independent of historical scores.
             _reasoner_world = project_knowledge_world_model(asset)
             _reasoner_hypotheses, _reasoner_meta = collect_reasoner_hypotheses(
                 inputs.prd_text,
@@ -1040,10 +905,6 @@ def build_discovery_plan(
                 ),
                 "contradictions": len(_reasoner_world.get("contradictions") or []),
                 "gaps": len(_reasoner_world.get("gaps") or []),
-                # Comprehension-bridge truncation must stay visible: the
-                # projection receipt records budgets + projected-vs-total
-                # counts + named reason codes, so a rule set larger than the
-                # bridge budget is never silently dropped from the scan receipt.
                 "projection_receipt": _reasoner_world.get("projection_receipt") or {},
             }
             mainline_reasoner_report = {
@@ -1062,9 +923,6 @@ def build_discovery_plan(
                         "failed_engine_names",
                         "engine_error_class_counts",
                         "max_hypotheses_per_engine",
-                        # Learning-loop observability (closed-loop consumption
-                        # state must be visible in the scan receipt, not
-                        # dropped at the reasoner boundary).
                         "learned_memory_receipt",
                         "engine_attention_receipt",
                         "fact_retrieval_receipt",
@@ -1140,9 +998,6 @@ def build_discovery_plan(
                     mainline_reasoner_report["obligations_added"],
                 )
         except Exception as exc:
-            # Degradation is never silent: the FAILED receipt travels with the
-            # planning bundle into product artifacts and the error is logged
-            # with a traceback. The deterministic obligation pool remains.
             _planning_logger.error(
                 "mainline_reasoner_augmentation_failed %s: %s",
                 type(exc).__name__,
@@ -1156,10 +1011,6 @@ def build_discovery_plan(
                 "obligations_added": 0,
             }
 
-    # Obligation identity is the planning SSOT. Several enrichments above add
-    # rows after the compiler's own dedupe pass; leaving those rows in place
-    # creates multiple formal rows for one immutable obligation and makes every
-    # downstream count appear more complete than the ledger actually is.
     raw_obligation_count = len(obligations)
     id_fingerprints: dict[str, set[str]] = {}
     missing_id_count = 0
@@ -1229,18 +1080,11 @@ def build_discovery_plan(
             },
         )
 
-    # ── Source-confidence gate ──
-    # Obligations derived from low-confidence sources (e.g. OCR-parsed
-    # documents with confidence < 0.5) are downweighted: they remain in the
-    # pool but are pushed to the bottom of execution priority. This prevents
-    # noisy OCR artifacts from consuming execution budget ahead of
-    # high-confidence electronic-source obligations.
     _LOW_CONFIDENCE_THRESHOLD = 0.5
     _low_conf_count = 0
     for obl in obligations:
         if not isinstance(obl, dict):
             continue
-        # Check source_refs for confidence signals
         source_refs = obl.get("source_refs") or []
         min_conf = 1.0
         for ref in source_refs:
@@ -1248,36 +1092,23 @@ def build_discovery_plan(
                 ref_conf = ref.get("confidence")
                 if ref_conf is not None:
                     min_conf = min(min_conf, float(ref_conf))
-        # Also check obligation-level confidence (set by obligation compiler
-        # from IR node confidence: invariant × operation × actor)
         obl_conf = obl.get("confidence")
         if obl_conf is not None:
             min_conf = min(min_conf, float(obl_conf))
-        # Also check obligation-level source_confidence
         src_conf = obl.get("source_confidence")
         if src_conf is not None:
             min_conf = min(min_conf, float(src_conf))
         if min_conf < _LOW_CONFIDENCE_THRESHOLD:
-            # Mark as low-confidence so the planner deprioritizes it
             obl["_low_confidence_source"] = True
             obl["_source_confidence"] = min_conf
             _low_conf_count += 1
         else:
             obl["_source_confidence"] = min_conf
-    # Sort: high-confidence obligations first, low-confidence last
     if _low_conf_count > 0:
         obligations.sort(
             key=lambda o: (1 if isinstance(o, dict) and o.get("_low_confidence_source") else 0)
         )
 
-    # ── P0-1: Canonical obligation keys + Coverage Units ──
-    # Semantic uniquification starts at the obligation layer: every obligation
-    # (compiler output, coverage/reasoner/audit/guard/conflict augmentations)
-    # carries its canonical key + coverage unit id, and the pool is merged into
-    # Coverage Units (SPEC §2.1/§2.2). The planner below then budgets by unit
-    # (defect surface) instead of by variant, and each selected unit compiles
-    # once into a multi-arm experiment bundle (SPEC §2.3). Fail-closed: any
-    # failure keeps the existing obligation-variant path with a visible receipt.
     coverage_unit_receipt: dict[str, Any] = {
         "schema_version": "qualibug.coverage-unit-registry.v1",
         "status": "NOT_APPLIED",
@@ -1343,7 +1174,6 @@ def build_discovery_plan(
             representative_obligations.append(rep)
     planning_authority = "coverage_unit" if units else "obligation"
 
-    # ── Space Coordinate Annotation + Exploration Infrastructure ──
     from .space_coordinate import coordinate_from_obligation
     from .invariant_graph import build_default_invariant_graph
     from .exploration_operator_registry import (
@@ -1403,33 +1233,9 @@ def build_discovery_plan(
         inputs.campaign_context.get("environment_type")
         or inputs.campaign_context.get("environment_kind")
     ).lower()
-    # Observation adapters this target may be observed through, resolved from
-    # customer-declared configuration rather than hardcoded. Every call site previously
-    # pinned {"http_api"}, so a registered non-http observer could never be used on the
-    # main chain -- it compiled only in a test that passed the wider set by hand. The
-    # resolver adds an adapter only when the customer declared the thing it observes and
-    # falls back to the http_api baseline otherwise, so the failure direction is always
-    # "fewer adapters".
-    # Reuse the set resolved before the IR build rather than recomputing it. Two
-    # computations of the same declaration can drift, and this pair drifting is exactly
-    # what made the IR and the compiler disagree about the database.
-    #
-    # The runtime contract lives under campaign_context["_runtime_contract"], not as an
-    # attribute on inputs -- reading it as an attribute silently yielded None and made the
-    # contract-declared adapter path dead.
     _runtime_contract_for_materialization = _dict(
         inputs.campaign_context.get("_runtime_contract")
     )
-    # ── P0-1: compile once per Coverage Unit (representative obligation) ──
-    # The full obligation pool is 5001+ rows whose variants differ mainly by
-    # actor/source-rule/input; compiling every variant multiplies the compile
-    # phase ~Nx (run16: 28344 compiled experiments from 5001 obligations).
-    # Compiling the unit representative once preserves every semantic surface
-    # (the representative's own input variants still expand inside the batch);
-    # the other variants of SELECTED units become cheap actor-rebinding arms
-    # after planning. Fail-closed: units whose representative does not compile
-    # fall back to compiling all their variants individually (today's behavior
-    # for that unit), so no executable variant is ever lost.
     compile_input = representative_obligations if representative_obligations else obligations
     experiment_pack = compile_experiments(
         compile_input,
@@ -1459,7 +1265,6 @@ def build_discovery_plan(
         "blocked_count": int(experiment_pack.get("blocked_count") or 0),
         "abstract_count": int(experiment_pack.get("abstract_count") or 0),
     }
-    # ── Fail-closed fallback: units whose representative did not compile ──
     fallback_variants: list[dict[str, Any]] = []
     for unit in units:
         rep_id = _text(unit.get("representative_obligation_id"))
@@ -1505,11 +1310,6 @@ def build_discovery_plan(
         experiment_pack["abstract_count"] = int(experiment_pack.get("abstract_count") or 0) + int(
             fallback_pack.get("abstract_count") or 0
         )
-        # ── Fail-closed representative promotion ──
-        # A unit whose representative did not compile is still selectable when
-        # one of its variants compiled: promote the highest-confidence compiled
-        # variant to representative (deterministic), so the unit keeps a
-        # compile-ready face and no executable variant is lost from selection.
         promoted_count = 0
         for unit in units:
             rep_id = _text(unit.get("representative_obligation_id"))
@@ -1573,18 +1373,15 @@ def build_discovery_plan(
         oid = _text(row.get("obligation_id"))
         if oid:
             by_obligation[oid] = row
-        # Variant experiments use IDs like obl_xxx__v_yyy; also index by original
         _expanded_from = _text(row.get("expanded_from_obligation_id"))
         if _expanded_from and _expanded_from not in by_obligation:
             by_obligation[_expanded_from] = row
-        # Also parse variant ID pattern to extract original
         _vm = _VARIANT_RE.match(oid) if oid else None
         if _vm:
             _original = _vm.group(1)
             if _original not in by_obligation:
                 by_obligation[_original] = row
 
-    # ── Binding Completeness Gate: explicit pre-execution binding check ──
     from .binding_completeness_gate import gate_or_block as _binding_gate_check
 
     _binding_blocked_obls: list[str] = []
@@ -1601,7 +1398,7 @@ def build_discovery_plan(
         _g_compile = _dict(_g_exp.get("compile_receipt"))
         _g_status = _text(_g_compile.get("status")).upper()
         if _g_status == "COMPILED":
-            continue  # Never downgrade already-compiled experiments
+            continue
         _binding_gate_checked += 1
         _g_passed, _g_reason = _binding_gate_check(
             _binding_ledger, obligation=_g_obl, behavior_ir=behavior_ir
@@ -1615,7 +1412,6 @@ def build_discovery_plan(
             }
             _binding_blocked_obls.append(_g_oid)
 
-    # ── B1 fix: probe_status derived from actual runtime contract state ──
     _probe_contract = _dict(inputs.campaign_context.get("_runtime_contract"))
     _probe_contract_approved = bool(_text(_probe_contract.get("approved_base_url")))
     _probe_status = (
@@ -1638,16 +1434,6 @@ def build_discovery_plan(
         "probe_status": _probe_status,
     }
 
-    # ── P0-1: Pre-transport executability proof (before budget selection) ──
-    # Compile status alone does not prove an experiment can reach transport:
-    # binding dimensions may stay incomplete even when the compile receipt says
-    # COMPILED (run27: budget slots spent on obligations whose required
-    # business steps never ran because bindings could not materialize). The
-    # binding completeness gate is therefore applied to COMPILED obligations as
-    # an EXECUTABILITY PROOF, and budget selection may only spend slots on
-    # obligations that pass it. Non-executable obligations remain in the plan
-    # with an explicit reason code — never silently dropped, never occupying a
-    # budget slot.
     from .binding_completeness_gate import (
         check_binding_completeness as _binding_exec_check,
     )
@@ -1712,9 +1498,6 @@ def build_discovery_plan(
         == "COMPILED"
         or _text(_dict(row).get("compile_status")).upper() == "COMPILED"
     )
-    # Bind the run budget from the compiled obligation pool using the same
-    # auto-scaler as behavior-slice scheduling. An explicit operator env
-    # override (already reflected in campaign.slice_budget) must not be raised.
     env_override = str(
         os.environ.get("QUALIBUG_MAX_BEHAVIOR_SLICES_PER_ROUND") or ""
     ).strip()
@@ -1745,10 +1528,6 @@ def build_discovery_plan(
     )
     if history_match_status == "MATCHED" and not historical_yield:
         history_match_status = "MATCHED_HISTORY_HAS_NO_FAMILY_METRICS"
-    # ── Closed-loop READ consumption ──
-    # learned_knowledge is loaded at scan start from the SQLite knowledge base
-    # and carried through campaign_context. Consume it here as a bounded ranking
-    # boost for compiled obligations; it never changes budget or compile state.
     from .learning_knowledge_consumption import (
         build_learning_consumption_receipt,
         build_learned_boost_index,
@@ -1762,12 +1541,6 @@ def build_discovery_plan(
             "learned_knowledge_load_failed consumption_degraded failure=%s",
             _learning_boost_index.get("load_failure"),
         )
-    # ── P0-1: plan by Coverage Unit (budget counts defect surfaces) ──
-    # ``plan_coverage_unit_round`` selects units — duplicate role/source/input
-    # variants of one surface consume ONE budget slot. Selected units then
-    # expand their remaining variants into actor-rebinding arms (multi-arm
-    # Experiment Bundle: one compile per unit, N execution arms). Fail-closed:
-    # any unit-planning failure falls back to the obligation-variant planner.
     _history_receipt_ids = (
         [_text(history_receipt.get("receipt_id"))]
         if (
@@ -1812,16 +1585,6 @@ def build_discovery_plan(
             )
             planning_authority = "obligation"
 
-    # ── P0-1: multi-arm Experiment Bundle derivation for selected units ──
-    # Each selected unit compiles ONCE (representative); the remaining role
-    # variants become execution arms by actor-rebinding the representative's
-    # compiled experiments. Fail-closed: an arm that cannot be derived (stale
-    # actor references, actor not in representative, cap exceeded) falls back
-    # to a normal independent compile — no variant is ever lost. The identity
-    # contract (every selected row references the compiled experiment
-    # registered under its obligation_id) is enforced inside
-    # ``derive_unit_execution_arms`` so the intent gate never sees a
-    # spurious ``compiled_experiment_mismatch``.
     arm_receipt: dict[str, Any] = {
         "schema_version": "qualibug.coverage-unit-arm-receipt.v1",
         "status": "NOT_APPLIED",
@@ -1878,11 +1641,6 @@ def build_discovery_plan(
         _learning_consumption_receipt.get("obligations_boosted"),
     )
 
-    # ── Binding-experience READ: reorder resolver candidates by verified
-    # prior success (execution-changing surface of the learning loop).
-    # Additive only: reorders an experiment's existing source-declared
-    # resolver list; never adds sources, never changes binding status,
-    # budgets, gates, or compile state.
     try:
         from .binding_experience_learning import apply_binding_experience_reorder
 
@@ -1900,7 +1658,6 @@ def build_discovery_plan(
             "authority": "resolver_priority_reorder_only_no_new_sources",
         }
 
-    # ── Coverage-Guided Reorder (within selected set only, no budget change) ──
     from .coverage_guided_scheduler import CoverageGuidedScheduler
 
     _reorder_receipt: dict[str, Any] = {"reordered": False}
@@ -1960,7 +1717,6 @@ def build_discovery_plan(
         consumed_budget=int(obligation_plan.get("selected_count") or 0),
         stop_condition=_text(obligation_plan.get("stop_condition")),
     )
-    # ── P0-3: Environment preflight ──
     _runtime_contract = dict(_dict(inputs.campaign_context.get("_runtime_contract")))
     _preflight_base_url = _text(_runtime_contract.get("approved_base_url"))
     preflight_receipt = run_environment_preflight(
@@ -1977,14 +1733,6 @@ def build_discovery_plan(
         experiments_by_obligation=by_obligation,
         behavior_ir=behavior_ir,
     )
-    # Fact lineage is produced in the mainline: invariants carry the exact
-    # fact identity at IR construction (rule.semantic_contract.fact_id) and
-    # obligations inherit it inside the obligation compiler. This attach is the
-    # authoritative verification pass — it rebuilds refs from the exact
-    # structural chain (now including the production channel), records
-    # first-loss diagnostics for every accepted fact, and never widens
-    # lineage. It runs after selection so it cannot alter decisions; the
-    # production-side refs are what compile/selection/execution see.
     from .fact_first_loss_ledger import attach_fact_refs_to_planning_artifacts
 
     _fact_exp_ledger = _dict(asset.get("fact_experimentability_ledger"))
@@ -1995,12 +1743,6 @@ def build_discovery_plan(
         behavior_ir=behavior_ir,
         knowledge_asset=asset,
     )
-    # ── Unified LLM comprehension authority (observation layer) ──
-    # The three comprehension channels (semantic-link binding, semantic rule
-    # recall, mainline reasoner) each emit their own receipt. Fold them into one
-    # ``qualibug.llm-comprehension-authority.v1`` record so the whole
-    # comprehension funnel is observable in one place. Pure aggregation over
-    # already-produced receipts; never calls the LLM or mutates the asset.
     comprehension_authority_receipt: dict[str, Any] = {
         "schema_version": "qualibug.llm-comprehension-authority.v1",
         "status": "NOT_BUILT",
@@ -2079,13 +1821,9 @@ def build_discovery_plan(
             "fact_experimentability_ledger_fingerprint": _text(
                 _fact_exp_ledger.get("ledger_fingerprint")
             ),
-            # Public reference-only ledger for post-run first-loss accounting.
-            # Not a second Business World Model; items cite Canonical fact_refs.
             "fact_experimentability_ledger": dict(_fact_exp_ledger),
             "fact_ref_attach_receipt": _fact_ref_attach_receipt,
             "knowledge_asset_id": _text(asset.get("asset_id")),
-            # Immutable in-memory inputs for observation-driven round 2. These
-            # private keys are intentionally excluded from product artifacts.
             "_knowledge_asset": asset,
             "_documented_operations": operations,
             "_runtime_actors": runtime_actors,
@@ -2094,4 +1832,3 @@ def build_discovery_plan(
             "_planning_policy_identity": policy_identity,
         },
     )
-
