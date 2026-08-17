@@ -7,8 +7,11 @@ bounded Graph Context pack for the Reasoner.
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
+from contextvars import ContextVar
+from functools import wraps
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from .cognitive_memory_graph import CognitiveMemoryGraph, GraphContextComposer
 
@@ -232,3 +235,148 @@ def build_reasoner_graph_context(
             },
             "error": f"{type(exc).__name__}: {str(exc)[:200]}",
         }
+
+
+_REASONER_GRAPH_SCOPE: ContextVar[dict[str, Any]] = ContextVar(
+    "qualibug_reasoner_graph_scope",
+    default={},
+)
+_STAGE_INSTALL_MARKER = "_qualibug_reasoner_graph_context_bridge_installed"
+_STAGE_ORIGINAL_MARKER = "_qualibug_reasoner_graph_context_original_collect"
+
+
+@contextmanager
+def reasoner_graph_context_scope(
+    *,
+    project_id: str,
+    environment_id: str,
+    root: str | Path,
+    run_id: str = "",
+    policy_version: str = "",
+) -> Iterator[None]:
+    """Bind per-run graph identity without process-global environment mutation."""
+
+    token = _REASONER_GRAPH_SCOPE.set(
+        {
+            "project_id": _text(project_id),
+            "environment_id": _text(environment_id) or "test",
+            "root": Path(root),
+            "run_id": _text(run_id),
+            "policy_version": _text(policy_version),
+        }
+    )
+    try:
+        yield
+    finally:
+        _REASONER_GRAPH_SCOPE.reset(token)
+
+
+def _persisted_asset_graph_bridge(
+    *,
+    reader_output: dict[str, Any],
+    project_id: str,
+    root: str | Path,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Attach Graph Context from the persisted enterprise knowledge asset only."""
+
+    from .behavior_ir import build_behavior_ir_from_knowledge_asset
+    from .enterprise_knowledge_center import load_enterprise_business_knowledge_asset
+
+    scope = dict(_REASONER_GRAPH_SCOPE.get() or {})
+    effective_project = _text(project_id) or _text(scope.get("project_id"))
+    effective_root = Path(root) if root is not None else scope.get("root")
+    environment_id = _text(scope.get("environment_id")) or "test"
+    if not effective_project or effective_root is None:
+        return reader_output, {
+            "status": "SKIPPED",
+            "reason": "project_or_root_missing",
+        }
+
+    asset = load_enterprise_business_knowledge_asset(effective_project, Path(effective_root))
+    if not isinstance(asset, dict) or not asset:
+        return reader_output, {
+            "status": "SKIPPED",
+            "reason": "persisted_enterprise_knowledge_asset_missing",
+        }
+
+    behavior_ir = build_behavior_ir_from_knowledge_asset(
+        asset,
+        project_id=effective_project,
+    )
+    bridge = build_reasoner_graph_context(
+        behavior_ir=behavior_ir,
+        project_id=effective_project,
+        environment_id=environment_id,
+        root=Path(effective_root),
+        run_id=_text(scope.get("run_id")),
+        policy_version=_text(scope.get("policy_version")),
+        source_ref=_text(asset.get("asset_id")) or "enterprise_knowledge_asset",
+    )
+    enriched = dict(reader_output)
+    pack = bridge.get("pack")
+    if isinstance(pack, dict) and pack:
+        enriched["_graph_evidence_pack"] = pack
+    enriched["_graph_memory_stats"] = dict(bridge.get("stats") or {})
+    enriched["_graph_context_bridge"] = {
+        "status": bridge.get("status"),
+        "source": "persisted_enterprise_knowledge_asset",
+        "input_counts": dict(bridge.get("input_counts") or {}),
+        "error": _text(bridge.get("error")),
+    }
+    return enriched, dict(enriched["_graph_context_bridge"])
+
+
+def install_reasoner_graph_context_bridge() -> None:
+    """Install one input-hydration wrapper before Stage owns mode semantics.
+
+    The wrapper never changes ``_stage_reason_all_v2``. It only satisfies the
+    pre-existing ``reader_output['_graph_evidence_pack']`` contract when the
+    caller did not already provide one.
+    """
+
+    from . import stage_reason_all_v2 as stage
+
+    if getattr(stage, _STAGE_INSTALL_MARKER, False):
+        return
+    original = getattr(stage, _STAGE_ORIGINAL_MARKER, None)
+    if original is None:
+        original = stage.collect_reasoner_hypotheses
+        setattr(stage, _STAGE_ORIGINAL_MARKER, original)
+
+    @wraps(original)
+    def _collect_with_persisted_graph_context(
+        prd_text: str,
+        api_spec: str,
+        *,
+        reader_output: dict | None = None,
+        prior_findings: list | None = None,
+        project_id: str = "",
+        root: Path | None = None,
+    ) -> tuple[list[dict], dict]:
+        world = dict(reader_output) if isinstance(reader_output, dict) else {}
+        if not isinstance(world.get("_graph_evidence_pack"), dict):
+            try:
+                world, _ = _persisted_asset_graph_bridge(
+                    reader_output=world,
+                    project_id=project_id,
+                    root=root,
+                )
+            except Exception as exc:
+                # Fail-soft is part of the existing Stage contract: Graph absence
+                # keeps raw PRD/API as fallback authority rather than aborting Run.
+                world["_graph_context_bridge"] = {
+                    "status": "FAILED",
+                    "source": "persisted_enterprise_knowledge_asset",
+                    "error": f"{type(exc).__name__}: {str(exc)[:200]}",
+                }
+        return original(
+            prd_text,
+            api_spec,
+            reader_output=world,
+            prior_findings=prior_findings,
+            project_id=project_id,
+            root=root,
+        )
+
+    stage.collect_reasoner_hypotheses = _collect_with_persisted_graph_context
+    setattr(stage, _STAGE_INSTALL_MARKER, True)
