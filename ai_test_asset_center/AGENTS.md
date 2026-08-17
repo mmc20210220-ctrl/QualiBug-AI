@@ -281,7 +281,21 @@ per-frame ledger instead of being silently discarded.
 Concept & grounding contract (P0-D): `ground_semantic_frames` runs in
 `composition.py` right after context resolution (full and incremental paths).
 It ACTIVATES the P0-A Behavior IR channel: grounded frames now contribute
-owns/permits/denies relations. Grounded refs are emitted in IR-resolvable
+owns/permits/denies relations. Explicit Chinese anchored time windows also
+enter this same channel: only a source-backed fixed elapsed duration
+(millisecond/second/minute/hour, including Chinese numerals) plus exactly one
+grounded operation may produce a Behavior IR temporal invariant. Calendar-
+sensitive day/week/month/year/working-day windows remain visibly unresolved
+(`TEMPORAL_CALENDAR_UNRESOLVED`) until the source declares calendar/timezone
+semantics; multiple operation candidates never use a first-item choice. The
+invariant carries the exact constraint evidence, canonical operation id,
+`frame_family_evidence.frame_type=TIME_WINDOW_CONSTRAINT`, and compiles to a
+temporal obligation requiring the `temporal_window` observer. Its source
+anchor is still language-level evidence (`anchor_grounding_status=UNRESOLVED`):
+the action-deadline experiment protocol must remain
+`BLOCKED_MISSING_BINDING` until a distinct anchor operation and completion
+observer are grounded, and must never reinterpret the window as generic
+eventual consistency. Grounded refs are emitted in IR-resolvable
 forms — actor role names, `METHOD:path` operation forms (interface ids
 converted), declared entity labels/aliases (the IR builder keeps ASCII entity
 names only; Chinese mentions resolve only through the operator-declared
@@ -813,7 +827,10 @@ Evolution Contract):
   treatment. Temporal windows must come from source-grounded
   assertion/property evidence; runtime convergence evidence must come from
   actual trigger/final-observed timeline events and feed assertion DSL
-  `converged`/`within_window`.
+  `converged`/`within_window`. A Chinese source action-deadline window is not
+  an eventual-consistency contract: without exact anchor-operation and
+  completion-observer bindings it remains visibly blocked, even when its
+  constrained action operation and numeric window are grounded.
 - Cleanup requirement detection must compare all non-server-managed business
   fields on the same observed entity, not only fields echoed by the write
   response. A write response that returns only an identity still requires

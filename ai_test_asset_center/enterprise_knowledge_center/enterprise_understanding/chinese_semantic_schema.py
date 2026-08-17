@@ -114,6 +114,10 @@ REASON_CODES = frozenset(
         "TECHNICAL_GROUNDING_PENDING",  # grounding engine is P0-D; P0-A never claims grounding
         "TERM_ALIAS_NOT_A_FRAME",       # term definitions are not business constraints
         "INVARIANT_PROJECTION_DEFERRED",  # structured-condition invariants land with grounding
+        "TEMPORAL_CALENDAR_UNRESOLVED",  # source did not declare calendar/timezone semantics
+        "TEMPORAL_DURATION_UNREPRESENTABLE",  # fixed duration cannot be losslessly represented in ms
+        "TEMPORAL_WINDOW_UNCOMPILED",  # typed constraint has no executable fixed window
+        "TEMPORAL_RELATION_UNSUPPORTED",  # temporal relation is outside implemented protocol
     }
 )
 
@@ -333,6 +337,8 @@ _CONSTRAINT_PROVENANCE_KEYS = frozenset(
         "source_id",
         "source_refs",
         "source_span",
+        "window_resolution_reason",
+        "window_resolution_status",
     }
 )
 

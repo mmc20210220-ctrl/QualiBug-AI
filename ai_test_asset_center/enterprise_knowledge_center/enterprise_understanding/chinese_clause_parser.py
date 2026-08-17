@@ -33,6 +33,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from .chinese_context_envelope import envelope_from_asset
@@ -68,6 +69,9 @@ _TIME_UNIT = (
     r"毫秒|分钟|小时|年|天|日|分|秒)"
 )
 _TIME_DURATION = rf"{_TIME_NUMBER}\s*{_TIME_UNIT}"
+_TIME_DURATION_PARTS = re.compile(
+    rf"^(?P<number>{_TIME_NUMBER})\s*(?P<unit>{_TIME_UNIT})$"
+)
 _TIME_ANCHOR = r"[^，,；;。:：]{1,48}?(?:之前|以前|之后|以后|前|后)"
 _TIME_WINDOW_WITH_HEAD = re.compile(
     rf"(?:在|当|如果|若|一旦)\s*"
@@ -150,6 +154,87 @@ def _clean_sentence(text: str) -> str:
     return _TRAILING_PUNCT.sub("", _norm(text))
 
 
+_CHINESE_TIME_DIGITS = {
+    "零": 0,
+    "〇": 0,
+    "一": 1,
+    "二": 2,
+    "两": 2,
+    "三": 3,
+    "四": 4,
+    "五": 5,
+    "六": 6,
+    "七": 7,
+    "八": 8,
+    "九": 9,
+}
+_CHINESE_TIME_SMALL_UNITS = {"十": 10, "百": 100, "千": 1_000}
+
+
+def _chinese_time_number(value: str) -> Decimal | None:
+    """Normalize a generic Chinese numeral without business assumptions."""
+    raw = _norm(value)
+    if not raw:
+        return None
+    if raw == "半":
+        return Decimal("0.5")
+    try:
+        return Decimal(raw)
+    except InvalidOperation:
+        pass
+    if all(char in _CHINESE_TIME_DIGITS for char in raw):
+        return Decimal(
+            "".join(str(_CHINESE_TIME_DIGITS[char]) for char in raw)
+        )
+
+    total = 0
+    section = 0
+    current: int | None = None
+    for char in raw:
+        if char in _CHINESE_TIME_DIGITS:
+            current = _CHINESE_TIME_DIGITS[char]
+            continue
+        if char in _CHINESE_TIME_SMALL_UNITS:
+            section += (1 if current is None else current) * _CHINESE_TIME_SMALL_UNITS[char]
+            current = None
+            continue
+        if char == "万":
+            total += (section + (0 if current is None else current)) * 10_000
+            section = 0
+            current = None
+            continue
+        return None
+    return Decimal(total + section + (0 if current is None else current))
+
+
+def _fixed_duration_window_ms(duration: str) -> int | None:
+    """Return elapsed milliseconds only for source-declared fixed units.
+
+    Calendar-sensitive units (day/week/month/year, including working days)
+    deliberately remain unresolved because converting them requires a declared
+    calendar and timezone. That gap is projected visibly downstream.
+    """
+    match = _TIME_DURATION_PARTS.fullmatch(_norm(duration))
+    if not match:
+        return None
+    number = _chinese_time_number(match.group("number"))
+    multiplier = {
+        "毫秒": 1,
+        "秒": 1_000,
+        "分": 60_000,
+        "分钟": 60_000,
+        "小时": 3_600_000,
+        "个小时": 3_600_000,
+    }.get(match.group("unit"))
+    if number is None or multiplier is None or number <= 0:
+        return None
+    milliseconds = number * multiplier
+    integral = milliseconds.to_integral_value()
+    if milliseconds != integral:
+        return None
+    return int(integral)
+
+
 def extract_explicit_time_constraints(text: str) -> list[dict[str, Any]]:
     """Extract only explicit anchored duration windows from Chinese grammar.
 
@@ -176,19 +261,36 @@ def extract_explicit_time_constraints(text: str) -> list[dict[str, Any]]:
             if not raw or not anchor or not duration:
                 continue
             start, end = match.span("scope")
+            row = {
+                "raw": raw,
+                "anchor": anchor,
+                "relation": "WITHIN",
+                "duration": duration,
+                "source_backed": True,
+                "resolution_status": "RESOLVED",
+            }
+            window_ms = _fixed_duration_window_ms(duration)
+            if window_ms is not None:
+                row["window_ms"] = window_ms
+            else:
+                duration_match = _TIME_DURATION_PARTS.fullmatch(duration)
+                fixed_unit = (
+                    duration_match is not None
+                    and duration_match.group("unit")
+                    in {"毫秒", "秒", "分", "分钟", "小时", "个小时"}
+                )
+                row["window_resolution_status"] = "UNRESOLVED"
+                row["window_resolution_reason"] = (
+                    "TEMPORAL_DURATION_UNREPRESENTABLE"
+                    if fixed_unit
+                    else "TEMPORAL_CALENDAR_UNRESOLVED"
+                )
             candidates.append(
                 (
                     priority,
                     start,
                     end,
-                    {
-                        "raw": raw,
-                        "anchor": anchor,
-                        "relation": "WITHIN",
-                        "duration": duration,
-                        "source_backed": True,
-                        "resolution_status": "RESOLVED",
-                    },
+                    row,
                 )
             )
 

@@ -132,6 +132,8 @@ def test_explicit_time_windows_are_typed_without_business_vocabulary() -> None:
             "anchor": "触发后",
             "relation": "WITHIN",
             "duration": "2个工作日",
+            "window_resolution_status": "UNRESOLVED",
+            "window_resolution_reason": "TEMPORAL_CALENDAR_UNRESOLVED",
             "source_backed": True,
             "resolution_status": "RESOLVED",
         }
@@ -144,10 +146,15 @@ def test_explicit_time_windows_are_typed_without_business_vocabulary() -> None:
             "anchor": "事件结束后",
             "relation": "WITHIN",
             "duration": "二十四小时",
+            "window_ms": 86_400_000,
             "source_backed": True,
             "resolution_status": "RESOLVED",
         }
     ]
+
+    fixed_window = _tree("提交后1.5小时内必须完成处理。")
+    assert fixed_window["time_constraints"][0]["window_ms"] == 5_400_000
+    assert "window_ms" not in anchored["time_constraints"][0]
 
     combined = _tree("如果条件成立，并且提交之后24小时以内，必须处理。")
     assert [row["raw"] for row in combined["conditions"]] == [

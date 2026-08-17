@@ -228,6 +228,8 @@ def test_time_constraint_provenance_never_changes_semantic_signature() -> None:
             "anchor": "提交后",
             "relation": "WITHIN",
             "duration": "24小时",
+            "window_resolution_status": "UNRESOLVED",
+            "window_resolution_reason": "TEMPORAL_WINDOW_UNCOMPILED",
             "source_backed": True,
             "origin": "first_source",
             "evidence": [{"locator": "a.docx#block=1"}],

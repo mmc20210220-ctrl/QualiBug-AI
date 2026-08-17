@@ -36,6 +36,9 @@ from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding.c
 from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding.chinese_semantic_ledger_adapter import (
     project_business_facts_to_semantic_frames,
 )
+from ai_test_asset_center.obligation_compiler import (
+    compile_obligations_from_behavior_ir,
+)
 
 
 def _text(value: object) -> str:
@@ -266,3 +269,70 @@ def test_composition_root_wires_grounding() -> None:
     )
     assert callable(module.ground_semantic_frames)
     assert callable(build_enterprise_business_knowledge_asset)
+
+
+def test_grounded_chinese_time_window_reaches_temporal_obligation() -> None:
+    h1 = _heading("h1", "订单管理", 1)
+    statement = "提交后24小时内，买家可以查询自己的订单。"
+    p1 = _paragraph("p1", statement, 2, "h1")
+    asset = _pipeline_asset(
+        facts=[
+            _fact(
+                fact_id="f:timed",
+                statement=statement,
+                block_id="p1",
+                ownership="自己的订单",
+            )
+        ],
+        blocks=[h1, p1],
+        permission_rows=[
+            {
+                "permission_id": "p1",
+                "role": "买家",
+                "resource": "/api/orders",
+                "actions": ["get"],
+                "decision": "allow",
+                "scope": "own",
+            }
+        ],
+        interfaces=[
+            {
+                "interface_id": "api:GET:/api/orders",
+                "method": "GET",
+                "path": "/api/orders",
+                "summary": "查询订单列表",
+                "description": "",
+                "entity_refs": ["orders"],
+            }
+        ],
+        entities=[{"name": "orders", "kind": "business_object"}],
+    )
+    frame = asset["chinese_semantic_frame_ledger"]["items"][0]
+    assert frame["technical_grounding"]["status"] == "GROUNDED"
+    assert frame["time_constraints"][0]["window_ms"] == 86_400_000
+
+    ir = build_behavior_ir_from_knowledge_asset(asset)
+    assert validate_behavior_ir(ir) == []
+    temporal_invariants = [
+        row
+        for row in ir["invariants"]
+        if row.get("frame_family_evidence", {}).get("frame_type")
+        == "TIME_WINDOW_CONSTRAINT"
+    ]
+    assert len(temporal_invariants) == 1
+    invariant = temporal_invariants[0]
+    assert invariant["expression"]["window_ms"] == 86_400_000
+    assert len(invariant["operation_refs"]) == 1
+    assert any(
+        ref.get("kind") == "chinese_semantic_time_constraint"
+        for ref in invariant["source_refs"]
+    )
+
+    compiled = compile_obligations_from_behavior_ir(ir)
+    temporal = [
+        row for row in compiled["obligations"]
+        if row.get("risk_family") == "temporal"
+    ]
+    assert temporal
+    assert temporal[0]["property"]["expression"]["window_ms"] == 86_400_000
+    assert "temporal_window" in temporal[0]["required_observers"]

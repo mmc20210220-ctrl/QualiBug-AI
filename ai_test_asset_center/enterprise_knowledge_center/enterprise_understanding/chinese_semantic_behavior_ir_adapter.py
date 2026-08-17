@@ -1,15 +1,15 @@
-"""Chinese Semantic Frame → Behavior IR projection adapter (SPEC P0-A).
+"""Chinese Semantic Frame → Behavior IR projection adapter.
 
 P0-A contract:
 - Only GROUNDED frame slots may produce contributions. UNKNOWN / OMITTED /
   NOT_MENTIONED slots never emit relations — they are recorded as skip reasons
   in the projection receipt (``qualibug.behavior-ir-semantic-frame-projection.v1``
   content is carried inside the typed receipt).
-- Supported contribution kinds in P0-A: ``owns`` (structured ownership relation
-  with grounded actor + entity), ``permits`` / ``denies`` (PERMISSION_RULE with
-  grounded actor + operation). State-transition and invariant contributions are
-  deliberately deferred until the grounding engine (P0-D) resolves state and
-  condition slots; the skip is receipted, never silent.
+- Supported relation contributions are ``owns`` (structured ownership relation
+  with grounded actor + entity) and ``permits`` / ``denies`` (PERMISSION_RULE
+  with grounded actor + operation). Source-backed fixed-duration time windows
+  additionally become temporal invariants only when exactly one real operation
+  is grounded. Calendar-sensitive windows stay visibly unresolved.
 - Endpoints must resolve against the Behavior IR node index; a contribution
   whose endpoint names nothing is skipped with GROUNDING_EVIDENCE_INSUFFICIENT
   (a dangling relation would look present while being inert).
@@ -18,9 +18,9 @@ P0-A contract:
   legacy relations are never overwritten. Provenance rides in ``source_refs``
   (kind=chinese_semantic_frame, frame_id, quote) — relation field sets and the
   behavior-ir.v2 schema are untouched.
-- In P0-A production the frames are ungrounded (TECHNICAL_GROUNDING_PENDING),
-  so the projection adds nothing; the capability is proven by synthetic
-  grounded frames in tests and becomes active when grounding lands.
+- Ungrounded frames add nothing and remain visibly
+  TECHNICAL_GROUNDING_PENDING; grounded contributions use the same production
+  path covered by the integration tests.
 """
 
 from __future__ import annotations
@@ -29,7 +29,6 @@ import hashlib
 import json
 from typing import Any, Callable, Iterable
 
-from .chinese_semantic_ledger_adapter import frames_from_asset
 from .chinese_semantic_receipts import build_receipt
 from .chinese_semantic_schema import (
     validate_semantic_frame,
@@ -38,8 +37,6 @@ from .chinese_semantic_schema import (
 CHINESE_SEMANTIC_BEHAVIOR_IR_PROJECTION_SCHEMA = (
     "qualibug.behavior-ir-semantic-frame-projection.v1"
 )
-
-_CONTRIBUTION_KINDS = frozenset({"owns", "permits", "denies"})
 
 _PERMISSION_MODALITY_TYPES = frozenset({"MAY", "MUST", "ONLY_IF"})
 
@@ -96,6 +93,91 @@ def _default_relation_builder(contribution: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _default_invariant_builder(contribution: dict[str, Any]) -> dict[str, Any]:
+    """Standalone deterministic temporal invariant builder."""
+    expression = _dict(contribution.get("expression"))
+    operation_refs = sorted(
+        {_text(ref) for ref in _list(contribution.get("operation_refs")) if _text(ref)}
+    )
+    identity = {
+        "operation_refs": operation_refs,
+        "operator": _text(expression.get("operator")),
+        "anchor": _text(expression.get("anchor")),
+        "duration": _text(expression.get("duration")),
+        "window_ms": expression.get("window_ms"),
+    }
+    node_id = "csf_inv:" + hashlib.sha256(
+        _canonical_json(identity).encode("utf-8")
+    ).hexdigest()[:20]
+    return {
+        "id": node_id,
+        "description": _text(contribution.get("description")),
+        "expression": dict(expression),
+        "operation_refs": operation_refs,
+        "frame_family_evidence": dict(
+            _dict(contribution.get("frame_family_evidence"))
+        ),
+        "source_refs": [dict(row) for row in _list(contribution.get("source_refs"))],
+        "confidence": 0.8,
+        "derivation": "schema-derived",
+        "status": "accepted",
+    }
+
+
+def _constraint_source_refs(
+    frame: dict[str, Any],
+    constraint: dict[str, Any],
+    *,
+    constraint_index: int,
+) -> list[dict[str, Any]]:
+    """Project exact constraint evidence without inventing source coordinates."""
+    frame_id = _text(frame.get("frame_id"))
+    refs: list[dict[str, Any]] = []
+    for evidence in _list(constraint.get("evidence")):
+        if not isinstance(evidence, dict):
+            continue
+        refs.append(
+            {
+                "kind": "chinese_semantic_time_constraint",
+                "frame_id": frame_id,
+                "constraint_index": constraint_index,
+                "quote": _text(constraint.get("raw")),
+                **{
+                    key: evidence[key]
+                    for key in (
+                        "source_id",
+                        "locator",
+                        "document_block_id",
+                        "block_type",
+                        "origin",
+                    )
+                    if evidence.get(key) not in (None, "")
+                },
+            }
+        )
+    if not refs:
+        source_span = _dict(frame.get("source_span"))
+        refs.append(
+            {
+                "kind": "chinese_semantic_time_constraint",
+                "frame_id": frame_id,
+                "constraint_index": constraint_index,
+                "quote": _text(constraint.get("raw")),
+                **{
+                    key: source_span[key]
+                    for key in ("source_id", "locator", "document_block_id")
+                    if source_span.get(key) not in (None, "")
+                },
+                **(
+                    {"origin": _text(constraint.get("origin"))}
+                    if _text(constraint.get("origin"))
+                    else {}
+                ),
+            }
+        )
+    return refs
+
+
 def _first_grounded(slot: dict[str, Any], field: str) -> str:
     values = [
         _text(row) for row in _list(slot.get(field)) if _text(row)
@@ -145,6 +227,7 @@ def project_semantic_frames_to_behavior_ir(
                 "chinese_semantic_frame_invalid:" + ",".join(sorted(errors))
             )
         frames_considered += 1
+        frame_skip_start = len(skips)
         frame_id = _text(frame.get("frame_id"))
         frame_type = _text(frame.get("frame_type"))
         actor = _dict(frame.get("actor"))
@@ -169,7 +252,14 @@ def project_semantic_frames_to_behavior_ir(
         )
         actor_ref = _first_grounded(actor, "grounded_actor_refs")
         entity_ref = _first_grounded(obj, "grounded_entity_refs")
-        operation_ref = _first_grounded(action, "grounded_operation_refs")
+        grounded_operation_refs = list(
+            dict.fromkeys(
+                _text(ref)
+                for ref in _list(action.get("grounded_operation_refs"))
+                if _text(ref)
+            )
+        )
+        operation_ref = grounded_operation_refs[0] if grounded_operation_refs else ""
 
         emitted = False
 
@@ -233,6 +323,14 @@ def project_semantic_frames_to_behavior_ir(
                             "reason_code": "OMITTED_ACTOR_UNRESOLVED",
                         }
                     )
+                elif len(grounded_operation_refs) > 1:
+                    _count_reason("MULTIPLE_OPERATION_CANDIDATES")
+                    skips.append(
+                        {
+                            "frame_id": frame_id,
+                            "reason_code": "MULTIPLE_OPERATION_CANDIDATES",
+                        }
+                    )
                 elif not operation_ref:
                     _count_reason("ACTION_CONCEPT_UNRESOLVED")
                     skips.append(
@@ -267,6 +365,125 @@ def project_semantic_frames_to_behavior_ir(
                     )
                     emitted = True
 
+        # ── temporal invariants: explicit fixed-duration window + one exact
+        # grounded operation. Calendar-sensitive units require source-declared
+        # timezone/calendar semantics and therefore remain a visible skip.
+        for constraint_index, constraint_value in enumerate(
+            _list(frame.get("time_constraints"))
+        ):
+            if not isinstance(constraint_value, dict):
+                continue
+            constraint = dict(constraint_value)
+            if constraint.get("source_backed") is not True:
+                _count_reason("GROUNDING_EVIDENCE_INSUFFICIENT")
+                skips.append(
+                    {
+                        "frame_id": frame_id,
+                        "constraint_index": constraint_index,
+                        "reason_code": "GROUNDING_EVIDENCE_INSUFFICIENT",
+                    }
+                )
+                continue
+            if len(grounded_operation_refs) > 1:
+                _count_reason("MULTIPLE_OPERATION_CANDIDATES")
+                skips.append(
+                    {
+                        "frame_id": frame_id,
+                        "constraint_index": constraint_index,
+                        "reason_code": "MULTIPLE_OPERATION_CANDIDATES",
+                    }
+                )
+                continue
+            if not operation_ref:
+                _count_reason("ACTION_CONCEPT_UNRESOLVED")
+                skips.append(
+                    {
+                        "frame_id": frame_id,
+                        "constraint_index": constraint_index,
+                        "reason_code": "ACTION_CONCEPT_UNRESOLVED",
+                    }
+                )
+                continue
+            if not _ref_resolves(operation_ref, "operation", ref_resolver):
+                _count_reason("GROUNDING_EVIDENCE_INSUFFICIENT")
+                skips.append(
+                    {
+                        "frame_id": frame_id,
+                        "constraint_index": constraint_index,
+                        "reason_code": "GROUNDING_EVIDENCE_INSUFFICIENT",
+                    }
+                )
+                continue
+            window_ms = constraint.get("window_ms")
+            if (
+                isinstance(window_ms, bool)
+                or not isinstance(window_ms, (int, float))
+                or window_ms <= 0
+                or int(window_ms) != window_ms
+            ):
+                reason_code = _text(
+                    constraint.get("window_resolution_reason")
+                    or "TEMPORAL_WINDOW_UNCOMPILED"
+                )
+                _count_reason(reason_code)
+                skips.append(
+                    {
+                        "frame_id": frame_id,
+                        "constraint_index": constraint_index,
+                        "reason_code": reason_code,
+                    }
+                )
+                continue
+            relation = _text(constraint.get("relation")).upper()
+            if relation != "WITHIN":
+                _count_reason("TEMPORAL_RELATION_UNSUPPORTED")
+                skips.append(
+                    {
+                        "frame_id": frame_id,
+                        "constraint_index": constraint_index,
+                        "reason_code": "TEMPORAL_RELATION_UNSUPPORTED",
+                    }
+                )
+                continue
+            expression = {
+                "kind": "temporal",
+                "operator": "within",
+                "window_ms": int(window_ms),
+                "anchor": _text(constraint.get("anchor")),
+                "duration": _text(constraint.get("duration")),
+                "raw": _text(constraint.get("raw")),
+                # The constrained frame action is grounded, but the source
+                # anchor (e.g. "提交后") is still language-level evidence. A
+                # protocol must not reinterpret this as eventual consistency
+                # until the anchor operation and completion observation bind.
+                "temporal_semantics": "action_deadline",
+                "anchor_grounding_status": "UNRESOLVED",
+            }
+            contributions.append(
+                {
+                    "contribution_kind": "INVARIANT",
+                    "description": _text(constraint.get("raw")),
+                    "expression": expression,
+                    "operation_refs": [operation_ref],
+                    "frame_family_evidence": {
+                        "grounded": True,
+                        "frame_type": "TIME_WINDOW_CONSTRAINT",
+                        "parent_frame_type": frame_type,
+                        "frame_id": frame_id,
+                    },
+                    "frame_id": frame_id,
+                    "source_refs": [
+                        *source_refs,
+                        *_constraint_source_refs(
+                            frame,
+                            constraint,
+                            constraint_index=constraint_index,
+                        ),
+                    ],
+                }
+            )
+            emitted = True
+
         # ── deferred families (P0-D): state transitions and structured
         # invariants need grounded state/condition slots before they can emit
         # relations; the deferral is receipted, never silent.
@@ -286,7 +503,9 @@ def project_semantic_frames_to_behavior_ir(
             )
             continue
 
-        if not emitted:
+        if emitted:
+            frames_with_contributions += 1
+        elif len(skips) == frame_skip_start:
             # Ungrounded frames are the P0-A norm; record the skip, never a guess.
             _count_reason("TECHNICAL_GROUNDING_PENDING")
             skips.append(
@@ -295,8 +514,6 @@ def project_semantic_frames_to_behavior_ir(
                     "reason_code": "TECHNICAL_GROUNDING_PENDING",
                 }
             )
-        else:
-            frames_with_contributions += 1
 
     receipt = build_receipt(
         receipt_kind="BEHAVIOR_IR_PROJECTION",
@@ -306,6 +523,12 @@ def project_semantic_frames_to_behavior_ir(
             "frames_considered": frames_considered,
             "frames_with_contributions": frames_with_contributions,
             "contribution_count": len(contributions),
+            "relation_contribution_count": sum(
+                row.get("contribution_kind") == "RELATION" for row in contributions
+            ),
+            "invariant_contribution_count": sum(
+                row.get("contribution_kind") == "INVARIANT" for row in contributions
+            ),
             "skip_count": len(skips),
             "reason_code_counts": dict(sorted(reason_counts.items())),
         },
@@ -324,6 +547,7 @@ def apply_semantic_frames_to_behavior_ir(
     frames: Iterable[dict[str, Any]],
     *,
     relation_builder: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+    invariant_builder: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     ref_resolver: Callable[[str, str], bool] | None = None,
 ) -> dict[str, Any]:
     """Merge frame contributions into a Behavior IR model (dedup by node id).
@@ -334,23 +558,66 @@ def apply_semantic_frames_to_behavior_ir(
     """
     result = project_semantic_frames_to_behavior_ir(frames, ref_resolver=ref_resolver)
     relations = [row for row in _list(model.get("relations")) if isinstance(row, dict)]
-    existing_ids = {_text(row.get("id")) for row in relations if _text(row.get("id"))}
-    builder = relation_builder or _default_relation_builder
+    invariants = [row for row in _list(model.get("invariants")) if isinstance(row, dict)]
+    relation_ids = {_text(row.get("id")) for row in relations if _text(row.get("id"))}
+    invariant_by_id = {
+        _text(row.get("id")): row for row in invariants if _text(row.get("id"))
+    }
+    relation_node_builder = relation_builder or _default_relation_builder
+    invariant_node_builder = invariant_builder or _default_invariant_builder
     added = 0
     merged = 0
+    relation_added = 0
+    invariant_added = 0
     for contribution in result["contributions"]:
-        node = builder(contribution)
+        contribution_kind = _text(contribution.get("contribution_kind"))
+        if contribution_kind == "RELATION":
+            node = relation_node_builder(contribution)
+            node_id = _text(node.get("id"))
+            if not node_id or node_id in relation_ids:
+                merged += 1
+                continue
+            relations.append(node)
+            relation_ids.add(node_id)
+            relation_added += 1
+            added += 1
+            continue
+        if contribution_kind != "INVARIANT":
+            raise ValueError(
+                f"chinese_semantic_frame_contribution_kind_invalid:{contribution_kind}"
+            )
+        node = invariant_node_builder(contribution)
         node_id = _text(node.get("id"))
-        if not node_id or node_id in existing_ids:
+        if not node_id:
             merged += 1
             continue
-        relations.append(node)
-        existing_ids.add(node_id)
+        existing = invariant_by_id.get(node_id)
+        if existing is not None:
+            existing_refs = {
+                _canonical_json(ref)
+                for ref in _list(existing.get("source_refs"))
+                if isinstance(ref, dict)
+            }
+            for source_ref in _list(node.get("source_refs")):
+                if not isinstance(source_ref, dict):
+                    continue
+                identity = _canonical_json(source_ref)
+                if identity not in existing_refs:
+                    existing.setdefault("source_refs", []).append(dict(source_ref))
+                    existing_refs.add(identity)
+            merged += 1
+            continue
+        invariants.append(node)
+        invariant_by_id[node_id] = node
+        invariant_added += 1
         added += 1
     model["relations"] = relations
+    model["invariants"] = invariants
     receipt = dict(result["receipt"])
     receipt["payload"] = dict(receipt["payload"])
     receipt["payload"]["added_count"] = added
     receipt["payload"]["deduped_count"] = merged
+    receipt["payload"]["relation_added_count"] = relation_added
+    receipt["payload"]["invariant_added_count"] = invariant_added
     model["semantic_frame_projection_receipt"] = receipt
     return receipt

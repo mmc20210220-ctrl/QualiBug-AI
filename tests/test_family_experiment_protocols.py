@@ -3575,6 +3575,37 @@ def test_temporal_obligation_compiles_temporal_write_protocol() -> None:
     assert experiment["assertions"][0]["window_ms"] == 1000
 
 
+def test_source_action_deadline_blocks_without_anchor_and_completion_binding() -> None:
+    obligation = _idempotency_obligation()
+    obligation["obligation_id"] = "obl-temporal-source-deadline"
+    obligation["risk_family"] = "temporal"
+    obligation["property"] = {
+        "operation_ref": "op-create",
+        "template": "invariant_temporal",
+        "invariant_ref": "inv-source-deadline",
+        "expression": {
+            "kind": "temporal",
+            "window_ms": 1000,
+            "temporal_semantics": "action_deadline",
+            "anchor": "提交后",
+            "anchor_grounding_status": "UNRESOLVED",
+        },
+    }
+
+    experiment = compile_experiment_for_obligation(
+        obligation,
+        behavior_ir=_idempotency_ir(),
+        environment_type="test",
+    )
+
+    assert experiment["compile_receipt"]["status"] == "BLOCKED"
+    assert experiment["compile_receipt"]["reason_code"] == "BLOCKED_MISSING_BINDING"
+    assert (
+        experiment["compile_receipt"]["detail"]
+        == "temporal_action_deadline_requires_anchor_and_completion_binding"
+    )
+
+
 def test_temporal_executor_feeds_window_evidence_to_contract_oracle(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,

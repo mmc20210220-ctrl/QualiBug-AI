@@ -2732,6 +2732,23 @@ def compile_family_protocol(
             }
         expression = _dict(property_spec.get("expression"))
         window_ms = expression.get("window_ms") or property_spec.get("window_ms")
+        if _text(expression.get("temporal_semantics")) == "action_deadline":
+            if not (
+                _text(expression.get("anchor_operation_ref"))
+                and _text(expression.get("completion_observer"))
+            ):
+                return {
+                    "status": "BLOCKED",
+                    "reason_code": "BLOCKED_MISSING_BINDING",
+                    "detail": (
+                        "temporal_action_deadline_requires_anchor_and_completion_binding"
+                    ),
+                }
+            return {
+                "status": "BLOCKED",
+                "reason_code": "BLOCKED_MISSING_ASSERTION",
+                "detail": "temporal_action_deadline_protocol_unimplemented",
+            }
         # Date-range temporal: expression has date_field/bounds but no window_ms
         date_field = _text(expression.get("date_field") or expression.get("field") or expression.get("start_date"))
         has_date_bounds = bool(

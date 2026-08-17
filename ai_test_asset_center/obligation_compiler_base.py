@@ -2004,6 +2004,7 @@ def compile_obligations_from_behavior_ir(
                 "idempotency": ["business_effect", "http_response"],
                 "concurrency": ["final_state", "barrier_timeline"],
                 "conservation": ["typed_assertion", "source_invariant", "entity_state"],
+                "temporal": ["typed_assertion", "source_invariant", "temporal_window"],
                 "validation": ["http_response"],
                 "state": ["entity_state", "typed_assertion", "source_invariant"],
             }

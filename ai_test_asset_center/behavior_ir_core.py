@@ -7010,6 +7010,44 @@ def build_behavior_ir_from_knowledge_asset(
                 status="accepted",
             )
 
+        def _frame_invariant_builder(contribution: dict[str, Any]) -> dict[str, Any]:
+            """Canonicalize grounded operation refs into Behavior IR identity."""
+            expression = dict(_dict(contribution.get("expression")))
+            operation_refs = sorted(
+                {
+                    _frame_index.get(_text(ref).lower(), _text(ref))
+                    for ref in _list(contribution.get("operation_refs"))
+                    if _text(ref)
+                }
+            )
+            return _fact_node(
+                node_id=_stable_id(
+                    "inv",
+                    "chinese_semantic_temporal",
+                    *operation_refs,
+                    _text(expression.get("operator")),
+                    _text(expression.get("anchor")),
+                    _text(expression.get("duration")),
+                    expression.get("window_ms"),
+                ),
+                typed_fields={
+                    "description": _text(contribution.get("description")),
+                    "expression": expression,
+                    "operation_refs": operation_refs,
+                    "frame_family_evidence": dict(
+                        _dict(contribution.get("frame_family_evidence"))
+                    ),
+                },
+                source_refs=[
+                    dict(row)
+                    for row in _list(contribution.get("source_refs"))
+                    if isinstance(row, dict)
+                ],
+                confidence=0.8,
+                derivation="schema-derived",
+                status="accepted",
+            )
+
         _frame_index = _node_reference_index(model)
         _frame_node_ids = {
             _text(row.get("id"))
@@ -7026,11 +7064,13 @@ def build_behavior_ir_from_knowledge_asset(
             model,
             _frames,
             relation_builder=_frame_relation_builder,
+            invariant_builder=_frame_invariant_builder,
             ref_resolver=_frame_ref_resolver,
         )
         model["relations"] = [
             normalize_relation(row) for row in _dedupe_nodes(model["relations"])
         ]
+        model["invariants"] = _dedupe_nodes(model["invariants"])
 
     model["model_id"] = _content_addressed_id(model)
     # ── P0-E legacy-semantic-fallback receipt ──

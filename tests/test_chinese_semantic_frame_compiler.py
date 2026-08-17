@@ -214,6 +214,7 @@ def test_list_child_inherits_typed_parent_time_window_with_source_lineage() -> N
             "anchor": "订单取消后",
             "relation": "WITHIN",
             "duration": "24小时",
+            "window_ms": 86_400_000,
             "source_backed": True,
             "resolution_status": "RESOLVED",
             "origin": "list_parent_time_inheritance",
