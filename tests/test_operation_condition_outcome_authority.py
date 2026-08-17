@@ -137,6 +137,12 @@ def test_every_mandatory_outcome_requires_its_own_observer_binding() -> None:
         }
     ]
     behavior = ensure_canonical_behavior_semantics(behavior)
+    state_outcome = next(
+        row
+        for row in mandatory_outcomes(behavior)
+        if row["outcome_type"] == "STATE_TRANSITION"
+    )
+    assert state_outcome["observer_slot_ref"] == "state_effect:0"
     binding = {
         "response_observer_bindings": [
             {
@@ -147,10 +153,15 @@ def test_every_mandatory_outcome_requires_its_own_observer_binding() -> None:
     }
     effect_slots = [
         {
-            "slot_ref": "state:status",
+            "slot_ref": "state_effect:0",
             "source_field_candidate": "status",
             "status": "BOUND",
-        }
+        },
+        {
+            "slot_ref": "data_effect:0",
+            "source_field_candidate": "status",
+            "status": "BOUND",
+        },
     ]
 
     rows = _outcome_observer_bindings(
@@ -176,3 +187,24 @@ def test_every_mandatory_outcome_requires_its_own_observer_binding() -> None:
         and row["status"] == "UNBOUND"
         for row in only_permission
     )
+
+
+def test_state_outcome_without_declared_field_never_invents_status() -> None:
+    behavior = _permission_behavior()
+    behavior["permission_decision"] = "UNSPECIFIED"
+    behavior["state_effects"] = [
+        {
+            "from_state": "APPROVED",
+            "to_state": "SHIPPED",
+            "raw": "订单进入SHIPPED",
+        }
+    ]
+
+    result = ensure_canonical_behavior_semantics(behavior)
+    outcome = mandatory_outcomes(result)[0]
+
+    assert outcome["outcome_type"] == "STATE_TRANSITION"
+    assert outcome["field_ref"] == ""
+    assert outcome["status"] == "UNRESOLVED"
+    assert outcome["reason_code"] == "OUTCOME_STATE_FIELD_UNRESOLVED"
+    assert result["status"] == "INCOMPLETE"

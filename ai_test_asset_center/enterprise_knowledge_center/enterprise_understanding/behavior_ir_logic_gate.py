@@ -292,26 +292,35 @@ def build_outcome_contracts(behavior: dict[str, Any]) -> list[dict[str, Any]]:
 
     for index, effect in enumerate(_dicts(behavior.get("state_effects"))):
         to_value = text(effect.get("to_state") or effect.get("to_value"))
+        field_ref = text(effect.get("field") or effect.get("field_ref"))
         statement = text(effect.get("raw") or effect.get("statement"))
         if statement:
             structured.add(statement)
-        rows.append(
-            {
-                "schema": OUTCOME_CONTRACT_SCHEMA,
-                "outcome_id": stable_id("outcome", behavior_id, "state", index),
-                "outcome_type": "STATE_TRANSITION",
-                "target_object_refs": objects,
-                "field_ref": text(effect.get("field") or effect.get("field_ref") or "status"),
-                "from_value": text(effect.get("from_state") or effect.get("from_value")),
-                "to_value": to_value,
-                "statement": statement,
-                "mandatory": True,
-                "observation_phase": "AFTER",
-                "caused_by_operation_ref": operation,
-                "status": "CONFIRMED" if to_value and objects else "UNRESOLVED",
-                "evidence": evidence,
-            }
-        )
+        row = {
+            "schema": OUTCOME_CONTRACT_SCHEMA,
+            "outcome_id": stable_id("outcome", behavior_id, "state", index),
+            "outcome_type": "STATE_TRANSITION",
+            "target_object_refs": objects,
+            "field_ref": field_ref,
+            "from_value": text(
+                effect.get("from_state") or effect.get("from_value")
+            ),
+            "to_value": to_value,
+            "statement": statement,
+            "observer_slot_ref": f"state_effect:{index}",
+            "mandatory": True,
+            "observation_phase": "AFTER",
+            "caused_by_operation_ref": operation,
+            "status": (
+                "CONFIRMED"
+                if to_value and objects and field_ref
+                else "UNRESOLVED"
+            ),
+            "evidence": evidence,
+        }
+        if not field_ref:
+            row["reason_code"] = "OUTCOME_STATE_FIELD_UNRESOLVED"
+        rows.append(row)
 
     for index, effect in enumerate(_dicts(behavior.get("data_effects"))):
         statement = text(effect.get("statement") or effect.get("raw") or effect.get("effect"))
@@ -326,6 +335,7 @@ def build_outcome_contracts(behavior: dict[str, Any]) -> list[dict[str, Any]]:
                 "outcome_type": _data_outcome_type(effect),
                 "target_object_refs": unique_text([target, *objects]),
                 "field_ref": field,
+                "observer_slot_ref": f"data_effect:{index}",
                 "operator": text(effect.get("operator")),
                 "value_ref": text(effect.get("value_ref")),
                 "statement": statement,

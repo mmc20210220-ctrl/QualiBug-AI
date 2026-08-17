@@ -148,6 +148,40 @@ def test_confirmed_behavior_binds_api_field_and_response_channel() -> None:
     assert not any(row["kind"] == "BEHAVIOR_API_BINDING_UNRESOLVED" for row in unknowns)
 
 
+def test_explicit_state_effect_field_creates_exact_effect_observer_slot() -> None:
+    behavior = _behavior()
+    behavior["preconditions"] = []
+    behavior["permission_decision"] = "UNSPECIFIED"
+    behavior["state_effects"] = [
+        {
+            "field": "status",
+            "from_state": "APPROVED",
+            "to_state": "SHIPPED",
+            "raw": "订单状态变为SHIPPED",
+        }
+    ]
+
+    bindings, unknowns, conflicts, _gate = build_behavior_implementation_bindings(
+        _asset(), [behavior]
+    )
+
+    assert conflicts == []
+    effect = bindings[0]["effect_observer_bindings"]
+    assert len(effect) == 1
+    assert effect[0]["slot_ref"] == "state_effect:0"
+    assert effect[0]["source_field_candidate"] == "status"
+    assert effect[0]["status"] == "BOUND"
+    assert any(
+        row["binding_kind"] == "DATABASE_FIELD"
+        and row["field_id"] == "field:order:status"
+        for row in effect[0]["bindings"]
+    )
+    assert not any(
+        row["kind"] == "IMPLEMENTATION_EFFECT_OBSERVER_UNRESOLVED"
+        for row in unknowns
+    )
+
+
 def test_token_overlap_remains_diagnostic_and_cannot_select_endpoint() -> None:
     asset = _asset()
     asset["relationships"] = []

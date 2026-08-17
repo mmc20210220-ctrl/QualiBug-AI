@@ -23,6 +23,10 @@ Rules of engagement (aligned with the binding closure contract):
 * Outcome contracts without an observable field/create effect still compile
   into a postcondition invariant; the obligation compiler then emits the
   visible ``SOURCE_POSTCONDITION_EFFECT_UNBOUND`` gap instead of guessing.
+* A raw outcome field name is descriptive text, not a canonical field id. The
+  field becomes executable only through an explicit canonical ref or the
+  governed outcome-ref -> effect-slot -> authoritative database identity ->
+  canonical-field chain. Missing or ambiguous joins remain coverage gaps.
 """
 from __future__ import annotations
 
@@ -114,6 +118,21 @@ def _authoritative_api_bindings(asset: dict[str, Any]) -> dict[str, list[dict[st
     return index
 
 
+def _governed_bindings_by_behavior(
+    asset: dict[str, Any],
+) -> dict[str, list[dict[str, Any]]]:
+    index: dict[str, list[dict[str, Any]]] = {}
+    bindings = _list(asset.get("behavior_implementation_bindings")) or _list(
+        _understanding_model(asset).get("behavior_implementation_bindings")
+    )
+    for raw in bindings:
+        binding = _dict(raw)
+        behavior_ref = _text(binding.get("behavior_ref"))
+        if behavior_ref:
+            index.setdefault(behavior_ref, []).append(binding)
+    return index
+
+
 def _operation_identity_index(
     behavior_ir: dict[str, Any],
 ) -> tuple[dict[str, str], dict[str, list[str]]]:
@@ -192,8 +211,211 @@ def _behavior_statement(behavior: dict[str, Any]) -> str:
     return ""
 
 
-def _outcome_operands(behavior: dict[str, Any]) -> list[dict[str, Any]]:
+def _canonical_fields(
+    behavior_ir: dict[str, Any],
+) -> tuple[dict[str, dict[str, Any]], dict[tuple[str, str], list[str]]]:
+    by_id: dict[str, dict[str, Any]] = {}
+    by_database_identity: dict[tuple[str, str], list[str]] = {}
+    for entity_value in _list(behavior_ir.get("entities")):
+        entity = _dict(entity_value)
+        for field_value in _list(entity.get("fields")):
+            field = _dict(field_value)
+            field_ref = _text(field.get("field_id"))
+            if not field_ref or not _list(field.get("source_refs")):
+                continue
+            by_id[field_ref] = field
+            for database_value in _list(field.get("database_bindings")):
+                database = _dict(database_value)
+                table = _text(database.get("table")).casefold()
+                column = _text(
+                    database.get("column") or database.get("field")
+                ).casefold()
+                if table and column:
+                    by_database_identity.setdefault((table, column), []).append(
+                        field_ref
+                    )
+    for identity, refs in by_database_identity.items():
+        by_database_identity[identity] = sorted(set(refs))
+    return by_id, by_database_identity
+
+
+def _outcome_slot_refs(
+    outcome: dict[str, Any],
+    *,
+    implementation_binding: dict[str, Any],
+) -> list[str]:
+    outcome_ref = _text(outcome.get("outcome_id"))
+    rows = [
+        row
+        for row in (
+            _dict(value)
+            for value in _list(
+                implementation_binding.get("outcome_observer_bindings")
+            )
+        )
+        if _text(row.get("outcome_ref")) == outcome_ref
+        and _text(row.get("status")).upper() == "BOUND"
+    ]
+    refs = sorted(
+        {
+            _text(ref)
+            for row in rows
+            for ref in _list(row.get("observer_slot_refs"))
+            if _text(ref)
+        }
+    )
+    explicit = _text(
+        outcome.get("observer_slot_ref")
+        or outcome.get("effect_observer_slot_ref")
+    )
+    if explicit:
+        return [explicit] if refs == [explicit] else []
+    return refs
+
+
+def _canonical_field_for_outcome(
+    outcome: dict[str, Any],
+    *,
+    implementation_bindings: list[dict[str, Any]],
+    canonical_fields: dict[str, dict[str, Any]],
+    database_field_index: dict[tuple[str, str], list[str]],
+) -> dict[str, Any]:
+    outcome_ref = _text(outcome.get("outcome_id"))
+    explicit_field_ref = _text(
+        outcome.get("canonical_field_ref") or outcome.get("canonical_field_id")
+    )
+    if explicit_field_ref:
+        if explicit_field_ref in canonical_fields:
+            return {
+                "status": "BOUND",
+                "outcome_ref": outcome_ref,
+                "field_ref": explicit_field_ref,
+                "authority": "source_declared_canonical_field_identity",
+                "observer_slot_ref": "",
+            }
+        return {
+            "status": "UNRESOLVED",
+            "outcome_ref": outcome_ref,
+            "candidate_field_refs": [],
+            "reason_code": "BUSINESS_BEHAVIOR_OUTCOME_FIELD_IDENTITY_UNRESOLVED",
+        }
+    if len(implementation_bindings) != 1:
+        return {
+            "status": "AMBIGUOUS" if implementation_bindings else "UNRESOLVED",
+            "outcome_ref": outcome_ref,
+            "candidate_field_refs": [],
+            "reason_code": (
+                "BUSINESS_BEHAVIOR_OUTCOME_FIELD_IDENTITY_AMBIGUOUS"
+                if implementation_bindings
+                else "BUSINESS_BEHAVIOR_OUTCOME_FIELD_IDENTITY_UNRESOLVED"
+            ),
+        }
+    implementation_binding = implementation_bindings[0]
+    slot_refs = _outcome_slot_refs(
+        outcome,
+        implementation_binding=implementation_binding,
+    )
+    if len(slot_refs) != 1:
+        return {
+            "status": "AMBIGUOUS" if len(slot_refs) > 1 else "UNRESOLVED",
+            "outcome_ref": outcome_ref,
+            "candidate_field_refs": [],
+            "reason_code": (
+                "BUSINESS_BEHAVIOR_OUTCOME_FIELD_IDENTITY_AMBIGUOUS"
+                if len(slot_refs) > 1
+                else "BUSINESS_BEHAVIOR_OUTCOME_FIELD_IDENTITY_UNRESOLVED"
+            ),
+        }
+    slot_ref = slot_refs[0]
+    slots = [
+        row
+        for row in (
+            _dict(value)
+            for value in _list(
+                implementation_binding.get("effect_observer_bindings")
+            )
+        )
+        if _text(row.get("slot_ref")) == slot_ref
+        and _text(row.get("status")).upper() == "BOUND"
+    ]
+    if len(slots) != 1:
+        return {
+            "status": "AMBIGUOUS" if len(slots) > 1 else "UNRESOLVED",
+            "outcome_ref": outcome_ref,
+            "candidate_field_refs": [],
+            "reason_code": (
+                "BUSINESS_BEHAVIOR_OUTCOME_FIELD_IDENTITY_AMBIGUOUS"
+                if len(slots) > 1
+                else "BUSINESS_BEHAVIOR_OUTCOME_FIELD_IDENTITY_UNRESOLVED"
+            ),
+        }
+    slot = slots[0]
+    if not (
+        slot.get("runtime_observer_available") is True
+        and slot.get("object_table_identity_confirmed") is True
+    ):
+        return {
+            "status": "UNRESOLVED",
+            "outcome_ref": outcome_ref,
+            "candidate_field_refs": [],
+            "reason_code": "BUSINESS_BEHAVIOR_OUTCOME_FIELD_IDENTITY_UNRESOLVED",
+        }
+    source_field = _text(outcome.get("field_ref") or outcome.get("field"))
+    slot_field = _text(slot.get("source_field_candidate"))
+    if not source_field or source_field.casefold() != slot_field.casefold():
+        return {
+            "status": "UNRESOLVED",
+            "outcome_ref": outcome_ref,
+            "candidate_field_refs": [],
+            "reason_code": "BUSINESS_BEHAVIOR_OUTCOME_FIELD_IDENTITY_UNRESOLVED",
+        }
+    candidates: set[str] = set()
+    for binding_value in _list(slot.get("bindings")):
+        binding = _dict(binding_value)
+        if binding.get("authoritative") is not True:
+            continue
+        direct_ref = _text(binding.get("canonical_field_ref"))
+        if direct_ref and direct_ref in canonical_fields:
+            candidates.add(direct_ref)
+        if _text(binding.get("binding_kind")) != "DATABASE_FIELD":
+            continue
+        table = _text(binding.get("table")).casefold()
+        column = _text(
+            binding.get("column") or binding.get("field")
+        ).casefold()
+        if not table or not column or column != source_field.casefold():
+            continue
+        candidates.update(database_field_index.get((table, column), []))
+    ordered = sorted(candidates)
+    if len(ordered) == 1:
+        return {
+            "status": "BOUND",
+            "outcome_ref": outcome_ref,
+            "field_ref": ordered[0],
+            "authority": "governed_outcome_observer_database_identity",
+            "observer_slot_ref": slot_ref,
+        }
+    return {
+        "status": "AMBIGUOUS" if len(ordered) > 1 else "UNRESOLVED",
+        "outcome_ref": outcome_ref,
+        "candidate_field_refs": ordered,
+        "reason_code": (
+            "BUSINESS_BEHAVIOR_OUTCOME_FIELD_IDENTITY_AMBIGUOUS"
+            if len(ordered) > 1
+            else "BUSINESS_BEHAVIOR_OUTCOME_FIELD_IDENTITY_UNRESOLVED"
+        ),
+    }
+
+
+def _outcome_operands(
+    behavior: dict[str, Any],
+    *,
+    implementation_bindings: list[dict[str, Any]],
+    canonical_fields: dict[str, dict[str, Any]],
+    database_field_index: dict[tuple[str, str], list[str]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     operands: list[dict[str, Any]] = []
+    resolutions: list[dict[str, Any]] = []
     for raw in _list(behavior.get("outcome_contracts")):
         outcome = _dict(raw)
         if _text(outcome.get("status")).upper() not in {"", "CONFIRMED"}:
@@ -208,7 +430,24 @@ def _outcome_operands(behavior: dict[str, Any]) -> list[dict[str, Any]]:
             operand["entity_ref"] = entity
         if field:
             operand["field"] = field
-            operand["field_id"] = field
+            resolution = _canonical_field_for_outcome(
+                outcome,
+                implementation_bindings=implementation_bindings,
+                canonical_fields=canonical_fields,
+                database_field_index=database_field_index,
+            )
+            resolutions.append(resolution)
+            if _text(resolution.get("status")) == "BOUND":
+                field_ref = _text(resolution.get("field_ref"))
+                operand["field_id"] = field_ref
+                observer_slot_ref = _text(
+                    resolution.get("observer_slot_ref")
+                )
+                if observer_slot_ref:
+                    operand["observer_slot_ref"] = observer_slot_ref
+                operand["field_binding_authority"] = _text(
+                    resolution.get("authority")
+                )
         to_value = outcome.get("to_value")
         if to_value is not None and _text(to_value):
             operand["expected_value"] = to_value
@@ -217,7 +456,7 @@ def _outcome_operands(behavior: dict[str, Any]) -> list[dict[str, Any]]:
             operand["must_create"] = True
         if operand:
             operands.append(operand)
-    return operands
+    return operands, resolutions
 
 
 def _expression_kind(behavior: dict[str, Any]) -> str:
@@ -249,7 +488,11 @@ def bind_business_behavior_invariants(
     enriched = deepcopy(behavior_ir)
     behaviors = _confirmed_behaviors(knowledge_asset)
     api_bindings_by_behavior = _authoritative_api_bindings(knowledge_asset)
+    governed_bindings_by_behavior = _governed_bindings_by_behavior(
+        knowledge_asset
+    )
     unique_operations, ambiguous_operations = _operation_identity_index(enriched)
+    canonical_fields, database_field_index = _canonical_fields(enriched)
 
     existing_relation_keys = {
         (
@@ -272,6 +515,9 @@ def bind_business_behavior_invariants(
     bound_behavior_refs: list[str] = []
     unbound_behavior_refs: list[str] = []
     ambiguous_identity_count = 0
+    canonical_field_bound_outcome_refs: set[str] = set()
+    canonical_field_unresolved_outcome_refs: set[str] = set()
+    canonical_field_ambiguous_outcome_refs: set[str] = set()
 
     for behavior in behaviors:
         behavior_ref = _text(behavior.get("behavior_id"))
@@ -325,7 +571,62 @@ def bind_business_behavior_invariants(
         if invariant_id in existing_invariant_ids:
             bound_behavior_refs.append(behavior_ref)
             continue
-        operands = _outcome_operands(behavior)
+        operands, field_resolutions = _outcome_operands(
+            behavior,
+            implementation_bindings=governed_bindings_by_behavior.get(
+                behavior_ref, []
+            ),
+            canonical_fields=canonical_fields,
+            database_field_index=database_field_index,
+        )
+        for resolution in field_resolutions:
+            outcome_ref = _text(resolution.get("outcome_ref"))
+            resolution_status = _text(resolution.get("status"))
+            if resolution_status == "BOUND":
+                if outcome_ref:
+                    canonical_field_bound_outcome_refs.add(outcome_ref)
+                continue
+            if resolution_status == "AMBIGUOUS":
+                if outcome_ref:
+                    canonical_field_ambiguous_outcome_refs.add(outcome_ref)
+            elif outcome_ref:
+                canonical_field_unresolved_outcome_refs.add(outcome_ref)
+            reason_code = _text(resolution.get("reason_code")) or (
+                "BUSINESS_BEHAVIOR_OUTCOME_FIELD_IDENTITY_UNRESOLVED"
+            )
+            enriched["coverage_gaps"].append(_fact_node(
+                node_id=_stable_id(
+                    "gap",
+                    "business_behavior_outcome_field_identity",
+                    behavior_ref,
+                    outcome_ref,
+                    reason_code,
+                ),
+                typed_fields={
+                    "gap_type": "business_behavior_outcome_field_identity",
+                    "reason_code": reason_code,
+                    "description": (
+                        "Business outcome field has no unique governed join "
+                        "to a canonical source field; raw field text cannot "
+                        "authorize an observer"
+                    ),
+                    "business_behavior_ref": behavior_ref,
+                    "outcome_ref": outcome_ref,
+                    "candidate_field_refs": sorted(
+                        {
+                            _text(value)
+                            for value in _list(
+                                resolution.get("candidate_field_refs")
+                            )
+                            if _text(value)
+                        }
+                    ),
+                },
+                source_refs=_behavior_source_refs(behavior),
+                confidence=1.0,
+                derivation="explicit",
+                status="unsupported",
+            ))
         kind = _expression_kind(behavior)
         expression: dict[str, Any] = {
             "kind": kind,
@@ -338,19 +639,29 @@ def bind_business_behavior_invariants(
         behavior_confidence = float(behavior.get("confidence") or 0.7)
         confidence = max(0.0, min(0.9, behavior_confidence))
 
+        typed_fields: dict[str, Any] = {
+            "description": statement[:500] or behavior_ref,
+            "expression": expression,
+            "operation_refs": list(operation_refs),
+            "source_rule_refs": [behavior_ref],
+            "business_behavior_ref": behavior_ref,
+            "implementation_binding_refs": list(binding_refs),
+            "operation_binding_authority": (
+                "governed_behavior_implementation_bindings"
+            ),
+        }
+        field_ids = sorted(
+            {
+                _text(operand.get("field_id"))
+                for operand in operands
+                if _text(operand.get("field_id")) in canonical_fields
+            }
+        )
+        if field_ids:
+            typed_fields["field_ids"] = field_ids
         enriched["invariants"].append(_fact_node(
             node_id=invariant_id,
-            typed_fields={
-                "description": statement[:500] or behavior_ref,
-                "expression": expression,
-                "operation_refs": list(operation_refs),
-                "source_rule_refs": [behavior_ref],
-                "business_behavior_ref": behavior_ref,
-                "implementation_binding_refs": list(binding_refs),
-                "operation_binding_authority": (
-                    "governed_behavior_implementation_bindings"
-                ),
-            },
+            typed_fields=typed_fields,
             source_refs=source_refs,
             confidence=confidence,
             derivation="model-inferred",
@@ -388,7 +699,10 @@ def bind_business_behavior_invariants(
             "NO_CONFIRMED_BEHAVIORS"
             if not behaviors
             else "BOUND_WITH_GAPS"
-            if unbound_behavior_refs or ambiguous_identity_count
+            if unbound_behavior_refs
+            or ambiguous_identity_count
+            or canonical_field_unresolved_outcome_refs
+            or canonical_field_ambiguous_outcome_refs
             else "BOUND"
         ),
         "binding_authority": (
@@ -403,6 +717,24 @@ def bind_business_behavior_invariants(
         "unbound_behavior_count": len(unbound_behavior_refs),
         "unbound_behavior_refs": sorted(unbound_behavior_refs),
         "ambiguous_identity_count": ambiguous_identity_count,
+        "canonical_field_bound_outcome_count": len(
+            canonical_field_bound_outcome_refs
+        ),
+        "canonical_field_bound_outcome_refs": sorted(
+            canonical_field_bound_outcome_refs
+        ),
+        "canonical_field_unresolved_outcome_count": len(
+            canonical_field_unresolved_outcome_refs
+        ),
+        "canonical_field_unresolved_outcome_refs": sorted(
+            canonical_field_unresolved_outcome_refs
+        ),
+        "canonical_field_ambiguous_outcome_count": len(
+            canonical_field_ambiguous_outcome_refs
+        ),
+        "canonical_field_ambiguous_outcome_refs": sorted(
+            canonical_field_ambiguous_outcome_refs
+        ),
     }
     receipt["receipt_fingerprint"] = _fingerprint(receipt)
     enriched["business_behavior_invariant_binding_receipt"] = receipt

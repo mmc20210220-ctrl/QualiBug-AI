@@ -463,6 +463,10 @@ def _bind_field(
 
 def _explicit_effect_fields(behavior: dict[str, Any]) -> list[tuple[str, str]]:
     result: list[tuple[str, str]] = []
+    for index, row in enumerate(_dicts(behavior.get("state_effects"))):
+        field = text(row.get("field") or row.get("field_ref"))
+        if field:
+            result.append((f"state_effect:{index}", field))
     for index, row in enumerate(_dicts(behavior.get("data_effects"))):
         field = text(row.get("field") or row.get("field_path") or row.get("name"))
         if not field:

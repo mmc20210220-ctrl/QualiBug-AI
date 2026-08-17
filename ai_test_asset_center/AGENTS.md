@@ -328,6 +328,24 @@ structuring; frames stay fail-closed valid. The 131-bug benchmark re-run is
 the required verification gate for this activation and is executed
 separately from the unit/CI gates.
 
+Canonical outcome-field identity contract: a structured state/data outcome
+carries the deterministic observer-slot identity of the exact source effect
+(`state_effect:<index>` / `data_effect:<index>`). A state outcome without a
+source-declared field is `OUTCOME_STATE_FIELD_UNRESOLVED`; the understanding
+layer must never invent `status` or another conventional field. The governed
+implementation binding joins that outcome identity to one bound effect slot,
+and `business_behavior_invariant_binding` may project a canonical `field_id`
+only through an explicit canonical-field ref or the exact chain outcome ref →
+observer slot ref → authoritative database table/column identity → one
+canonical field with the same database binding. Raw field text, translated
+labels, punctuation-normalized names and same-name fields in another entity
+are not authority. Missing or multiple field identities emit
+`BUSINESS_BEHAVIOR_OUTCOME_FIELD_IDENTITY_UNRESOLVED` / `_AMBIGUOUS` coverage
+gaps; the raw source field remains descriptive text and cannot activate an
+observer. A resolved state field can then reuse its source-declared GET/HEAD
+response binding for completion observation through the existing
+effect-observer stage; no parallel observer registry is permitted.
+
 Legacy Chinese parse demotion contract (P0-E): `behavior_ir_core` no longer
 treats fixed-vocabulary Chinese-text parsing as final semantics when the
 asset carries a Chinese Semantic Frame ledger. The frame-confirmation gate

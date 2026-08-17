@@ -20,7 +20,7 @@ def test_governance_replaces_raw_database_binding_with_approved_observer(monkeyp
         "condition_observer_bindings": [],
         "effect_observer_bindings": [
             {
-                "slot_ref": "effect:amount",
+                "slot_ref": "data_effect:0",
                 "purpose": "EFFECT_OBSERVER",
                 "source_field_candidate": "amount",
                 "status": "BOUND",

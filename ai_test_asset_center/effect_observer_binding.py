@@ -78,10 +78,12 @@ def _completion_candidate_index(
 ) -> dict[tuple[str, str], list[dict[str, Any]]]:
     """Index exact state-transition completion predicates.
 
-    A candidate exists only when one source-backed postcondition operand names
+    A candidate exists only when a source-backed postcondition operand names
     one canonical STATE field and that field declares a concrete response JSON
-    path on a GET/HEAD operation.  Multiple distinct readbacks remain multiple
-    candidates; callers must fail closed instead of selecting by order.
+    path on a GET/HEAD operation. Non-field outcomes in the same invariant do
+    not hide that state operand. Multiple distinct state operands or readbacks
+    remain multiple candidates; callers fail closed instead of selecting by
+    order.
     """
 
     merged: dict[tuple[str, str, str, str, str], dict[str, Any]] = {}
@@ -98,26 +100,8 @@ def _completion_candidate_index(
             not invariant_ref
             or not _list(invariant.get("source_refs"))
             or _text(expression.get("kind")) != "postcondition"
-            or _text(expression.get("operator")) != "must_become"
-            or len(operands) != 1
-        ):
-            continue
-        operand = operands[0]
-        field_ref = _text(operand.get("field_id"))
-        expected_value = operand.get("expected_value")
-        if (
-            not field_ref
-            or not isinstance(expected_value, str)
-            or not expected_value.strip()
-        ):
-            continue
-        field = _dict(canonical_fields.get(field_ref))
-        if (
-            _text(field.get("semantic_type")).upper() != "STATE"
-            or not (
-                _list(field.get("source_refs"))
-                or _list(field.get("entity_source_refs"))
-            )
+            or _text(expression.get("operator"))
+            not in {"must_become", "outcome_contract"}
         ):
             continue
         write_refs = [
@@ -129,41 +113,65 @@ def _completion_candidate_index(
             and _text(operations[ref].get("method")).upper() in _WRITE_METHODS
             and _list(operations[ref].get("source_refs"))
         ]
-        read_bindings: dict[tuple[str, str], dict[str, Any]] = {}
-        for binding_value in _list(field.get("api_response_bindings")):
-            binding = _dict(binding_value)
-            observer_ref = _text(binding.get("operation_id"))
-            json_path = _text(binding.get("json_path"))
-            observer = _dict(operations.get(observer_ref))
+        for operand in operands:
+            field_ref = _text(operand.get("field_id"))
+            expected_value = operand.get("expected_value")
             if (
-                observer_ref
-                and json_path
-                and _text(observer.get("method")).upper() in _READ_METHODS
-                and _list(observer.get("source_refs"))
+                not field_ref
+                or not isinstance(expected_value, str)
+                or not expected_value.strip()
             ):
-                read_bindings[(observer_ref, json_path)] = binding
-        for write_ref in write_refs:
-            for observer_ref, json_path in sorted(read_bindings):
-                key = (
-                    write_ref,
-                    _text(expected_value),
-                    observer_ref,
-                    json_path,
-                    field_ref,
+                continue
+            field = _dict(canonical_fields.get(field_ref))
+            if (
+                _text(field.get("semantic_type")).upper() != "STATE"
+                or not (
+                    _list(field.get("source_refs"))
+                    or _list(field.get("entity_source_refs"))
                 )
-                candidate = merged.setdefault(
-                    key,
-                    {
-                        "target_operation_ref": write_ref,
-                        "target_state": expected_value,
-                        "observer_operation_ref": observer_ref,
-                        "json_path": json_path,
-                        "canonical_field_ref": field_ref,
-                        "completion_invariant_refs": [],
-                    },
-                )
-                if invariant_ref not in candidate["completion_invariant_refs"]:
-                    candidate["completion_invariant_refs"].append(invariant_ref)
+            ):
+                continue
+            read_bindings: dict[tuple[str, str], dict[str, Any]] = {}
+            for binding_value in _list(field.get("api_response_bindings")):
+                binding = _dict(binding_value)
+                observer_ref = _text(binding.get("operation_id"))
+                json_path = _text(binding.get("json_path"))
+                observer = _dict(operations.get(observer_ref))
+                if (
+                    observer_ref
+                    and json_path
+                    and _text(observer.get("method")).upper()
+                    in _READ_METHODS
+                    and _list(observer.get("source_refs"))
+                ):
+                    read_bindings[(observer_ref, json_path)] = binding
+            for write_ref in write_refs:
+                for observer_ref, json_path in sorted(read_bindings):
+                    key = (
+                        write_ref,
+                        _text(expected_value),
+                        observer_ref,
+                        json_path,
+                        field_ref,
+                    )
+                    candidate = merged.setdefault(
+                        key,
+                        {
+                            "target_operation_ref": write_ref,
+                            "target_state": expected_value,
+                            "observer_operation_ref": observer_ref,
+                            "json_path": json_path,
+                            "canonical_field_ref": field_ref,
+                            "completion_invariant_refs": [],
+                        },
+                    )
+                    if (
+                        invariant_ref
+                        not in candidate["completion_invariant_refs"]
+                    ):
+                        candidate["completion_invariant_refs"].append(
+                            invariant_ref
+                        )
 
     indexed: dict[tuple[str, str], list[dict[str, Any]]] = {}
     for candidate in merged.values():

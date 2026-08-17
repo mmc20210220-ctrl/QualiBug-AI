@@ -236,6 +236,16 @@ def _matching_effect_slots(
     outcome: dict[str, Any],
     effect_slots: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
+    declared_slot_ref = text(
+        outcome.get("observer_slot_ref")
+        or outcome.get("effect_observer_slot_ref")
+    )
+    if declared_slot_ref:
+        return [
+            slot
+            for slot in effect_slots
+            if text(slot.get("slot_ref")) == declared_slot_ref
+        ]
     field = _norm(outcome.get("field_ref"))
     if not field:
         return []
