@@ -17,11 +17,14 @@ Contract:
 - Coreference is resolved at MENTION level only: the raw condition text is
   never rewritten. A condition carrying a coreference token (该/本/此/其/
   上述/前述/对应/相关/当前) gets a resolution candidate from the frame's own
-  mentions, then prior-frame mentions, then section titles (exact name match
-  only); no unique referent → COREFERENCE_UNRESOLVED.
-- Actor mentions are NOT part of the semantic signature (the signature uses
-  concept refs only), so resolution never changes signatures and the Behavior
-  IR channel stays untouched — zero production behavior change until grounding.
+  explicit mentions, then typed prior-frame object/actor mentions, then section
+  titles (exact name match only); no unique typed referent →
+  COREFERENCE_UNRESOLVED. A unique prior object mention may fill only the
+  previously empty object slot, with source-frame lineage; a context-injected
+  actor never counts as fresh evidence for that decision.
+- Actor mentions are NOT part of the semantic signature. A materialized object
+  mention is a typed semantic change, so its signature is recomputed immediately;
+  it still needs the existing grounding gate before Behavior IR can consume it.
 - The stage is idempotent and fail-closed: every frame stays
   qualibug.chinese-semantic-frame.v1 valid, and every unresolved slot keeps
   its explicit status + reason code.
@@ -37,7 +40,7 @@ from .chinese_clause_parser import clause_tree_for_block
 from .chinese_context_envelope import envelope_from_asset
 from .chinese_semantic_frame_compiler import _resolve_frame_block
 from .chinese_semantic_ledger_adapter import frames_from_asset
-from .chinese_semantic_schema import validate_semantic_frame
+from .chinese_semantic_schema import semantic_signature, validate_semantic_frame
 
 CHINESE_SEMANTIC_CONTEXT_RESOLUTION_SCHEMA = (
     "qualibug.chinese-semantic-context-resolution.v1"
@@ -250,6 +253,76 @@ def _section_heading_actor_candidates(
     return sorted(by_canonical.values())
 
 
+def _prior_frame_coreference_candidates(
+    frame: dict[str, Any],
+    block: dict[str, Any],
+    frames: list[dict[str, Any]],
+    entry_index: dict[tuple[str, str], dict[str, Any]],
+    source_id: str,
+) -> list[dict[str, Any]]:
+    """Typed mentions from the nearest prior frames in the same section.
+
+    Object and actor mentions remain distinct candidates even when their text
+    is identical. This prevents a bare pronoun from being forced into a slot
+    merely because two different semantic roles share one surface label.
+    """
+    current_order = block.get("order")
+    rows: list[tuple[int, str, str, str]] = []
+    for other in frames:
+        frame_id = _text(other.get("frame_id"))
+        if frame_id == _text(frame.get("frame_id")):
+            continue
+        if _text(_dict(other.get("source_span")).get("source_id")) != _text(source_id):
+            continue
+        other_entry = entry_index.get(
+            (
+                source_id,
+                _text(_dict(other.get("source_span")).get("document_block_id")),
+            )
+        )
+        if not other_entry or not _same_section(block, other_entry):
+            continue
+        try:
+            other_order = int(other_entry.get("order"))
+            current = int(current_order)
+        except (TypeError, ValueError):
+            continue
+        if other_order >= current:
+            continue
+        for slot in ("object", "actor"):
+            for mention in _list(_dict(other.get(slot)).get("mentions")):
+                item = _norm(mention)
+                if item:
+                    rows.append((other_order, frame_id, slot, item))
+
+    rows.sort(key=lambda row: row[0], reverse=True)
+    selected_frame_ids: list[str] = []
+    selected: list[tuple[int, str, str, str]] = []
+    for row in rows:
+        frame_id = row[1]
+        if frame_id not in selected_frame_ids:
+            if len(selected_frame_ids) >= _PRIOR_FRAME_WINDOW:
+                continue
+            selected_frame_ids.append(frame_id)
+        selected.append(row)
+
+    by_identity: dict[tuple[str, str], dict[str, Any]] = {}
+    for _order, frame_id, slot, mention in selected:
+        key = (slot, mention)
+        candidate = by_identity.setdefault(
+            key,
+            {
+                "mention": mention,
+                "resolved_slot": slot,
+                "candidate_source": "prior_frame_same_section",
+                "source_frame_refs": [],
+            },
+        )
+        if frame_id and frame_id not in candidate["source_frame_refs"]:
+            candidate["source_frame_refs"].append(frame_id)
+    return list(by_identity.values())
+
+
 def _resolve_omitted_actor(
     frame: dict[str, Any],
     asset: dict[str, Any],
@@ -326,9 +399,19 @@ def _coreference_candidates(
 
     该X / 本X / 此X name their referent explicitly in the same sentence (X is
     taken from the raw text itself — no inference). Bare pronouns (其/上述/…)
-    are resolved only when the frame's own mentions give exactly one
-    candidate; otherwise the resolution is UNKNOWN.
+    are resolved only when current explicit mentions or typed prior-frame
+    mentions yield exactly one candidate; otherwise the resolution is UNKNOWN.
     """
+    previous = [
+        dict(row)
+        for row in _list(
+            _dict(frame.get("context_resolution")).get("coreference_resolutions")
+        )
+        if isinstance(row, dict)
+    ]
+    if previous:
+        return previous
+
     resolutions: list[dict[str, Any]] = []
     condition_texts = [
         _norm(_dict(row).get("raw"))
@@ -366,29 +449,60 @@ def _coreference_candidates(
                 }
             )
         if bare_signals:
-            candidates: list[str] = []
+            typed_candidates: list[dict[str, Any]] = []
             for slot in ("object", "actor"):
-                for mention in _list(_dict(frame.get(slot)).get("mentions")):
+                slot_row = _dict(frame.get(slot))
+                context_injected_mentions = {
+                    _norm(row.get("mention"))
+                    for row in _list(slot_row.get("evidence"))
+                    if (
+                        isinstance(row, dict)
+                        and _text(row.get("origin")) == "context_resolution"
+                        and _norm(row.get("mention"))
+                    )
+                }
+                for mention in _list(slot_row.get("mentions")):
                     item = _norm(mention)
-                    if item and item not in candidates:
-                        candidates.append(item)
-            if not candidates:
-                for mention in _prior_frame_actor_candidates(
+                    if item in context_injected_mentions:
+                        continue
+                    candidate = {
+                        "mention": item,
+                        "resolved_slot": slot,
+                        "candidate_source": "current_frame",
+                        "source_frame_refs": [_text(frame.get("frame_id"))],
+                    }
+                    if item and candidate not in typed_candidates:
+                        typed_candidates.append(candidate)
+            if not typed_candidates:
+                typed_candidates = _prior_frame_coreference_candidates(
                     frame, block, frames, entry_index, source_id
-                ):
-                    if mention not in candidates:
-                        candidates.append(mention)
-            if not candidates:
+                )
+            if not typed_candidates:
                 for name in _section_heading_actor_candidates(block, known_names):
-                    if name not in candidates:
-                        candidates.append(name)
-            if len(candidates) == 1:
+                    typed_candidates.append({
+                        "mention": name,
+                        "resolved_slot": "actor",
+                        "candidate_source": "section_heading",
+                        "source_frame_refs": [],
+                    })
+            if len(typed_candidates) == 1:
+                candidate = typed_candidates[0]
+                candidate_source = _text(candidate.get("candidate_source"))
+                resolved_slot = _text(candidate.get("resolved_slot"))
+                if candidate_source == "prior_frame_same_section":
+                    method = f"unique_prior_frame_{resolved_slot}_same_section"
+                elif candidate_source == "section_heading":
+                    method = "unique_section_heading_actor"
+                else:
+                    method = "unique_frame_mention"
                 resolutions.append(
                     {
                         "raw_condition": raw,
                         "signals": bare_signals,
-                        "resolved_mention_candidate": candidates[0],
-                        "method": "unique_frame_mention",
+                        "resolved_mention_candidate": candidate["mention"],
+                        "resolved_slot": resolved_slot,
+                        "source_frame_refs": list(candidate.get("source_frame_refs") or []),
+                        "method": method,
                         "resolution_status": "RESOLVED",
                     }
                 )
@@ -397,11 +511,82 @@ def _coreference_candidates(
                     {
                         "raw_condition": raw,
                         "signals": bare_signals,
-                        "candidate_count": len(candidates),
+                        "candidate_count": len(typed_candidates),
+                        "candidates": [
+                            {
+                                "mention": row.get("mention"),
+                                "resolved_slot": row.get("resolved_slot"),
+                                "source_frame_refs": list(row.get("source_frame_refs") or []),
+                            }
+                            for row in typed_candidates
+                        ],
                         "resolution_status": "UNKNOWN",
                     }
                 )
     return resolutions
+
+
+def _materialize_resolved_object_coreference(
+    frame: dict[str, Any],
+    resolutions: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Carry a uniquely typed prior object mention into the frame object slot."""
+    previous = [
+        dict(row)
+        for row in _list(_dict(frame.get("context_resolution")).get("materialized_slots"))
+        if isinstance(row, dict)
+    ]
+    if previous:
+        return previous
+
+    object_slot = _dict(frame.get("object"))
+    if _list(object_slot.get("mentions")):
+        return []
+    eligible = [
+        row
+        for row in resolutions
+        if (
+            _text(row.get("resolution_status")) == "RESOLVED"
+            and _text(row.get("resolved_slot")) == "object"
+            and _text(row.get("method")) == "unique_prior_frame_object_same_section"
+            and _norm(row.get("resolved_mention_candidate"))
+        )
+    ]
+    mentions = list(
+        dict.fromkeys(_norm(row.get("resolved_mention_candidate")) for row in eligible)
+    )
+    if len(mentions) != 1:
+        return []
+
+    mention = mentions[0]
+    source_frame_refs = list(
+        dict.fromkeys(
+            _text(ref)
+            for row in eligible
+            for ref in _list(row.get("source_frame_refs"))
+            if _text(ref)
+        )
+    )
+    evidence_entry = {
+        "origin": "context_resolution",
+        "method": "unique_prior_frame_object_same_section",
+        "mention": mention,
+        "source_frame_refs": source_frame_refs,
+    }
+    evidence = [dict(row) for row in _list(object_slot.get("evidence")) if isinstance(row, dict)]
+    if evidence_entry not in evidence:
+        evidence.append(evidence_entry)
+    object_slot["mentions"] = [mention]
+    object_slot["resolution_status"] = "RESOLVED"
+    object_slot["evidence"] = evidence
+    frame["object"] = object_slot
+    frame["resolution"]["semantic_signature"] = semantic_signature(frame)
+    return [{
+        "slot": "object",
+        "mention": mention,
+        "method": "unique_prior_frame_object_same_section",
+        "source_frame_refs": source_frame_refs,
+    }]
 
 
 def resolve_chinese_semantic_context(asset: dict[str, Any]) -> dict[str, Any]:
@@ -415,6 +600,7 @@ def resolve_chinese_semantic_context(asset: dict[str, Any]) -> dict[str, Any]:
     actor_ambiguous = 0
     coreference_resolved = 0
     coreference_unresolved = 0
+    coreference_materialized = 0
     unlocated = 0
     reason_counts: Counter = Counter()
     items: list[dict[str, Any]] = []
@@ -425,6 +611,7 @@ def resolve_chinese_semantic_context(asset: dict[str, Any]) -> dict[str, Any]:
         reason_codes: list[str] = []
         actor_resolution: dict[str, Any] = {}
         coreference_resolutions: list[dict[str, Any]] = []
+        materialized_slots: list[dict[str, Any]] = []
 
         if not block:
             unlocated += 1
@@ -481,6 +668,11 @@ def resolve_chinese_semantic_context(asset: dict[str, Any]) -> dict[str, Any]:
             coreference_resolutions = _coreference_candidates(
                 frame, frames, block, entry_index, source_id, known_names
             )
+            materialized_slots = _materialize_resolved_object_coreference(
+                frame,
+                coreference_resolutions,
+            )
+            coreference_materialized += len(materialized_slots)
             for row in coreference_resolutions:
                 if _text(row.get("resolution_status")) == "RESOLVED":
                     coreference_resolved += 1
@@ -496,6 +688,7 @@ def resolve_chinese_semantic_context(asset: dict[str, Any]) -> dict[str, Any]:
             "status": "UNLOCATED" if not block else "RESOLVED",
             "actor_resolution": actor_resolution,
             "coreference_resolutions": coreference_resolutions,
+            "materialized_slots": materialized_slots,
             "reason_codes": sorted(set(reason_codes)),
         }
         items.append(
@@ -503,6 +696,7 @@ def resolve_chinese_semantic_context(asset: dict[str, Any]) -> dict[str, Any]:
                 "frame_id": _text(frame.get("frame_id")),
                 "actor_resolution": actor_resolution,
                 "coreference_resolutions": coreference_resolutions,
+                "materialized_slots": materialized_slots,
                 "reason_codes": sorted(set(reason_codes)),
             }
         )
@@ -521,6 +715,7 @@ def resolve_chinese_semantic_context(asset: dict[str, Any]) -> dict[str, Any]:
             "actor_ambiguous_count": actor_ambiguous,
             "coreference_resolution_count": coreference_resolved,
             "coreference_unresolved_count": coreference_unresolved,
+            "coreference_materialized_slot_count": coreference_materialized,
             "unlocated_frame_count": unlocated,
             "reason_code_counts": dict(sorted(reason_counts.items())),
             "raw_text_never_rewritten": True,

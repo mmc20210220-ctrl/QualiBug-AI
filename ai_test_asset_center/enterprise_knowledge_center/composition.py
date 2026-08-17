@@ -2467,9 +2467,9 @@ def build_enterprise_business_knowledge_asset(
 
     # P0-C: frame-level context resolution — omitted actors are recovered only
     # from unique evidence (only-if subject, unique prior frame in the same
-    # section, unique section heading), coreference stays mention-level, and
-    # anything unresolvable keeps its explicit UNKNOWN status + reason code.
-    # Raw text is never rewritten.
+    # section, unique section heading). Bare coreference uses typed current/prior
+    # mentions; one source-unique prior object may fill only an empty object slot,
+    # while ambiguity stays UNKNOWN. Raw text is never rewritten.
     asset = resolve_chinese_semantic_context(asset)
 
     # P0-D: evidence-driven technical grounding — actor/operation/entity/state/

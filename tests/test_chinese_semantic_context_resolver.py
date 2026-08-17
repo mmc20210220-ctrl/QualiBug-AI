@@ -22,6 +22,9 @@ from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding.c
 from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding.chinese_semantic_frame_compiler import (
     enrich_frames_with_clause_structure,
 )
+from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding.chinese_semantic_grounding import (
+    ground_semantic_frames,
+)
 from ai_test_asset_center.enterprise_knowledge_center.enterprise_understanding.chinese_semantic_ledger_adapter import (
     project_business_facts_to_semantic_frames,
 )
@@ -245,6 +248,108 @@ def test_unresolvable_coreference_is_unknown() -> None:
     resolutions = frame["context_resolution"]["coreference_resolutions"]
     assert resolutions[0]["resolution_status"] == "UNKNOWN"
     assert resolutions[0]["candidate_count"] == 2
+    assert "COREFERENCE_UNRESOLVED" in frame["context_resolution"]["reason_codes"]
+
+
+def test_bare_coreference_recovers_unique_prior_object_in_same_section() -> None:
+    h1 = _heading("h1", "业务规则", 1)
+    p1 = _paragraph("p1", "订单可以查看。", 2, "h1")
+    p2 = _paragraph("p2", "其不得删除。", 3, "h1")
+    first = _fact("订单可以查看。", "p1", "f:object", modality="MAY")
+    second = _fact("其不得删除。", "p2", "f:coreference")
+    second["subject"]["entity_refs"] = []
+    second["object"]["entity_refs"] = []
+
+    raw_asset = _asset(blocks=[h1, p1, p2], facts=[first, second])
+    raw_asset["enterprise_understanding_model"]["business_objects"] = [{
+        "object_id": "object:order",
+        "name": "订单",
+    }]
+    raw_asset["business_objects"] = [{"object": "订单"}]
+    asset = _resolve(raw_asset)
+
+    frame = _frames(asset)["f:coreference"]
+    assert frame["object"]["mentions"] == ["订单"]
+    assert frame["object"]["resolution_status"] == "RESOLVED"
+    resolution = frame["context_resolution"]["coreference_resolutions"][0]
+    assert resolution["resolution_status"] == "RESOLVED"
+    assert resolution["resolved_mention_candidate"] == "订单"
+    assert resolution["resolved_slot"] == "object"
+    assert resolution["method"] == "unique_prior_frame_object_same_section"
+    assert "COREFERENCE_UNRESOLVED" not in frame["context_resolution"]["reason_codes"]
+    assert frame["resolution"]["semantic_signature"] == semantic_signature(frame)
+    assert asset["chinese_semantic_context_resolution_ledger"]["receipt"][
+        "coreference_materialized_slot_count"
+    ] == 1
+    before = copy.deepcopy(asset["chinese_semantic_frame_ledger"]["items"])
+    asset = resolve_chinese_semantic_context(asset)
+    assert asset["chinese_semantic_frame_ledger"]["items"] == before
+    asset = ground_semantic_frames(asset)
+    grounded = _frames(asset)["f:coreference"]
+    assert grounded["object"]["grounded_entity_refs"] == ["订单"]
+    assert grounded["technical_grounding"]["entity_refs"] == ["订单"]
+
+
+def test_bare_coreference_with_multiple_prior_objects_stays_unknown() -> None:
+    h1 = _heading("h1", "业务规则", 1)
+    p1 = _paragraph("p1", "订单可以查看。", 2, "h1")
+    p2 = _paragraph("p2", "出库单可以查看。", 3, "h1")
+    p3 = _paragraph("p3", "其不得删除。", 4, "h1")
+    first = _fact("订单可以查看。", "p1", "f:order", modality="MAY")
+    second = _fact("出库单可以查看。", "p2", "f:shipment", modality="MAY")
+    second["subject"]["entity_refs"] = ["出库单"]
+    second["object"]["entity_refs"] = ["出库单"]
+    third = _fact("其不得删除。", "p3", "f:coreference")
+    third["subject"]["entity_refs"] = []
+    third["object"]["entity_refs"] = []
+
+    asset = _resolve(
+        _asset(blocks=[h1, p1, p2, p3], facts=[first, second, third])
+    )
+
+    frame = _frames(asset)["f:coreference"]
+    resolution = frame["context_resolution"]["coreference_resolutions"][0]
+    assert resolution["resolution_status"] == "UNKNOWN"
+    assert resolution["candidate_count"] == 2
+    assert {
+        (row["resolved_slot"], row["mention"])
+        for row in resolution["candidates"]
+    } == {("object", "订单"), ("object", "出库单")}
+    assert frame["object"]["mentions"] == []
+    assert frame["context_resolution"]["materialized_slots"] == []
+    assert "COREFERENCE_UNRESOLVED" in frame["context_resolution"]["reason_codes"]
+    assert asset["chinese_semantic_context_resolution_ledger"]["receipt"][
+        "coreference_materialized_slot_count"
+    ] == 0
+
+
+def test_context_injected_actor_cannot_hide_prior_object_coreference_ambiguity() -> None:
+    h1 = _heading("h1", "业务规则", 1)
+    p1 = _paragraph("p1", "用户可以查看订单。", 2, "h1")
+    p2 = _paragraph("p2", "其不得删除。", 3, "h1")
+    first = _fact(
+        "用户可以查看订单。",
+        "p1",
+        "f:prior",
+        actor_refs=["用户"],
+        modality="MAY",
+    )
+    second = _fact("其不得删除。", "p2", "f:coreference")
+    second["subject"]["entity_refs"] = []
+    second["object"]["entity_refs"] = []
+
+    asset = _resolve(_asset(blocks=[h1, p1, p2], facts=[first, second]))
+
+    frame = _frames(asset)["f:coreference"]
+    assert frame["actor"]["mentions"] == ["用户"]
+    resolution = frame["context_resolution"]["coreference_resolutions"][0]
+    assert resolution["resolution_status"] == "UNKNOWN"
+    assert resolution["candidate_count"] == 2
+    assert {
+        (row["resolved_slot"], row["mention"])
+        for row in resolution["candidates"]
+    } == {("actor", "用户"), ("object", "订单")}
+    assert frame["object"]["mentions"] == []
     assert "COREFERENCE_UNRESOLVED" in frame["context_resolution"]["reason_codes"]
 
 
