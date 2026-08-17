@@ -17,7 +17,10 @@ logger = logging.getLogger(__name__)
 from .behavior_ir import source_identity_fields_for_operation
 from .behavior_ir_core import _infer_operation_effect, _is_ephemeral_session_path
 from .experiment_protocols import compile_family_protocol
-from .obligation_compiler_base import _ownership_params_declared_on_operation
+from .obligation_compiler_base import (
+    _ownership_params_declared_on_operation,
+    _is_actor_identity_body_target,
+)
 from .observer_contracts_base import compile_observer_requirements
 from .validation_read_side_protocol import is_ownership_key as _is_ownership_identity_param
 from .real_id_resolver import (
@@ -316,10 +319,7 @@ def _rescue_binding_for_response_only_family(
                 or _text(entry.get("source_priority"))
                 == "body_placeholder_unresolvable"
             )
-            and (
-                _is_ownership_identity_param(_entry_target)
-                or _entry_target in _operation_declared_ownership_params
-            )
+            and _is_actor_identity_body_target(primary_op, _entry_target)
         ):
             entry["status"] = "runtime_resolvable"
             entry["source_priority"] = "ownership_identity_param"

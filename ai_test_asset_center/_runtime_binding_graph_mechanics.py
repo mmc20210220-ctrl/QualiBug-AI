@@ -8,6 +8,7 @@ from typing import Any
 from .obligation_compiler_base import (
     _ownership_binder_location,
     _ownership_params_declared_on_operation,
+    _is_actor_identity_body_target,
 )
 from .real_id_resolver import (
     alternate_collection_paths,
@@ -1166,6 +1167,16 @@ def build_binding_plan(
             # BLOCKED_MISSING_BINDING.
             if (
                 name in _operation_declared_ownership_params
+                # Only the arm's own identity (userId/ownerId/… or a
+                # description-scoped sellerId) is safe to resolve through the
+                # runtime identity channel. A resource id swept in by
+                # operation-level ownership language (orderId/addressId/sku) is
+                # a resource the caller owns, not the caller's identity; filling
+                # it with an account id would cross-bind an entity id into the
+                # actor coordinate and the authorization causality gate then
+                # rejects the unproven source. Leave those for the list-read /
+                # fixture resolver below.
+                and _is_actor_identity_body_target(op, name)
                 and (
                     # Path-located caller-scoped identity param (GET /api/
                     # reports/customer/{userId}/sales — 普通用户只能使用自己的

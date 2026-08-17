@@ -209,7 +209,7 @@ def _param_key(name: str) -> str:
 
 
 def _field_description(operation: dict[str, Any], target: str) -> str:
-    """Find the target field's own schema description (top-level or content media)."""
+    """Find the target field's own description (schema properties or parameters)."""
 
     wanted = _param_key(target)
 
@@ -232,6 +232,14 @@ def _field_description(operation: dict[str, Any], target: str) -> str:
         return desc
     for media in _dict(schema.get("content")).values():
         desc = walk(_dict(_dict(_dict(media).get("schema")).get("properties")))
+        if desc:
+            return desc
+    for parameter in _list(_dict(operation).get("parameters")):
+        if not isinstance(parameter, dict):
+            continue
+        if _param_key(parameter.get("name")) != wanted:
+            continue
+        desc = _text(parameter.get("description"))
         if desc:
             return desc
     return ""
