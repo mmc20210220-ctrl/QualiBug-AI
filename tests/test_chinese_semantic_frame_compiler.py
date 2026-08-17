@@ -1,9 +1,10 @@
-"""P0-B: Chinese Semantic Frame enrichment — list inheritance, table headers,
-enumeration mentions, and signature stability.
+"""P0-B: Chinese Semantic Frame enrichment — list scopes, table headers,
+typed time windows, enumeration mentions, and signature stability.
 
 Covers SPEC §7.2 (table atomic facts via row/column headers), §7.3 (list
-children inherit the parent condition), and the P0-A contract that the
-semantic signature stays stable (quote/evidence never enter it).
+children inherit parent conditions/exceptions/time windows), and the P0-A
+contract that the semantic signature stays stable (quote/evidence never enter
+it).
 """
 
 from __future__ import annotations
@@ -192,6 +193,156 @@ def test_list_child_inherits_parent_exception_scope_with_source_lineage() -> Non
     rerun = _frames_by_origin(asset)["f:li2"]
     assert rerun["exceptions"] == first_exceptions
     assert rerun["clause_structure"] == first_structure
+
+
+def test_list_child_inherits_typed_parent_time_window_with_source_lineage() -> None:
+    h1 = _heading("h1", "处理时限", 1)
+    li1 = _list_item("li1", "订单取消后24小时内：", 2, "h1", 0)
+    li2 = _list_item("li2", "1. 必须完成退款。", 3, "h1", 1)
+    fact = _fact(
+        fact_id="f:li2",
+        statement="1. 必须完成退款。",
+        block_id="li2",
+        modality="MUST",
+    )
+    asset = _asset_with_frames(facts=[fact], blocks=[h1, li1, li2])
+
+    frame = _frames_by_origin(asset)["f:li2"]
+    assert frame["time_constraints"] == [
+        {
+            "raw": "订单取消后24小时内",
+            "anchor": "订单取消后",
+            "relation": "WITHIN",
+            "duration": "24小时",
+            "source_backed": True,
+            "resolution_status": "RESOLVED",
+            "origin": "list_parent_time_inheritance",
+            "evidence": [
+                {
+                    "origin": "list_parent_time_inheritance",
+                    "source_id": "s1",
+                    "document_block_id": "li1",
+                    "locator": "r.docx#block=2",
+                }
+            ],
+        }
+    ]
+    assert frame["clause_structure"]["list_parent_time_constraint_count"] == 1
+    assert asset["chinese_semantic_frame_ledger"]["enrichment_receipt"][
+        "list_parent_time_constraint_count"
+    ] == 1
+    assert frame["resolution"]["semantic_signature"] == semantic_signature(frame)
+    assert validate_semantic_frame(frame) == []
+
+    first_constraints = [dict(row) for row in frame["time_constraints"]]
+    asset = enrich_frames_with_clause_structure(asset)
+    rerun = _frames_by_origin(asset)["f:li2"]
+    assert rerun["time_constraints"] == first_constraints
+    assert rerun["clause_structure"]["list_parent_time_constraint_count"] == 1
+
+
+def test_table_time_header_becomes_typed_constraint_with_header_lineage() -> None:
+    h1 = _heading("h1", "处理时限", 1)
+    table = {
+        "block_id": "t1", "type": "TABLE", "parent_id": "h1", "order": 2,
+        "region": "body", "table_index": 0, "text": "x",
+        "source_locator": "r.docx#table=0",
+    }
+    cells = [
+        {"block_id": "c0", "type": "TABLE_CELL", "parent_id": "t1", "order": 3,
+         "region": "body", "table_index": 0, "row_index": 0, "column_index": 0,
+         "text": "角色", "source_locator": "r.docx#table=0;row=0;cell=0"},
+        {"block_id": "c1", "type": "TABLE_CELL", "parent_id": "t1", "order": 4,
+         "region": "body", "table_index": 0, "row_index": 0, "column_index": 1,
+         "text": "提交后2个工作日内", "source_locator": "r.docx#table=0;row=0;cell=1"},
+        {"block_id": "c2", "type": "TABLE_CELL", "parent_id": "t1", "order": 5,
+         "region": "body", "table_index": 0, "row_index": 1, "column_index": 0,
+         "text": "审核人", "source_locator": "r.docx#table=0;row=1;cell=0"},
+        {"block_id": "c3", "type": "TABLE_CELL", "parent_id": "t1", "order": 6,
+         "region": "body", "table_index": 0, "row_index": 1, "column_index": 1,
+         "text": "必须完成审核", "source_locator": "r.docx#table=0;row=1;cell=1"},
+    ]
+    tables = [{
+        "headers": ["角色", "提交后2个工作日内"],
+        "rows": [{"角色": "审核人", "提交后2个工作日内": "必须完成审核"}],
+        "table_block_id": "t1", "table_index": 0,
+        "row_count": 2, "column_count": 2,
+    }]
+    fact = _fact(
+        fact_id="f:cell",
+        statement="必须完成审核",
+        block_id="c3",
+        modality="MUST",
+    )
+    asset = _asset_with_frames(
+        facts=[fact], blocks=[h1, table, *cells], tables=tables
+    )
+
+    frame = _frames_by_origin(asset)["f:cell"]
+    typed = [
+        row
+        for row in frame["time_constraints"]
+        if row.get("origin") == "table_column_time_header"
+    ]
+    assert [(row["anchor"], row["duration"], row["relation"]) for row in typed] == [
+        ("提交后", "2个工作日", "WITHIN")
+    ]
+    assert typed[0]["evidence"] == [
+        {
+            "origin": "table_column_time_header",
+            "source_id": "s1",
+            "table_id": "t1",
+            "column_index": 1,
+            "document_block_id": "c1",
+            "locator": "r.docx#table=0;row=0;cell=1",
+        }
+    ]
+    assert frame["clause_structure"]["table_time_constraint_count"] == 1
+    assert validate_semantic_frame(frame) == []
+
+
+def test_own_block_time_window_is_typed_but_neighbor_time_never_leaks() -> None:
+    h1 = _heading("h1", "处理时限", 1)
+    p1 = {
+        "block_id": "p1", "type": "PARAGRAPH", "parent_id": "h1", "order": 2,
+        "region": "body", "text": "在提交后24小时内必须完成审核。",
+        "source_locator": "r.docx#block=2",
+    }
+    p2 = {
+        "block_id": "p2", "type": "PARAGRAPH", "parent_id": "h1", "order": 3,
+        "region": "body", "text": "事件结束后2小时内。",
+        "source_locator": "r.docx#block=3",
+    }
+    p3 = {
+        "block_id": "p3", "type": "PARAGRAPH", "parent_id": "h1", "order": 4,
+        "region": "body", "text": "必须完成归档。",
+        "source_locator": "r.docx#block=4",
+    }
+    own_fact = _fact(
+        fact_id="f:own",
+        statement=p1["text"],
+        block_id="p1",
+        modality="MUST",
+    )
+    neighbor_fact = _fact(
+        fact_id="f:neighbor",
+        statement=p3["text"],
+        block_id="p3",
+        modality="MUST",
+    )
+    asset = _asset_with_frames(
+        facts=[own_fact, neighbor_fact], blocks=[h1, p1, p2, p3]
+    )
+
+    frames = _frames_by_origin(asset)
+    assert [
+        (row["anchor"], row["duration"], row["origin"])
+        for row in frames["f:own"]["time_constraints"]
+    ] == [("提交后", "24小时", "clause_parser_time_constraint")]
+    assert frames["f:own"]["clause_structure"]["own_time_constraint_count"] == 1
+    # Mere document adjacency is not scope authority. The standalone window
+    # remains observable in its own clause tree but cannot qualify p3.
+    assert frames["f:neighbor"]["time_constraints"] == []
 
 
 def test_table_cell_gets_row_and_column_header_mentions() -> None:

@@ -220,6 +220,45 @@ def test_paraphrase_projection_keeps_semantic_signature() -> None:
     assert first["scope"]["scope_type"] == second["scope"]["scope_type"] == "OWNERSHIP"
 
 
+def test_time_constraint_provenance_never_changes_semantic_signature() -> None:
+    first_fact = _v2_permission_fact()
+    first_fact["time_window_constraints"] = [
+        {
+            "raw": "提交后24小时内",
+            "anchor": "提交后",
+            "relation": "WITHIN",
+            "duration": "24小时",
+            "source_backed": True,
+            "origin": "first_source",
+            "evidence": [{"locator": "a.docx#block=1"}],
+        }
+    ]
+    second_fact = _v2_permission_fact()
+    second_fact["fact_id"] = "fact:perm2"
+    second_fact["time_window_constraints"] = [
+        {
+            "raw": "在提交后24小时以内",
+            "anchor": "提交后",
+            "relation": "WITHIN",
+            "duration": "24小时",
+            "source_backed": True,
+            "origin": "second_source",
+            "evidence": [{"locator": "b.xlsx#row=2"}],
+        }
+    ]
+
+    frames = frames_from_asset(
+        project_business_facts_to_semantic_frames(
+            _asset_with(first_fact, second_fact)
+        )
+    )
+    assert len(frames) == 2
+    assert frames[0]["time_constraints"] != frames[1]["time_constraints"]
+    assert frames[0]["resolution"]["semantic_signature"] == frames[1][
+        "resolution"
+    ]["semantic_signature"]
+
+
 def test_term_alias_is_skipped_with_typed_receipt_never_silent() -> None:
     term_alias = {
         "fact_id": "fact:alias",

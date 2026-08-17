@@ -6,15 +6,17 @@ Contract:
 - The envelope models only STRUCTURE, never business semantics: it answers
   "which section / list / table cell does this block live in" with exact
   coordinates and source text, so downstream clause parsing and frame
-  compilation can inherit list-parent conditions, table row/column headers
-  and section paths without re-scanning raw documents.
+  compilation can inherit list-parent scopes, table row/column headers with
+  exact header-cell lineage, and section paths without re-scanning raw
+  documents.
 - List nesting is recovered from ``numbering.level`` (docx ``w:ilvl``; promoted
   visible-marker lists default to level 0) with an order-scanned stack that is
   reset at every HEADING / TABLE boundary — list context never crosses a
   section. Without a level signal, no fake nesting is invented.
 - Table context maps a TABLE_CELL to its table, row/column index, row header
-  (first column text of the row) and column header (first-row header text).
-  Missing headers stay empty strings (never guessed).
+  (first column text of the row), column header (first-row header text), and
+  the header cells' block ids/locators. Missing headers stay empty strings
+  (never guessed).
 - Block lookup is unique-match only: a quote that matches several blocks
   resolves to nothing (ambiguity is surfaced in the receipt, never resolved
   by picking one).
@@ -147,6 +149,18 @@ def _build_table_context(
             tables_by_index[int(table.get("table_index"))] = table
         except (TypeError, ValueError):
             continue
+    cells_by_coordinate: dict[tuple[int, int, int], dict[str, Any]] = {}
+    for block in _list(document_ir.get("blocks")):
+        if (
+            not isinstance(block, dict)
+            or _text(block.get("type")) != "TABLE_CELL"
+        ):
+            continue
+        row_index = _int_or_none(block.get("row_index"))
+        column_index = _int_or_none(block.get("column_index"))
+        if row_index is None or column_index is None:
+            continue
+        cells_by_coordinate[(_table_index(block), row_index, column_index)] = block
     context: dict[str, dict[str, Any]] = {}
     for block in _list(document_ir.get("blocks")):
         if not isinstance(block, dict) or _text(block.get("type")) != "TABLE_CELL":
@@ -166,6 +180,16 @@ def _build_table_context(
             data_index = row_index - 1
             if 0 <= data_index < len(rows):
                 row_header = _norm(rows[data_index].get(headers[0]) if headers else "")
+        row_header_block = (
+            cells_by_coordinate.get((table_index, row_index, 0), {})
+            if row_index is not None and row_index >= 1 and row_header
+            else {}
+        )
+        column_header_block = (
+            cells_by_coordinate.get((table_index, 0, column_index), {})
+            if column_index is not None and column_header
+            else {}
+        )
         context[block_id] = {
             "table_id": _text(table.get("table_block_id") if table else ""),
             "table_index": table_index,
@@ -173,6 +197,18 @@ def _build_table_context(
             "column_index": column_index,
             "row_header": row_header,
             "column_header": column_header,
+            "row_header_block_id": _text(row_header_block.get("block_id")),
+            "row_header_locator": _text(
+                row_header_block.get("source_locator")
+                or row_header_block.get("locator")
+            ),
+            "column_header_block_id": _text(
+                column_header_block.get("block_id")
+            ),
+            "column_header_locator": _text(
+                column_header_block.get("source_locator")
+                or column_header_block.get("locator")
+            ),
         }
     return context
 

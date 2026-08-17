@@ -4,11 +4,12 @@ table coordinates (SPEC: QUALIBUG-CHINESE-SEMANTIC-ROOT-FIX-V1, P0-B).
 Contract:
 - This stage enriches EXISTING frames (qualibug.chinese-semantic-frame.v1)
   with the clause structure the parser found for their source block: list
-  parent conditions and exception scopes are inherited by list children,
-  table row/column headers become actor/condition mention candidates for table
-  cells, enumeration action candidates are added to action mentions, and own
-  block exception nodes are merged. Nothing here binds semantics to technical
-  objects (that is P0-D grounding).
+  parent conditions, exception scopes and explicit time windows are inherited
+  by list children; table row/column headers become actor/condition mention
+  candidates and typed time-header constraints for table cells; enumeration
+  action candidates are added to action mentions; and own-block time/exception
+  nodes are merged. Nothing here binds semantics to technical objects (that is
+  P0-D grounding).
 - The frame's fact-derived slots stay authoritative: enrichment only ADDS
   mentions/conditions the fact missed ("不丢"), never removes or overrides.
   When the enumeration interpretation is AMBIGUOUS the raw text is kept and
@@ -26,7 +27,10 @@ from __future__ import annotations
 from collections import Counter
 from typing import Any
 
-from .chinese_clause_parser import parse_block_text
+from .chinese_clause_parser import (
+    extract_explicit_time_constraints,
+    parse_block_text,
+)
 from .chinese_context_envelope import (
     block_context_for,
     locate_unique_block,
@@ -162,6 +166,79 @@ def _exceptions_of_block(
     ]
 
 
+def _time_constraints_of_block(
+    asset: dict[str, Any],
+    block: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Explicit typed time windows declared by one source block."""
+    from .chinese_clause_parser import clause_tree_for_block
+
+    tree = clause_tree_for_block(asset, _text(block.get("block_id")))
+    if not tree:
+        try:
+            tree = parse_block_text(
+                _text(block.get("text")),
+                source_id=_text(block.get("source_id")),
+                block_id=_text(block.get("block_id")),
+                block_type=_text(block.get("block_type")),
+                locator=_text(block.get("locator")),
+            )
+        except ValueError:
+            return []
+    return [
+        dict(row)
+        for row in _list(tree.get("time_constraints"))
+        if isinstance(row, dict)
+    ]
+
+
+def _time_constraint_identity(row: dict[str, Any]) -> tuple[str, ...]:
+    return tuple(
+        _norm(row.get(key))
+        for key in (
+            "anchor",
+            "relation",
+            "duration",
+            "operator",
+            "value",
+            "unit",
+            "deadline",
+        )
+    )
+
+
+def _lineaged_time_constraint(
+    row: dict[str, Any],
+    *,
+    origin: str,
+    evidence: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        **dict(row),
+        "origin": origin,
+        "evidence": [{**dict(evidence), "origin": origin}],
+    }
+
+
+def _merge_time_constraints(
+    frame: dict[str, Any],
+    candidates: list[dict[str, Any]],
+) -> None:
+    constraints = frame["time_constraints"]
+    existing = {
+        _time_constraint_identity(row)
+        for row in constraints
+        if isinstance(row, dict)
+    }
+    for candidate in candidates:
+        identity = _time_constraint_identity(candidate)
+        if not any(identity) or identity in existing:
+            continue
+        constraints.append(dict(candidate))
+        existing.add(identity)
+    frame["time_constraints"] = constraints
+
+
 def _next_condition_id(conditions: list[dict[str, Any]]) -> str:
     highest = 0
     for row in conditions:
@@ -195,6 +272,9 @@ def _enrich_frame_structure(
         "source_block_id": _text(block.get("block_id")),
         "source_block_type": _text(block.get("block_type")),
         "reason_codes": [],
+        "list_parent_time_constraint_count": 0,
+        "table_time_constraint_count": 0,
+        "own_time_constraint_count": 0,
     }
     block_type = _text(block.get("block_type"))
     frame_type = _text(frame.get("frame_type"))
@@ -202,6 +282,7 @@ def _enrich_frame_structure(
     # ── 1. list parent condition/exception scope inheritance (SPEC §7.3) ──
     list_parent_conditions: list[dict[str, Any]] = []
     list_parent_exceptions: list[dict[str, Any]] = []
+    list_parent_time_constraints: list[dict[str, Any]] = []
     if block_type == "LIST_ITEM":
         list_context = _dict(block.get("list_context"))
         ancestor_chain = [
@@ -234,6 +315,24 @@ def _enrich_frame_structure(
                             "locator": _text(ancestor.get("locator")),
                         }
                     )
+            for time_constraint in _time_constraints_of_block(asset, ancestor):
+                identity = _time_constraint_identity(time_constraint)
+                if not any(identity) or identity in {
+                    _time_constraint_identity(row)
+                    for row in list_parent_time_constraints
+                }:
+                    continue
+                list_parent_time_constraints.append(
+                    _lineaged_time_constraint(
+                        time_constraint,
+                        origin="list_parent_time_inheritance",
+                        evidence={
+                            "source_id": _text(ancestor.get("source_id")),
+                            "document_block_id": _text(ancestor.get("block_id")),
+                            "locator": _text(ancestor.get("locator")),
+                        },
+                    )
+                )
         if list_parent_conditions:
             conditions = frame["conditions"]
             existing_raws = {_norm(row.get("raw")) for row in conditions}
@@ -290,6 +389,10 @@ def _enrich_frame_structure(
                 existing_identities.add(identity)
             frame["exceptions"] = frame_exceptions
         structure["list_parent_exception_count"] = len(list_parent_exceptions)
+        _merge_time_constraints(frame, list_parent_time_constraints)
+        structure["list_parent_time_constraint_count"] = len(
+            list_parent_time_constraints
+        )
 
     # ── 2. table row/column header context (SPEC §7.2) ──
     table_context = _dict(block.get("table_context"))
@@ -302,6 +405,16 @@ def _enrich_frame_structure(
             "column_header": column_header,
             "row_index": table_context.get("row_index"),
             "column_index": table_context.get("column_index"),
+            "row_header_block_id": _text(
+                table_context.get("row_header_block_id")
+            ),
+            "row_header_locator": _text(table_context.get("row_header_locator")),
+            "column_header_block_id": _text(
+                table_context.get("column_header_block_id")
+            ),
+            "column_header_locator": _text(
+                table_context.get("column_header_locator")
+            ),
         }
         # Row header → actor mention candidate when the source omitted it.
         actor = frame["actor"]
@@ -350,11 +463,47 @@ def _enrich_frame_structure(
                 )
             frame["conditions"] = conditions
 
+        table_time_constraints = [
+            _lineaged_time_constraint(
+                row,
+                origin="table_column_time_header",
+                evidence={
+                    "source_id": _text(block.get("source_id")),
+                    "table_id": _text(table_context.get("table_id")),
+                    "column_index": table_context.get("column_index"),
+                    "document_block_id": _text(
+                        table_context.get("column_header_block_id")
+                    ),
+                    "locator": _text(
+                        table_context.get("column_header_locator")
+                    ),
+                },
+            )
+            for row in extract_explicit_time_constraints(column_header)
+        ]
+        _merge_time_constraints(frame, table_time_constraints)
+        structure["table_time_constraint_count"] = len(table_time_constraints)
+
     # ── 3. clause tree structure: conditions, enumeration, exceptions ──
     from .chinese_clause_parser import clause_tree_for_block
 
     tree = clause_tree_for_block(asset, _text(block.get("block_id")))
     if tree:
+        own_time_constraints = [
+            _lineaged_time_constraint(
+                row,
+                origin="clause_parser_time_constraint",
+                evidence={
+                    "source_id": _text(block.get("source_id")),
+                    "document_block_id": _text(block.get("block_id")),
+                    "locator": _text(block.get("locator")),
+                },
+            )
+            for row in _list(tree.get("time_constraints"))
+            if isinstance(row, dict)
+        ]
+        _merge_time_constraints(frame, own_time_constraints)
+        structure["own_time_constraint_count"] = len(own_time_constraints)
         # The frame's own block conditions merge (never override fact-derived
         # conditions; the parser's leaf split only ADDS what the fact missed).
         conditions = frame["conditions"]
@@ -457,6 +606,9 @@ def enrich_frames_with_clause_structure(asset: dict[str, Any]) -> dict[str, Any]
     unlocated = 0
     no_signal = 0
     list_parent_exception_count = 0
+    list_parent_time_constraint_count = 0
+    table_time_constraint_count = 0
+    own_time_constraint_count = 0
     reason_counts: Counter = Counter()
     for frame in frames:
         structure = _enrich_frame_structure(asset, frame)
@@ -471,6 +623,15 @@ def enrich_frames_with_clause_structure(asset: dict[str, Any]) -> dict[str, Any]
             reason_counts[_text(code)] += 1
         list_parent_exception_count += int(
             structure.get("list_parent_exception_count", 0) or 0
+        )
+        list_parent_time_constraint_count += int(
+            structure.get("list_parent_time_constraint_count", 0) or 0
+        )
+        table_time_constraint_count += int(
+            structure.get("table_time_constraint_count", 0) or 0
+        )
+        own_time_constraint_count += int(
+            structure.get("own_time_constraint_count", 0) or 0
         )
         frame["clause_structure"] = structure
         errors = validate_semantic_frame(frame)
@@ -487,6 +648,11 @@ def enrich_frames_with_clause_structure(asset: dict[str, Any]) -> dict[str, Any]
             "unlocated_count": unlocated,
             "no_signal_count": no_signal,
             "list_parent_exception_count": list_parent_exception_count,
+            "list_parent_time_constraint_count": (
+                list_parent_time_constraint_count
+            ),
+            "table_time_constraint_count": table_time_constraint_count,
+            "own_time_constraint_count": own_time_constraint_count,
             "reason_code_counts": dict(sorted(reason_counts.items())),
             "signature_recomputed": True,
         }

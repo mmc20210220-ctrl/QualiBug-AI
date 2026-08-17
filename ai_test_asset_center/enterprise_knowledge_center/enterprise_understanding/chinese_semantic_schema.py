@@ -279,9 +279,10 @@ def empty_frame(
 # ── Semantic signature ──
 # The signature is the dedup/merge authority (like
 # structured_fact_compiler._semantic_signature) but computed over frame slots:
-# typed structure + normalized concept refs. Quote, evidence, frame_id and
-# resolution metadata never participate, so two frames that express the same
-# business semantics (after concept normalization) collide on one signature.
+# typed structure + normalized concept refs. Quote, raw constraint wording,
+# provenance/evidence, frame_id and resolution metadata never participate.
+# Two frames that express the same business semantics (after concept
+# normalization) collide on one signature.
 
 
 def _condition_signature(row: dict[str, Any]) -> dict[str, Any]:
@@ -315,11 +316,44 @@ def _exception_signature(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+_CONSTRAINT_PROVENANCE_KEYS = frozenset(
+    {
+        "confidence",
+        "constraint_id",
+        "derivation",
+        "document_block_id",
+        "evidence",
+        "locator",
+        "origin",
+        "quote",
+        "quote_hash",
+        "raw",
+        "resolution_status",
+        "source_backed",
+        "source_id",
+        "source_refs",
+        "source_span",
+    }
+)
+
+
+def _constraint_semantic_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            _text(key): _constraint_semantic_value(item)
+            for key, item in sorted(value.items())
+            if _text(key) not in _CONSTRAINT_PROVENANCE_KEYS
+        }
+    if isinstance(value, list):
+        return [_constraint_semantic_value(item) for item in value]
+    return value
+
+
 def _constraint_signatures(rows: Iterable[Any]) -> list[str]:
     result = []
     for row in rows:
         if isinstance(row, dict):
-            result.append(_canonical_json(row))
+            result.append(_canonical_json(_constraint_semantic_value(row)))
     return sorted(set(result))
 
 

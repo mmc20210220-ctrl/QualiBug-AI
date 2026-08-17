@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from ._explicit_fact_semantic_normalization_conditions import *
+from .chinese_clause_parser import extract_explicit_time_constraints
 
 def _normalized_state_effect(statement: str) -> dict[str, Any] | None:
     matches = list(_STATE_FROM_TO_RE.finditer(statement))
@@ -20,20 +21,13 @@ def _normalized_state_effect(statement: str) -> dict[str, Any] | None:
 
 
 def _normalized_time_window(statement: str) -> dict[str, Any] | None:
-    matches = list(_WITHIN_WINDOW_RE.finditer(statement))
-    if len(matches) != 1:
-        return None
-    match = matches[0]
-    anchor = _text(match.group("anchor"))
-    duration = _text(match.group("duration"))
-    if not anchor or not duration:
+    constraints = extract_explicit_time_constraints(statement)
+    if len(constraints) != 1:
         return None
     return {
-        "raw": match.group(0),
-        "anchor": anchor,
-        "relation": "WITHIN",
-        "duration": duration,
-        "source_backed": True,
+        key: value
+        for key, value in constraints[0].items()
+        if key != "resolution_status"
     }
 
 

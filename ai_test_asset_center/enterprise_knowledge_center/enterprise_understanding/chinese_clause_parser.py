@@ -1,19 +1,21 @@
 """Atomic Chinese clause parsing — structural candidates, never final facts.
 
 SPEC: QUALIBUG-CHINESE-SEMANTIC-ROOT-FIX-V1 (P0-B: atomic clause splitting,
-negation scope, condition tree, exception tree).
+negation scope, condition tree, exception tree, explicit time windows).
 
 Contract:
 - This is the CANDIDATE layer for Chinese clause structure. It recognizes
-  LANGUAGE FUNCTION words only (modality, negation, enumeration, condition and
-  exception markers — the generic vocabulary SPEC §9.1 / §9.4 lists). It never
+  LANGUAGE FUNCTION words only (modality, negation, enumeration, condition,
+  exception/time markers and duration units — the generic vocabulary SPEC
+  §9.1 / §9.4 lists). It never
   contains industry terms, role names, action dictionaries or benchmark
   vocabulary, and it never decides which candidate is the final action, actor
   or object — that arbitration belongs to concept resolution and grounding
   (P0-C / P0-D).
 - Complex rules are split into atomic clauses WITHOUT losing shared structure:
   enumeration parts inherit the sentence modality, conditions, exceptions and
-  negation scope; list children inherit their list parent's condition.
+  negation scope; list children inherit their list parent's condition,
+  exception scope and explicit anchored time window.
 - Negation scope is explicit: modal prohibitions (不得/禁止/…) are
   ACTION_SCOPE; non-modal negations of states (未发货/无库存/尚未…) are
   CONDITION_ONLY — never a second prohibition; 非X+modal is an ACTOR_NEGATION
@@ -59,6 +61,23 @@ _CONDITION_WHEN_HEAD = re.compile(
 )
 _CONDITION_TIME = re.compile(
     r"(?P<v>[^，,；;。]{1,60}?(?:之前|以前|之后|以后|后))(?=自动|必须|应当|方可|则|，|,|$)"
+)
+_TIME_NUMBER = r"(?:\d+(?:\.\d+)?|[零〇一二两三四五六七八九十百千万半]+)"
+_TIME_UNIT = (
+    r"(?:个?工作日|个?自然日|个?星期|个?小时|个?月|个?周|"
+    r"毫秒|分钟|小时|年|天|日|分|秒)"
+)
+_TIME_DURATION = rf"{_TIME_NUMBER}\s*{_TIME_UNIT}"
+_TIME_ANCHOR = r"[^，,；;。:：]{1,48}?(?:之前|以前|之后|以后|前|后)"
+_TIME_WINDOW_WITH_HEAD = re.compile(
+    rf"(?:在|当|如果|若|一旦)\s*"
+    rf"(?P<scope>(?P<anchor>{_TIME_ANCHOR})\s*"
+    rf"(?P<duration>{_TIME_DURATION})\s*(?:以内|之内|内))"
+)
+_TIME_WINDOW_AT_BOUNDARY = re.compile(
+    rf"(?:^|[，,；;：:])\s*"
+    rf"(?P<scope>(?P<anchor>{_TIME_ANCHOR})\s*"
+    rf"(?P<duration>{_TIME_DURATION})\s*(?:以内|之内|内))"
 )
 _CONDITION_STATE = re.compile(
     r"(?P<v>(?:已|未|待|处于)[^，,；;。]{1,32}?)"
@@ -131,6 +150,75 @@ def _clean_sentence(text: str) -> str:
     return _TRAILING_PUNCT.sub("", _norm(text))
 
 
+def extract_explicit_time_constraints(text: str) -> list[dict[str, Any]]:
+    """Extract only explicit anchored duration windows from Chinese grammar.
+
+    The extractor recognizes time function words and units, never business
+    entities or actions. Every returned coordinate is a verbatim source span;
+    it does not infer a missing trigger, calendar, deadline policy, or unit.
+    """
+    value = _clean_sentence(_strip_visible_marker(_text(text)))
+    candidates: list[tuple[int, int, int, dict[str, Any]]] = []
+    for priority, pattern in enumerate(
+        (_TIME_WINDOW_WITH_HEAD, _TIME_WINDOW_AT_BOUNDARY)
+    ):
+        for match in pattern.finditer(value):
+            raw = _norm(match.group("scope"))
+            anchor = _norm(match.group("anchor"))
+            duration = _norm(match.group("duration"))
+            structural_head = re.match(
+                r"^(?:并且|同时|以及|且|在|当|如果|若|一旦)\s*",
+                anchor,
+            )
+            if structural_head:
+                anchor = _norm(anchor[structural_head.end() :])
+                raw = _norm(raw[structural_head.end() :])
+            if not raw or not anchor or not duration:
+                continue
+            start, end = match.span("scope")
+            candidates.append(
+                (
+                    priority,
+                    start,
+                    end,
+                    {
+                        "raw": raw,
+                        "anchor": anchor,
+                        "relation": "WITHIN",
+                        "duration": duration,
+                        "source_backed": True,
+                        "resolution_status": "RESOLVED",
+                    },
+                )
+            )
+
+    selected: list[tuple[int, int, int, dict[str, Any]]] = []
+    occupied: list[tuple[int, int]] = []
+    for candidate in sorted(
+        candidates, key=lambda item: (item[0], item[1], item[2])
+    ):
+        _priority, start, end, _row = candidate
+        if any(
+            start < used_end and end > used_start
+            for used_start, used_end in occupied
+        ):
+            continue
+        selected.append(candidate)
+        occupied.append((start, end))
+
+    result: list[dict[str, Any]] = []
+    identities: set[tuple[str, str, str]] = set()
+    for _priority, _start, _end, row in sorted(
+        selected, key=lambda item: (item[1], item[2])
+    ):
+        identity = (row["anchor"], row["relation"], row["duration"])
+        if identity in identities:
+            continue
+        result.append(row)
+        identities.add(identity)
+    return result
+
+
 def _has_clause_signal(text: str) -> bool:
     """A block is parsed only when it carries at least one structural signal."""
     value = _norm(text)
@@ -153,6 +241,7 @@ def _has_clause_signal(text: str) -> bool:
         or _EXCEPTION_EXCLUDE_SUFFIX.search(value)
         or _ENUMERATION.search(value)
         or _COLON_END.search(value)
+        or extract_explicit_time_constraints(value)
     )
 
 
@@ -570,6 +659,22 @@ def parse_block_text(
     conditions, combinator = _extract_conditions(
         base, modal_start, two_part_condition, until_condition
     )
+    time_constraints = extract_explicit_time_constraints(sentence)
+    for constraint in time_constraints:
+        raw = _norm(constraint.get("raw"))
+        if raw and raw not in conditions:
+            conditions.append(raw)
+    if len(conditions) == 1 and not combinator:
+        combinator = "SINGLE_CONDITION"
+    elif len(conditions) > 1:
+        has_and = bool(_CONDITION_COMBINATOR_AND.search(base))
+        has_or = bool(_CONDITION_COMBINATOR_OR.search(base))
+        if has_and and not has_or:
+            combinator = "AND"
+        elif has_or and not has_and:
+            combinator = "OR"
+        elif combinator in ("", "SINGLE_CONDITION"):
+            combinator = "UNRESOLVED"
 
     # List header condition: a LIST_ITEM ending with ：/: IS the condition of
     # its children ("已取消订单：") — parsed as a condition, never an action.
@@ -663,6 +768,7 @@ def parse_block_text(
             for index, raw in enumerate(dict.fromkeys(conditions), start=1)
         ],
         "condition_combinator": combinator,
+        "time_constraints": time_constraints,
         "exceptions": exception_nodes,
         "clauses": clauses,
         "enumeration": enumeration,
@@ -699,6 +805,16 @@ def validate_clause_tree(tree: dict[str, Any]) -> list[str]:
     for index, row in enumerate(_list(tree.get("exceptions"))):
         if not isinstance(row, dict) or not _text(row.get("exception_id")):
             errors.append(f"clause_tree_exception_invalid:{index}")
+    for index, row in enumerate(_list(tree.get("time_constraints"))):
+        if (
+            not isinstance(row, dict)
+            or not _text(row.get("raw"))
+            or not _text(row.get("anchor"))
+            or not _text(row.get("duration"))
+            or _text(row.get("relation")) != "WITHIN"
+            or _text(row.get("resolution_status")) != "RESOLVED"
+        ):
+            errors.append(f"clause_tree_time_constraint_invalid:{index}")
     for index, row in enumerate(_list(tree.get("clauses"))):
         if not isinstance(row, dict) or not _text(row.get("clause_id")):
             errors.append(f"clause_tree_clause_invalid:{index}")
@@ -768,6 +884,7 @@ def parse_chinese_clause_trees(asset: dict[str, Any]) -> dict[str, Any]:
                     "block_id": tree["block_id"],
                     "modality": tree["modality"]["type"],
                     "clause_count": len(tree["clauses"]),
+                    "time_constraint_count": len(tree["time_constraints"]),
                 },
             )
         )

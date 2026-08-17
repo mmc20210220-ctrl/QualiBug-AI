@@ -194,8 +194,8 @@ by replacing host methods:
 | Scan-envelope account ownership (workspace reconciliation) | `db_persistence.py` (`ensure_workspace_owned_project`) + `private_pilot_scan_handlers.py` (`_handle_v12_scan`) |
 | Completion & funnel SSOT | `qualibug.obligation-attempt-ledger.v1` (sealed by the discovery mainline) |
 | Discovery funnel closure | `discovery_funnel.py` |
-| Chinese semantic frame SSOT (P0-A) | `enterprise_understanding/chinese_semantic_schema.py` (frame schema `qualibug.chinese-semantic-frame.v1`, slot statuses, reason codes, semantic signature) + `chinese_semantic_receipts.py` (typed content-addressed receipts) + `chinese_semantic_ledger_adapter.py` (fact → frame projection, `qualibug.chinese-semantic-frame-ledger.v1`) + `chinese_semantic_behavior_ir_adapter.py` (frame → Behavior IR projection) |
-| Chinese clause structure (P0-B) | `enterprise_understanding/chinese_context_envelope.py` (block coordinates over `document_structure_assets`: section paths, list-stack ancestor chains, table row/column headers, unique quote lookup — structure only, zero business inference) + `chinese_clause_parser.py` (atomic clause trees `qualibug.chinese-clause-tree.v1`: enumeration action candidates, negation scope, condition leaves, exception nodes; exception-only list headers are never duplicated as positive conditions; language-function words only, no industry vocabulary) + `chinese_semantic_frame_compiler.py` (frame enrichment: list-parent condition and exception-scope inheritance with source-block lineage, table header mention injection, enumeration mentions, own-block exception merge; signature recomputed; idempotent; inherited-exception count receipted) |
+| Chinese semantic frame SSOT (P0-A) | `enterprise_understanding/chinese_semantic_schema.py` (frame schema `qualibug.chinese-semantic-frame.v1`, slot statuses, reason codes, semantic signature; constraint signatures include typed coordinates but exclude raw wording, source lineage and resolution metadata) + `chinese_semantic_receipts.py` (typed content-addressed receipts) + `chinese_semantic_ledger_adapter.py` (fact → frame projection, `qualibug.chinese-semantic-frame-ledger.v1`) + `chinese_semantic_behavior_ir_adapter.py` (frame → Behavior IR projection) |
+| Chinese clause structure (P0-B) | `enterprise_understanding/chinese_context_envelope.py` (block coordinates over `document_structure_assets`: section paths, list-stack ancestor chains, table row/column headers with header-cell block/locator lineage, unique quote lookup — structure only, zero business inference) + `chinese_clause_parser.py` (atomic clause trees `qualibug.chinese-clause-tree.v1`: enumeration action candidates, negation scope, condition leaves, exception nodes, explicit anchored duration windows; exception-only list headers are never duplicated as positive conditions; language-function words/units only, no industry vocabulary) + `chinese_semantic_frame_compiler.py` (frame enrichment: list-parent condition/exception/time-scope inheritance with source-block lineage, table header mention and typed-time injection, enumeration mentions, own-block time/exception merge; signature recomputed; idempotent; inherited/table/own time counts receipted) |
 | Chinese context resolution (P0-C) | `enterprise_understanding/chinese_context_resolver.py` (frame-level omitted-actor recovery from unique evidence — only-if subject, unique prior frame in the same section, unique section heading; typed mention-level coreference: 该X/本X/此X explicit same-sentence nouns, bare pronouns need exactly one current/prior typed candidate, and a unique prior object may fill only an empty object slot with source-frame lineage; context-injected actors cannot self-corroborate; `document_context` section/list/neighbor population; UNKNOWN never force-bound; raw text never rewritten) |
 | Concept & grounding (P0-D) | `enterprise_understanding/business_concept_registry.py` (explicit-evidence concept layer: label→canonical with priority understanding_model > identity_registry > permission_matrix > data_tables; similarity never merges) + `chinese_semantic_grounding.py` (evidence chains per SPEC §12.2: actor = permission matrix > roles > UI contract > concept registry; operation = rule ref > summary verbatim > description > rule_to_interface > formal UI contract > structural entity+CRUD; entity = declared object labels/aliases; state = field-description enum / state machines; scope = ownership phrases → structured OWN; every binding has a typed GROUNDED/AMBIGUOUS/UNKNOWN receipt) |
 | Legacy Chinese parse demotion (P0-E) | `behavior_ir_core.py` `build_behavior_ir_from_knowledge_asset` (frame-confirmation gate over the six legacy Chinese-text parse products + `frame_family_evidence` on invariants + `model["legacy_semantic_fallback_receipt"]`) + `_chinese_business_comprehension_extractor_v1.py` (candidate marking) + `_chinese_business_comprehension/__init__.py` `apply_v1_extractor_frame_confirmation` (phase-2 rule confirmation gate + `asset["v1_extractor_demotion_receipt"]`) + `obligation_compiler_base.py` (phase-3 `_FRAME_TYPE_FAMILY` family SSOT + CJK family/ownership counting) + `obligation_compiler_privacy_pair_base.py` (phase-3 CJK privacy-policy marker counting) + `behavior_semantic_mapper.py` (phase-4 finding-enrichment neutralization: no built-in path/role/SQL/industry dictionaries) |
@@ -228,12 +228,14 @@ semantic signature. Legacy Chinese parsing is demoted to observable candidate hi
 Chinese clause structure contract (P0-B): the three stages run in
 `composition.py` right after the frame projection (full and incremental
 paths): envelope → clause trees → frame enrichment. They are CANDIDATE
-layers — they add structure the facts missed (inherited conditions and
-list-scoped exceptions, table header mentions, enumeration action candidates,
-own-block exception nodes) but never
+layers — they add structure the facts missed (inherited conditions,
+list-scoped exceptions and anchored time windows; table header mentions and
+typed time windows; enumeration action candidates; own-block time/exception
+nodes) but never
 override fact-derived slots and never bind semantics to technical objects
 (that is P0-D grounding). Only language function words (modality, negation,
-enumeration, condition/exception markers per SPEC §9.1/§9.4) are used; no
+enumeration, condition/exception/time markers and duration units per SPEC
+§9.1/§9.4) are used; no
 industry terms, role names or benchmark vocabulary. Ambiguity is explicit:
 `CLAUSE_SEGMENTATION_AMBIGUOUS` / `NEGATION_SCOPE_AMBIGUOUS` /
 `CONDITION_SCOPE_AMBIGUOUS` / `EXCEPTION_SCOPE_UNRESOLVED`, never a forced
@@ -242,8 +244,14 @@ An exception declared by a list ancestor applies to each structural child and
 keeps that ancestor's source id, block id and locator as lineage; an
 exception-only header such as `除X外：` is not also inherited as a positive
 condition. The enrichment receipt exposes the inherited exception-scope count.
-The frame semantic signature is recomputed after enrichment (conditions and
-actor mentions are typed slots), keeping frames fail-closed valid; the
+Explicit anchored windows (`X后/前 + duration + 内/以内/之内`) become typed
+`time_constraints` on their own frame, structural list children, or table
+column children. Every inherited constraint retains its parent/header source
+lineage; mere previous/next paragraph adjacency is never scope authority. The
+enrichment receipt exposes list-parent, table-header and own-block time counts.
+Raw wording and source/evidence metadata remain on the constraint for audit but
+are excluded from the semantic signature. The frame semantic signature is
+recomputed after enrichment, keeping frames fail-closed valid; the
 Behavior IR channel is untouched, so P0-B introduces zero production
 behavior change until grounding activates the frame channel.
 

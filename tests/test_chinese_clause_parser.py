@@ -124,6 +124,40 @@ def test_list_header_is_a_condition_never_an_action() -> None:
     ] == [("管理员", "EXCLUSION")]
 
 
+def test_explicit_time_windows_are_typed_without_business_vocabulary() -> None:
+    anchored = _tree("在触发后2个工作日内必须完成处理。")
+    assert anchored["time_constraints"] == [
+        {
+            "raw": "触发后2个工作日内",
+            "anchor": "触发后",
+            "relation": "WITHIN",
+            "duration": "2个工作日",
+            "source_backed": True,
+            "resolution_status": "RESOLVED",
+        }
+    ]
+
+    list_scope = _tree("事件结束后二十四小时以内：", block_type="LIST_ITEM")
+    assert list_scope["time_constraints"] == [
+        {
+            "raw": "事件结束后二十四小时以内",
+            "anchor": "事件结束后",
+            "relation": "WITHIN",
+            "duration": "二十四小时",
+            "source_backed": True,
+            "resolution_status": "RESOLVED",
+        }
+    ]
+
+    combined = _tree("如果条件成立，并且提交之后24小时以内，必须处理。")
+    assert [row["raw"] for row in combined["conditions"]] == [
+        "条件成立",
+        "提交之后24小时以内",
+    ]
+    assert combined["condition_combinator"] == "AND"
+    assert combined["time_constraints"][0]["anchor"] == "提交之后"
+
+
 def test_vague_text_never_forced_into_facts() -> None:
     # SPEC §18.4 negatives: vague wording must not become a definite rule.
     for vague in (

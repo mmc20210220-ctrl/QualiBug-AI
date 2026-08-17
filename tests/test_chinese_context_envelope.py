@@ -1,7 +1,8 @@
 """P0-B: Semantic Context Envelope — structural coordinates over the IR.
 
 Covers list-stack ancestor chains (with cross-section isolation), table
-row/column header coordinates, section paths and unique-match block lookup.
+row/column header coordinates and source lineage, section paths and
+unique-match block lookup.
 """
 
 from __future__ import annotations
@@ -148,6 +149,10 @@ def test_table_cell_gets_row_and_column_headers() -> None:
     assert ctx["column_index"] == 1
     assert ctx["row_header"] == "申请人"
     assert ctx["column_header"] == "待审核"
+    assert ctx["row_header_block_id"] == "c2"
+    assert ctx["row_header_locator"] == "r.docx#table=0;row=1;cell=0"
+    assert ctx["column_header_block_id"] == "c1"
+    assert ctx["column_header_locator"] == "r.docx#table=0;row=0;cell=1"
     # Header cells themselves carry coordinates but no row/column header text.
     ctx0 = block_context_for(asset, "s1", "c1")["table_context"]
     assert ctx0["column_header"] == "待审核"
