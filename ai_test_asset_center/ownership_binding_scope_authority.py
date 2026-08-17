@@ -25,6 +25,7 @@ from typing import Any
 from .obligation_compiler_base import (
     _ownership_binder_location,
     _ownership_params_declared_on_operation,
+    _is_actor_identity_body_target,
 )
 
 SCHEMA_VERSION = "qualibug.ownership-binding-scope-authority.v1"
@@ -244,6 +245,14 @@ def _project_body_steps(
                 new_plan.append(step)
                 continue
             if _ownership_binder_location(operation, name=target) != "body":
+                new_plan.append(step)
+                continue
+            # Only the acting arm's own identity is safe to seal here. A resource
+            # id swept in by operation-level ownership language (orderId/addressId)
+            # is a resource the caller owns, not the caller's identity — sealing it
+            # to the arm actor would cross-bind an entity id into the actor
+            # coordinate. Leave those for their own (list-read) channel.
+            if not _is_actor_identity_body_target(operation, target):
                 new_plan.append(step)
                 continue
             actor_ref = _text(step.get("actor_ref"))

@@ -42,6 +42,25 @@ def _validation_body_operation() -> dict:
     }
 
 
+def _resource_id_body_operation() -> dict:
+    """A resource id swept in by operation-level ownership language, not identity."""
+
+    return {
+        "id": "pay-order",
+        "method": "POST",
+        "path": "/api/orders/{orderId}/pay",
+        "summary": "支付自己名下的订单",
+        "request_schema": {
+            "type": "object",
+            "properties": {
+                "orderId": {"type": "string", "description": "the order id"},
+            },
+            "required": ["orderId"],
+        },
+        "request_example": {"orderId": "{orderId}"},
+    }
+
+
 def test_query_scope_is_sealed_per_step_and_removed_from_global_binding() -> None:
     from ai_test_asset_center.ownership_binding_scope_authority import (
         seal_ownership_binding_scopes,
@@ -294,3 +313,41 @@ def test_runtime_resolves_validation_body_to_different_actor_ids() -> None:
     assert receipt["status"] == "PROJECTED"
     assert "U-A" not in repr(receipt)
     assert "U-B" not in repr(receipt)
+
+
+def test_resource_id_body_target_is_not_sealed_to_actor_identity() -> None:
+    from ai_test_asset_center.ownership_binding_scope_authority import (
+        seal_ownership_binding_scopes,
+    )
+
+    exp = {
+        "binding_plan": [
+            {
+                "target": "orderId",
+                "status": "runtime_resolvable",
+                "source_priority": "ownership_identity_param",
+                "body_template_paths": ["orderId"],
+            }
+        ],
+        "control_plan": [
+            {
+                "step_id": "control_1",
+                "operation_ref": "pay-order",
+                "actor_ref": "actor-a",
+                "body": {"orderId": "{orderId}"},
+            }
+        ],
+        "treatment_plan": [],
+    }
+    sealed, receipt = seal_ownership_binding_scopes(
+        exp,
+        obligation={"risk_family": "validation", "property": {}},
+        behavior_ir={"operations": [_resource_id_body_operation()]},
+    )
+
+    # orderId is a resource the caller owns, not the caller's identity. It must
+    # NOT be rewritten to an actor_identity_ref coordinate; it stays a visible
+    # unsealed binding (resolved by the list-read/fixture channel, not here).
+    assert sealed["control_plan"][0]["body"]["orderId"] == "{orderId}"
+    assert "actor_identity_ref:" not in repr(sealed["control_plan"][0]["body"])
+    assert receipt["removed_body_targets"] == []

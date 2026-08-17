@@ -208,6 +208,13 @@ def _project_body_identity_coordinates(
         )
         if not target:
             return node
+        # Only compile-sealed actor coordinates are the acting arm's own
+        # identity. A legacy ``{orderId}`` body placeholder is a resource the
+        # caller owns (or a field resolved by the list-read/fixture channel),
+        # never the actor identity — leave it untouched rather than cross-bind
+        # an entity id into the actor coordinate.
+        if coordinate_source != "sealed_actor_identity_ref":
+            return node
         if (
             target not in ownership_params
             or _ownership_binder_location(operation, name=target) != "body"

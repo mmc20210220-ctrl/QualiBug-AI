@@ -208,6 +208,59 @@ def _param_key(name: str) -> str:
     return re.sub(r"[^a-z0-9_]+", "", _text(name).lower())
 
 
+def _field_description(operation: dict[str, Any], target: str) -> str:
+    """Find the target field's own schema description (top-level or content media)."""
+
+    wanted = _param_key(target)
+
+    def walk(properties: dict[str, Any]) -> str:
+        for field_name, field_schema in properties.items():
+            if not isinstance(field_schema, dict):
+                continue
+            if _param_key(field_name) == wanted:
+                desc = _text(field_schema.get("description"))
+                if desc:
+                    return desc
+            nested = walk(_dict(field_schema.get("properties")))
+            if nested:
+                return nested
+        return ""
+
+    schema = _dict(_dict(operation).get("request_schema"))
+    desc = walk(_dict(schema.get("properties")))
+    if desc:
+        return desc
+    for media in _dict(schema.get("content")).values():
+        desc = walk(_dict(_dict(_dict(media).get("schema")).get("properties")))
+        if desc:
+            return desc
+    return ""
+
+
+def _is_actor_identity_body_target(operation: dict[str, Any], name: str) -> bool:
+    """Whether a body target is the acting arm's own identity (safe to seal).
+
+    Only two explicit identity signals qualify:
+
+    1. a generic ownership-key name (``userId``/``ownerId``/``accountId``/…), or
+    2. a field whose own description declares restrictive caller scope
+       (e.g. ``sellerId`` documented as 只能以自己作为 sellerId).
+
+    A mere id-shaped field swept in by operation-level ownership language
+    (``orderId``, ``addressId``, …) is a RESOURCE the caller owns, not the
+    caller's identity — sealing it to the arm actor's identity would cross-bind
+    an entity id into the actor coordinate, so it must stay unsealed.
+    """
+    target = _text(name)
+    if not target:
+        return False
+    if is_ownership_key(target):
+        return True
+    return _ownership_param_description_declares_scope(
+        _field_description(operation, target)
+    )
+
+
 def _is_ownership_param_name(name: str) -> bool:
     # Ownership-key vocabulary is a single SSOT: the read-side protocol's
     # suffix matcher (fromUserId/toUserId/ownerId/… all end with an owner
