@@ -7,6 +7,8 @@ on:
     branches: [main]
     paths:
       - '.github/.reasoner-persisted-graph-context-root-fix-trigger'
+  schedule:
+    - cron: '*/5 * * * *'
 
 permissions:
   contents: write
@@ -18,6 +20,7 @@ concurrency:
 jobs:
   root-fix:
     if: >-
+      github.event_name == 'schedule' ||
       github.event_name == 'push' ||
       github.event.issue.title == 'RUN_REASONER_PERSISTED_GRAPH_CONTEXT_ROOT_FIX_20260817'
     runs-on: ubuntu-latest
