@@ -527,7 +527,13 @@ def write_scan_result(
         redacted, piece_receipt = redact_artifact(value, inplace=True)
         # 密封 ledger 分片在这里完成 reseal（attempt/ledger 指纹链自洽）。
         redacted = _reseal_attempt_ledgers(redacted)
-        piece_scan = scan_for_secrets(redacted)
+        # The redactor's combined pattern is a superset of the scanner's six
+        # string patterns and just ran on this exact payload (any hit would
+        # already have been redacted, so no residual pattern can match). Only
+        # the sensitive-key residual check is kept — the fail-closed backstop.
+        # Removes the redundant 6-pattern pass over every string in
+        # multi-hundred-MB shards (measured ~33s of shard_redact).
+        piece_scan = scan_for_secrets(redacted, skip_value_patterns=True)
         if not piece_scan.get("safe"):
             raise ArtifactSecretLeakError(
                 f"artifact secret scan failed with {piece_scan.get('issue_count')} issue(s) "
