@@ -373,6 +373,15 @@ def compile_experiments(
     planning_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Compile and project one governed database observation/oracle chain."""
+    from .rescue_dedupe import compile_rescue_cache_stats
+
+    _compile_rescue_before = compile_rescue_cache_stats()
+    # Serial compile base (batch-context aware). The concurrent wrapper
+    # (experiment_compile_concurrent) is NOT wired here: real-scan measurement
+    # showed it changes compile semantics (rescued=True 42 -> 0) because it
+    # does not establish the per-batch Behavior-IR index bundle the compile
+    # chain consumes; wiring it requires fixing that first. QUALIBUG_COMPILE_CONCURRENCY=1
+    # is not consulted on this path.
     pack = _base._base.compile_experiments(
         obligations,
         behavior_ir=behavior_ir,
@@ -381,7 +390,8 @@ def compile_experiments(
         compile_one=compile_experiment_for_obligation,
         available_adapters=available_adapters,
     )
-    # Abstract → Runtime Materialization → concrete recompile (no parallel pipeline).
+    # Abstract → Runtime Materialization → concrete recompile (serial,
+    # content-addressed rescue dedupe inside the materialization loop).
     from .experiment_runtime_materialization import (
         materialize_and_recompile_abstract_pack,
     )
@@ -416,4 +426,13 @@ def compile_experiments(
     relation_numeric_bound = project_database_relation_numeric_assertions(
         causal_delta_bound
     )
-    return project_database_numeric_assertions(relation_numeric_bound)
+    pack = project_database_numeric_assertions(relation_numeric_bound)
+    # Compile-time rescue dedupe stats for this compile invocation (delta over
+    # the process-scoped counters; additive receipt, no behavior change).
+    _compile_rescue_after = compile_rescue_cache_stats()
+    pack["compile_rescue_stats"] = {
+        key: int(_compile_rescue_after.get(key) or 0)
+        - int(_compile_rescue_before.get(key) or 0)
+        for key in _compile_rescue_after
+    }
+    return pack

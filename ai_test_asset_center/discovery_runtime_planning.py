@@ -1584,6 +1584,11 @@ def build_discovery_plan(
     # fall back to compiling all their variants individually (today's behavior
     # for that unit), so no executable variant is ever lost.
     compile_input = representative_obligations if representative_obligations else obligations
+    _stage_timing_enabled = (
+        str(os.environ.get("QUALIBUG_STAGE_TIMING") or "").strip().lower()
+        in {"1", "true", "yes", "on"}
+    )
+    _compile_initial_start = time.perf_counter()
     experiment_pack = compile_experiments(
         compile_input,
         behavior_ir=behavior_ir,
@@ -1603,6 +1608,13 @@ def build_discovery_plan(
             "runtime_contract": _runtime_contract_for_materialization,
         },
     )
+    if _stage_timing_enabled:
+        experiment_pack["stage_timing"] = {
+            "compile_initial_elapsed_ms": round(
+                (time.perf_counter() - _compile_initial_start) * 1000, 1
+            ),
+            "compile_input_count": len(compile_input),
+        }
     representative_compile_receipt = {
         "status": "APPLIED",
         "compile_input_count": len(compile_input),
@@ -1626,6 +1638,7 @@ def build_discovery_plan(
             if variant is not None:
                 fallback_variants.append(variant)
     if fallback_variants:
+        _compile_fallback_start = time.perf_counter()
         fallback_pack = compile_experiments(
             fallback_variants,
             behavior_ir=behavior_ir,
@@ -1645,6 +1658,17 @@ def build_discovery_plan(
                 "runtime_contract": _runtime_contract_for_materialization,
             },
         )
+        if _stage_timing_enabled:
+            _timing = dict(
+                experiment_pack.get("stage_timing")
+                if isinstance(experiment_pack.get("stage_timing"), dict)
+                else {}
+            )
+            _timing["compile_fallback_elapsed_ms"] = round(
+                (time.perf_counter() - _compile_fallback_start) * 1000, 1
+            )
+            _timing["compile_fallback_input_count"] = len(fallback_variants)
+            experiment_pack["stage_timing"] = _timing
         for key in ("experiments", "blocked_experiments", "abstract_experiments"):
             experiment_pack[key] = list(_list(experiment_pack.get(key))) + list(
                 _list(fallback_pack.get(key))
