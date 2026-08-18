@@ -1,30 +1,25 @@
-name: Apply reasoner persisted graph context root fix
+name: Apply recall coverage authority root fix
 
 on:
-  issues:
-    types: [opened]
-  push:
-    branches: [main]
-    paths:
-      - '.github/.reasoner-persisted-graph-context-root-fix-trigger'
   schedule:
     - cron: '*/5 * * * *'
+  issues:
+    types: [opened]
 
 permissions:
   contents: write
 
 concurrency:
-  group: reasoner-persisted-graph-context-root-fix-main
+  group: recall-coverage-authority-main
   cancel-in-progress: false
 
 jobs:
   root-fix:
     if: >-
       github.event_name == 'schedule' ||
-      github.event_name == 'push' ||
-      github.event.issue.title == 'RUN_REASONER_PERSISTED_GRAPH_CONTEXT_ROOT_FIX_20260817'
+      github.event.issue.title == 'RUN_RECALL_COVERAGE_AUTHORITY_ROOT_FIX_20260818'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
         with:
@@ -35,15 +30,19 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Apply persisted Graph Context bridge
+      - name: Apply exact coverage authority patch
         shell: bash
         run: |
           set -euo pipefail
           python -m py_compile tools/.one_shot/reasoner_persisted_graph_context_root_fix/apply.py
           python tools/.one_shot/reasoner_persisted_graph_context_root_fix/apply.py
-          python -m py_compile ai_test_asset_center/discovery_runtime_planning.py
-          python -m py_compile tests/test_reasoner_persisted_graph_context_bridge.py
+          python -m py_compile \
+            ai_test_asset_center/behavior_ir_hypothesis_coverage.py \
+            ai_test_asset_center/discovery_runtime_planning.py \
+            ai_test_asset_center/coverage_unit_registry.py \
+            tests/test_recall_coverage_authority.py
           git diff --check
+          git diff --cached --check
 
       - name: Install project
         shell: bash
@@ -52,26 +51,27 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e .
 
-      - name: Run focused root-cause regressions
+      - name: Run focused recall regressions
         shell: bash
         run: |
           set -euo pipefail
-          python -m pytest -q tests/test_reasoner_persisted_graph_context_bridge.py
-          mapfile -t GRAPH_TESTS < <(grep -rlE '_graph_evidence_pack|QUALIBUG_GRAPH_CONTEXT_MODE|GraphContextComposer' tests --include='test_*.py' | grep -v 'test_reasoner_persisted_graph_context_bridge.py' | head -20 || true)
-          if [ "${#GRAPH_TESTS[@]}" -gt 0 ]; then
-            printf 'Existing graph-context regression files:\n%s\n' "${GRAPH_TESTS[*]}"
-            python -m pytest -q "${GRAPH_TESTS[@]}"
+          python -m pytest -q tests/test_recall_coverage_authority.py
+
+      - name: Run existing coverage and planning regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t RELATED < <(grep -rlE 'compute_obligation_coverage_gaps|build_behavior_ir_coverage_map|coverage_unit_registry|derive_canonical_obligation_key' tests --include='test_*.py' | grep -v 'test_recall_coverage_authority.py' | head -40 || true)
+          if [ "${#RELATED[@]}" -gt 0 ]; then
+            printf 'Related regression files:\n%s\n' "${RELATED[*]}"
+            python -m pytest -q "${RELATED[@]}"
           fi
 
-      - name: Run persisted-understanding lifecycle regression set
+      - name: Compile package surface
         shell: bash
         run: |
           set -euo pipefail
-          mapfile -t PERSIST_TESTS < <(grep -rlE 'load_enterprise_business_knowledge_asset|project_knowledge_world_model|persisted.*knowledge|knowledge.*persist' tests --include='test_*.py' | grep -v 'test_reasoner_persisted_graph_context_bridge.py' | head -20 || true)
-          if [ "${#PERSIST_TESTS[@]}" -gt 0 ]; then
-            printf 'Existing persistence regression files:\n%s\n' "${PERSIST_TESTS[*]}"
-            python -m pytest -q "${PERSIST_TESTS[@]}"
-          fi
+          python -m compileall -q ai_test_asset_center
 
       - name: Commit verified root fix
         shell: bash
@@ -83,8 +83,13 @@ jobs:
           git rm .github/workflows/apply-reasoner-persisted-graph-context-root-fix.yml
           git rm -f .github/workflows/apply-reasoner-persisted-graph-context-pr.yml || true
           git rm -f .github/.reasoner-persisted-graph-context-root-fix-trigger || true
-          git add ai_test_asset_center/discovery_runtime_planning.py tests/test_reasoner_persisted_graph_context_bridge.py
+          git rm -f .github/workflows/apply-recall-coverage-authority-main.yml || true
+          git add \
+            ai_test_asset_center/behavior_ir_hypothesis_coverage.py \
+            ai_test_asset_center/discovery_runtime_planning.py \
+            ai_test_asset_center/coverage_unit_registry.py \
+            tests/test_recall_coverage_authority.py
           git diff --cached --check
-          git commit -m 'fix(discovery): feed persisted knowledge into reasoner graph context'
+          git commit -m 'fix(discovery): make behavior coverage identity exact'
           git pull --rebase origin main
           git push origin HEAD:main
