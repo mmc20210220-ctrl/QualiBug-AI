@@ -697,14 +697,75 @@ def materialize_and_recompile_abstract_pack(
 
     _indexes_token = set_batch_indexes(build_batch_indexes(behavior_ir))
 
+    rescue_stats: dict[str, int] = {
+        "attempt_count": 0,
+        "unique_count": 0,
+        "cache_hit_count": 0,
+        "reexecuted_count": 0,
+    }
+    _rescue_fingerprints_seen: set[str] = set()
+
+    def _receipt_unresolved_reasons(receipt: dict[str, Any]) -> list[str]:
+        reasons: list[str] = []
+        for row in _list(receipt.get("unresolved_requirements")):
+            if isinstance(row, dict) and _text(row.get("reason")):
+                reasons.append(_text(row["reason"]))
+        return sorted(set(reasons))
+
     def _rescue_loop() -> None:
         nonlocal recompiled
+        from .rescue_dedupe import (
+            rescue_cache_lookup,
+            rescue_cache_record_reuse,
+            rescue_cache_store,
+            rescue_evidence_fingerprint,
+        )
+
         for abstract_exp in abstract:
             oid = _text(abstract_exp.get("obligation_id"))
             obligation = deepcopy(_dict(obligations_by_id.get(oid)))
             if not obligation:
                 still_abstract.append(abstract_exp)
                 continue
+            rescue_stats["attempt_count"] += 1
+            compile_reason = _text(
+                _dict(abstract_exp.get("compile_receipt")).get("reason_code")
+            )
+            fingerprint = rescue_evidence_fingerprint(
+                obligation_id=oid,
+                compile_reason=compile_reason,
+                obligation=obligation,
+                abstract_experiment=abstract_exp,
+                behavior_ir=behavior_ir,
+                actor_tokens=_actor_tokens,
+            )
+            if fingerprint not in _rescue_fingerprints_seen:
+                _rescue_fingerprints_seen.add(fingerprint)
+                rescue_stats["unique_count"] += 1
+            cached = rescue_cache_lookup(fingerprint)
+            if cached is not None and not cached.get("can_recompile"):
+                # Identical evidence + prior NOT_MATERIALIZED outcome: the
+                # expensive resolution + concrete recompile cannot change the
+                # verdict. Reuse the failure receipt, keep the obligation
+                # ABSTRACT (never fabricate success), and stay fully auditable.
+                rescue_stats["cache_hit_count"] += 1
+                rescue_cache_record_reuse()
+                receipt = dict(cached.get("materialization_receipt") or {})
+                receipt["rescue_cache_hit"] = True
+                receipt["rescue_cache_fingerprint"] = fingerprint
+                materialization_receipts.append(receipt)
+                enriched = dict(abstract_exp)
+                enriched["materialization_receipt"] = receipt
+                enriched["compile_receipt"] = {
+                    **_dict(enriched.get("compile_receipt")),
+                    "status": "ABSTRACT",
+                    "awaiting_materialization": True,
+                    "materialization_status": _text(receipt.get("status")),
+                    "rescue_cache_hit": True,
+                }
+                still_abstract.append(enriched)
+                continue
+            rescue_stats["reexecuted_count"] += 1
             resolution = _resolve_planning_materialization(
                 obligation=obligation,
                 abstract_experiment=abstract_exp,
@@ -716,8 +777,13 @@ def materialize_and_recompile_abstract_pack(
             materialization_receipts.append(receipt)
             enriched = dict(abstract_exp)
             enriched["materialization_receipt"] = receipt
-
             if not resolution.get("can_recompile"):
+                rescue_cache_store(
+                    fingerprint,
+                    materialization_receipt=receipt,
+                    can_recompile=False,
+                    still_blocked_reason=_receipt_unresolved_reasons(receipt),
+                )
                 enriched["compile_receipt"] = {
                     **_dict(enriched.get("compile_receipt")),
                     "status": "ABSTRACT",
@@ -825,6 +891,7 @@ def materialize_and_recompile_abstract_pack(
             if _text(row.get("status")) != "MATERIALIZED"
         ),
         "fixture_actor_state_observer_cleanup_front_loaded": True,
+        "rescue_dedupe": dict(rescue_stats),
     }
     counts: dict[str, int] = {}
     for item in remaining_blocked + still_abstract:

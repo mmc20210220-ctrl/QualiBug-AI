@@ -1710,11 +1710,49 @@ def compile_experiment_for_obligation(
         # binding contract requires exact source-declared actor-bound
         # GET/HEAD resolvers before governed disposable-fixture setup for all
         # runtime bindings — not just authorization-family probes.
-        _rescued = _rescue_binding_for_response_only_family(
-            binding_plan, primary_op, ir,
+        #
+        # The same obligation is compiled in several planning/compile/
+        # expansion lifecycles; the rescue is a pure function of
+        # (binding_plan + primary_op + behavior_ir), so an evidence-identical
+        # repeat whose prior rescue failed is skipped instead of re-scanning
+        # resolvers / fixtures / example bindings (measured: 508 attempts over
+        # 145 unique obligations in one real scan — 71% exact duplicates).
+        from .rescue_dedupe import (
+            compile_rescue_cache_lookup,
+            compile_rescue_cache_register_unique,
+            compile_rescue_cache_store,
+            compile_rescue_evidence_fingerprint,
         )
-        if _rescued:
-            _blocked_reasons = blocked_binding_reasons(binding_plan)
+
+        _rescue_fp = compile_rescue_evidence_fingerprint(
+            obligation_id=oid,
+            reason=",".join(_text(value) for value in _blocked_reasons[:4]),
+            binding_plan=binding_plan,
+            primary_op=primary_op,
+            behavior_ir=ir,
+        )
+        compile_rescue_cache_register_unique(_rescue_fp)
+        _rescue_cached = compile_rescue_cache_lookup(_rescue_fp)
+        if _rescue_cached is not None:
+            # Identical evidence + prior NOT-rescuable outcome: skip the
+            # expensive resolver/fixture/example scan. binding_plan is
+            # untouched (the prior failed rescue did not mutate it), so the
+            # outcome is byte-identical to re-executing.
+            _rescued = False
+        else:
+            _rescued = _rescue_binding_for_response_only_family(
+                binding_plan, primary_op, ir,
+            )
+            if _rescued:
+                _blocked_reasons = blocked_binding_reasons(binding_plan)
+            else:
+                compile_rescue_cache_store(
+                    _rescue_fp,
+                    rescued=False,
+                    still_blocked_reason=[
+                        _text(value) for value in _blocked_reasons[:4]
+                    ],
+                )
         logger.warning(
             "[V1.8-rescue] oid=%s family=%s path=%s rescued=%s still_blocked=%s",
             oid[:30], family,

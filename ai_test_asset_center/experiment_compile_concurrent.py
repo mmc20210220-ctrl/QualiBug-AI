@@ -93,8 +93,9 @@ def _text(value: Any) -> str:
 def get_concurrency() -> int:
     """Pool size from QUALIBUG_COMPILE_CONCURRENCY, clamped to [2, 16].
 
-    Invalid / unset values fall back to the default 8. A value of 1 forces the
-    exact serial path (used by tests and as an operator kill-switch).
+    Invalid / unset values fall back to the default 8. An explicit value of 1
+    forces the exact serial path (used by tests and as an operator kill-switch);
+    values 2..16 are honored as-is.
     """
     raw = _text(os.environ.get(CONCURRENCY_ENV))
     if not raw:
@@ -107,6 +108,8 @@ def get_concurrency() -> int:
             CONCURRENCY_ENV, raw, DEFAULT_CONCURRENCY,
         )
         return DEFAULT_CONCURRENCY
+    if value <= 1:
+        return 1
     return max(MIN_CONCURRENCY, min(value, MAX_CONCURRENCY))
 
 
@@ -336,6 +339,51 @@ def _rescue_one_abstract(
             "receipt": None,
             "patch": False,
         }
+    from .rescue_dedupe import (
+        materialization_unresolved_reasons,
+        rescue_cache_lookup,
+        rescue_cache_record_reuse,
+        rescue_cache_store,
+        rescue_evidence_fingerprint,
+    )
+
+    compile_reason = _text(
+        _dict(abstract_exp.get("compile_receipt")).get("reason_code")
+    )
+    fingerprint = rescue_evidence_fingerprint(
+        obligation_id=oid,
+        compile_reason=compile_reason,
+        obligation=obligation,
+        abstract_experiment=abstract_exp,
+        behavior_ir=behavior_ir,
+        actor_tokens=_actor_tokens,
+    )
+    cached = rescue_cache_lookup(fingerprint)
+    if cached is not None and not cached.get("can_recompile"):
+        # Identical evidence + prior NOT_MATERIALIZED outcome: skip the
+        # expensive re-resolution + recompile, reuse the failure receipt,
+        # keep the obligation ABSTRACT (never fabricate success).
+        rescue_cache_record_reuse()
+        receipt = dict(cached.get("materialization_receipt") or {})
+        receipt["rescue_cache_hit"] = True
+        receipt["rescue_cache_fingerprint"] = fingerprint
+        enriched = dict(abstract_exp)
+        enriched["materialization_receipt"] = receipt
+        enriched["compile_receipt"] = {
+            **_dict(enriched.get("compile_receipt")),
+            "status": "ABSTRACT",
+            "awaiting_materialization": True,
+            "materialization_status": _text(receipt.get("status")),
+            "rescue_cache_hit": True,
+        }
+        return index, {
+            "kind": "still_abstract",
+            "row": enriched,
+            "receipt": receipt,
+            "patch": False,
+            "fingerprint": fingerprint,
+            "cache_hit": True,
+        }
     resolution = _resolve_planning_materialization(
         obligation=obligation,
         abstract_experiment=abstract_exp,
@@ -348,6 +396,12 @@ def _rescue_one_abstract(
     enriched["materialization_receipt"] = receipt
 
     if not resolution.get("can_recompile"):
+        rescue_cache_store(
+            fingerprint,
+            materialization_receipt=receipt,
+            can_recompile=False,
+            still_blocked_reason=materialization_unresolved_reasons(receipt),
+        )
         enriched["compile_receipt"] = {
             **_dict(enriched.get("compile_receipt")),
             "status": "ABSTRACT",
@@ -359,6 +413,8 @@ def _rescue_one_abstract(
             "row": enriched,
             "receipt": receipt,
             "patch": False,
+            "fingerprint": fingerprint,
+            "cache_hit": False,
         }
 
     obligation = dict(obligation)
@@ -581,6 +637,22 @@ def materialize_and_recompile_abstract_pack_concurrent(
                     },
                 ))
     outcomes.sort(key=lambda pair: pair[0])
+    rescue_stats: dict[str, int] = {
+        "attempt_count": len(abstract),
+        "unique_count": 0,
+        "cache_hit_count": 0,
+        "reexecuted_count": 0,
+    }
+    _unique_fingerprints: set[str] = set()
+    for index, outcome in outcomes:
+        _fp = _text(outcome.get("fingerprint"))
+        if _fp:
+            _unique_fingerprints.add(_fp)
+        if outcome.get("cache_hit") is True:
+            rescue_stats["cache_hit_count"] += 1
+        elif outcome.get("kind") != "skip":
+            rescue_stats["reexecuted_count"] += 1
+    rescue_stats["unique_count"] = len(_unique_fingerprints)
     for index, outcome in outcomes:
         row = _dict(outcome.get("row"))
         receipt = outcome.get("receipt")
@@ -623,12 +695,19 @@ def materialize_and_recompile_abstract_pack_concurrent(
             if _text(row.get("status")) != "MATERIALIZED"
         ),
         "fixture_actor_state_observer_cleanup_front_loaded": True,
+        "rescue_dedupe": dict(rescue_stats),
     }
     counts: dict[str, int] = {}
     for item in remaining_blocked + still_abstract:
         code = _text(_dict(item.get("compile_receipt")).get("reason_code")) or "UNKNOWN"
         counts[code] = counts.get(code, 0) + 1
     result["block_reason_counts"] = counts
+    # Preserve the initial-compile concurrency metadata additively: the rescue
+    # pass reuses the ``concurrency`` key for its own timing, so the compile
+    # pass's metadata would otherwise be overwritten. Both modes are
+    # receipt-visible.
+    if isinstance(result.get("concurrency"), dict):
+        result["compile_concurrency"] = dict(result["concurrency"])
     result["concurrency"] = {
         "mode": "concurrent",
         "max_workers": concurrency,
