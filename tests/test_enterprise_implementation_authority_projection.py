@@ -1,4 +1,6 @@
 from ai_test_asset_center.enterprise_implementation_authority_projection import (
+    _resolve_api_binding,
+    _runtime_operation_index,
     project_enterprise_implementation_authority,
 )
 
@@ -171,3 +173,45 @@ def test_no_shared_fact_identity_never_projects():
     ] = ["fact:other"]
     project_enterprise_implementation_authority(model, asset)
     assert model["invariants"][0]["operation_refs"] == []
+
+
+def test_exact_transport_narrows_reused_operation_alias():
+    model = _runtime_model()
+    model["operations"][0]["operation_id"] = "mutateOrder"
+    model["operations"][1]["operation_id"] = "mutateOrder"
+    aliases, transports = _runtime_operation_index(model)
+
+    resolved = _resolve_api_binding(
+        {
+            "operation_id": "mutateOrder",
+            "method": "POST",
+            "path": "/orders/{id}/pay",
+            "status": "BOUND",
+            "authoritative": True,
+            "derivation": "exact_source_identity",
+        },
+        aliases=aliases,
+        transports=transports,
+    )
+
+    assert resolved == {"bir_op_pay"}
+
+
+def test_conflicting_exact_identity_channels_fail_closed():
+    model = _runtime_model()
+    aliases, transports = _runtime_operation_index(model)
+
+    resolved = _resolve_api_binding(
+        {
+            "operation_id": "cancelOrder",
+            "method": "POST",
+            "path": "/orders/{id}/pay",
+            "status": "BOUND",
+            "authoritative": True,
+            "derivation": "exact_source_identity",
+        },
+        aliases=aliases,
+        transports=transports,
+    )
+
+    assert resolved == set()
