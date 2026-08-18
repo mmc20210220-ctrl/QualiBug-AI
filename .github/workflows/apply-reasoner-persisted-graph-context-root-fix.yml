@@ -1,48 +1,47 @@
-name: Apply recall coverage authority root fix
+name: Verify recall coverage authority root fix
 
 on:
-  schedule:
-    - cron: '*/5 * * * *'
-  issues:
-    types: [opened]
+  pull_request:
+    branches: [main]
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
-  group: recall-coverage-authority-main
-  cancel-in-progress: false
+  group: recall-coverage-authority-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 jobs:
   root-fix:
-    if: >-
-      github.event_name == 'schedule' ||
-      github.event.issue.title == 'RUN_RECALL_COVERAGE_AUTHORITY_ROOT_FIX_20260818'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: main
           fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: Apply exact coverage authority patch
+      - name: Apply exact coverage authority patch when needed
         shell: bash
         run: |
           set -euo pipefail
-          python -m py_compile tools/.one_shot/reasoner_persisted_graph_context_root_fix/apply.py
-          python tools/.one_shot/reasoner_persisted_graph_context_root_fix/apply.py
+          if grep -q 'ordered_operation_sequence_identity' ai_test_asset_center/coverage_unit_registry.py \
+             && grep -q 'coverage_lineage' ai_test_asset_center/behavior_ir_hypothesis_coverage.py \
+             && test -f tests/test_recall_coverage_authority.py; then
+            echo 'Product patch already committed on PR head; verifying exact files.'
+          else
+            python -m py_compile tools/.one_shot/reasoner_persisted_graph_context_root_fix/apply.py
+            python tools/.one_shot/reasoner_persisted_graph_context_root_fix/apply.py
+          fi
           python -m py_compile \
             ai_test_asset_center/behavior_ir_hypothesis_coverage.py \
             ai_test_asset_center/discovery_runtime_planning.py \
             ai_test_asset_center/coverage_unit_registry.py \
             tests/test_recall_coverage_authority.py
           git diff --check
-          git diff --cached --check
 
       - name: Install project
         shell: bash
@@ -73,23 +72,20 @@ jobs:
           set -euo pipefail
           python -m compileall -q ai_test_asset_center
 
-      - name: Commit verified root fix
+      - name: Package verified patched files
+        if: success()
         shell: bash
         run: |
           set -euo pipefail
-          git config user.name 'qualibug-mainline-bot'
-          git config user.email 'qualibug-mainline-bot@users.noreply.github.com'
-          git rm -r tools/.one_shot/reasoner_persisted_graph_context_root_fix
-          git rm .github/workflows/apply-reasoner-persisted-graph-context-root-fix.yml
-          git rm -f .github/workflows/apply-reasoner-persisted-graph-context-pr.yml || true
-          git rm -f .github/.reasoner-persisted-graph-context-root-fix-trigger || true
-          git rm -f .github/workflows/apply-recall-coverage-authority-main.yml || true
-          git add \
-            ai_test_asset_center/behavior_ir_hypothesis_coverage.py \
-            ai_test_asset_center/discovery_runtime_planning.py \
-            ai_test_asset_center/coverage_unit_registry.py \
-            tests/test_recall_coverage_authority.py
-          git diff --cached --check
-          git commit -m 'fix(discovery): make behavior coverage identity exact'
-          git pull --rebase origin main
-          git push origin HEAD:main
+          mkdir -p /tmp/recall-patch/ai_test_asset_center /tmp/recall-patch/tests
+          cp ai_test_asset_center/behavior_ir_hypothesis_coverage.py /tmp/recall-patch/ai_test_asset_center/
+          cp ai_test_asset_center/discovery_runtime_planning.py /tmp/recall-patch/ai_test_asset_center/
+          cp ai_test_asset_center/coverage_unit_registry.py /tmp/recall-patch/ai_test_asset_center/
+          cp tests/test_recall_coverage_authority.py /tmp/recall-patch/tests/
+
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: recall-coverage-authority-patch
+          path: /tmp/recall-patch
+          if-no-files-found: error
