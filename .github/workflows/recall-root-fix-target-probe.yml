@@ -1,0 +1,15 @@
+name: Recall runner target probe
+
+on:
+  pull_request_target:
+    types:
+      - opened
+      - synchronize
+      - reopened
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Probe runner
+        run: python --version
