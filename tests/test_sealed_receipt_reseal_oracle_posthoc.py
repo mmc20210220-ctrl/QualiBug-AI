@@ -109,6 +109,8 @@ def test_reseal_preserves_passed_causality_enrichment_and_validates() -> None:
 
 
 def test_reseal_preserves_indeterminate_causality_enrichment_and_validates() -> None:
+    from ai_test_asset_center import contract_oracles as _facade_oracles
+
     receipt = _oracle_receipt()
     original_verdict = {
         "status": receipt["status"],
@@ -126,7 +128,11 @@ def test_reseal_preserves_indeterminate_causality_enrichment_and_validates() -> 
     receipt["pre_causality_oracle_verdict"] = original_verdict
 
     resealed = reseal_oracle_receipt(dict(receipt), id_map={})
-    validated = validate_contract_oracle_receipt(resealed)
+    # The strict facade is the real scan-persist path: it restores the
+    # pre-gate base and demands identity preservation.  The reseal computes
+    # the identity over the restored pre-gate base, so with an empty id_map
+    # the identity is unchanged and the snapshot keeps it.
+    validated = _facade_oracles.validate_contract_oracle_receipt(resealed)
 
     assert validated["status"] == "INDETERMINATE"
     assert validated["authorization_causality_gate"] == "INDETERMINATE"
@@ -223,3 +229,84 @@ def test_reseal_preserves_field_oracle_trace_on_assertion_and_oracle() -> None:
     validated_oracle = validate_contract_oracle_receipt(resealed_oracle)
     failed = validated_oracle["failed_assertions"]
     assert failed and failed[0]["field_oracle_trace"]["status"] == "VIOLATION"
+
+
+def test_reseal_remaps_snapshot_identity_when_children_resealed() -> None:
+    """Regression: a reseal that remaps child receipts must also remap the
+    pre-gate snapshot's nested identity.
+
+    The real scan reseal chain reseals activation/assertion receipts first
+    (old→new id_map), then recomputes the oracle receipt_id over the remapped
+    payload.  The post-hoc causality/validity snapshots captured the ORIGINAL
+    oracle identity; if they are re-attached verbatim, the strict validator's
+    restore produces a base whose receipt_id differs from the row and raises
+    contract_oracle_posthoc_base_identity_mismatch at scan persist.
+    """
+    from ai_test_asset_center import contract_oracles as _facade_oracles
+    from ai_test_asset_center.sealed_receipt_reseal import (
+        reseal_activation_receipt,
+        reseal_assertion_receipt,
+    )
+
+    receipt = _oracle_receipt()
+    # Children resealed first, exactly as the real reseal chain does.
+    resealed_activation = reseal_activation_receipt(
+        dict(receipt["activation_receipt"]), id_map={}
+    )
+    resealed_assertions = [
+        reseal_assertion_receipt(dict(item), id_map={})
+        for item in receipt["assertions"]
+    ]
+    id_map = {
+        receipt["activation_receipt"]["receipt_id"]: resealed_activation[
+            "receipt_id"
+        ],
+        receipt["assertions"][0]["receipt_id"]: resealed_assertions[0][
+            "receipt_id"
+        ],
+    }
+    original_verdict = {
+        "status": receipt["status"],
+        "verdict": receipt["verdict"],
+        "receipt_id": receipt["receipt_id"],
+        "activation_receipt_id": receipt["activation_receipt_id"],
+        "failed_assertions": receipt["failed_assertions"],
+    }
+    enriched = dict(receipt)
+    enriched["activation_receipt"] = resealed_activation
+    enriched["activation_receipt_id"] = resealed_activation["receipt_id"]
+    enriched["assertions"] = resealed_assertions
+    enriched["status"] = "INDETERMINATE"
+    enriched["verdict"] = "blocked_experiment"
+    enriched["customer_deliverable_candidate"] = False
+    enriched["authorization_causality_gate"] = "INDETERMINATE"
+    enriched["authorization_causality_receipt_id"] = "auth_causality_0004"
+    enriched["authorization_causality_reason_codes"] = [
+        "CAUSAL_PROOF_INSUFFICIENT"
+    ]
+    enriched["pre_causality_oracle_verdict"] = original_verdict
+
+    resealed = reseal_oracle_receipt(dict(enriched), id_map=id_map)
+    # The strict facade validator is the real scan-persist path; it restores
+    # the pre-gate base and demands identity preservation.
+    validated = _facade_oracles.validate_contract_oracle_receipt(resealed)
+
+    assert validated["status"] == "INDETERMINATE"
+    assert validated["authorization_causality_gate"] == "INDETERMINATE"
+    # The snapshot identity must follow the resealed oracle so the strict
+    # validator's pre-gate restore preserves the row identity.
+    assert (
+        validated["pre_causality_oracle_verdict"]["receipt_id"]
+        == resealed["receipt_id"]
+    )
+    assert (
+        validated["pre_causality_oracle_verdict"]["activation_receipt_id"]
+        == resealed["activation_receipt_id"]
+    )
+    # Failed-assertion identities inside the snapshot follow the remap too.
+    snapshot_failed = validated["pre_causality_oracle_verdict"][
+        "failed_assertions"
+    ]
+    assert snapshot_failed and snapshot_failed[0]["receipt_id"] == id_map[
+        receipt["assertions"][0]["receipt_id"]
+    ]

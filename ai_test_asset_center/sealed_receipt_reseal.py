@@ -14,6 +14,7 @@ from .contract_oracles import (
     CONTRACT_EVIDENCE_RECEIPT_SCHEMA,
     CONTRACT_ORACLE_RECEIPT_SCHEMA,
     _content_receipt,
+    _restore_pre_gate_oracle,
     build_contract_evidence_receipt,
 )
 from ._contract_oracles_mechanics import CONTRACT_ORACLE_POST_HOC_FIELDS
@@ -185,10 +186,102 @@ def reseal_oracle_receipt(
         for key, value in row.items()
         if key != "receipt_id" and key not in CONTRACT_ORACLE_POST_HOC_FIELDS
     }
-    resealed = _content_receipt("oracle_", payload)
+    # The strict post-hoc validator restores the oracle to its PRE-gate
+    # semantics (the snapshots captured before the causality/validity gates
+    # demoted it) and requires the restored base to carry the row identity.
+    # The resealed id must therefore be computed over the restored base
+    # payload, not over the gate-demoted fields: a reseal that remaps child
+    # receipts otherwise produces an id whose base hash can never match
+    # (contract_oracle_posthoc_base_identity_mismatch at scan persist).
+    # The identity payload is a private copy: the resealed ROW keeps its
+    # gate-demoted status/verdict semantics, only the content-addressed id
+    # follows the pre-gate base.
+    def _remap_failed_assertions(items: Any) -> list[Any]:
+        remapped: list[Any] = []
+        for item in _list(items):
+            if not isinstance(item, dict):
+                continue
+            row_item = dict(item)
+            old_id = _text(row_item.get("receipt_id"))
+            if old_id:
+                row_item["receipt_id"] = id_map.get(old_id, old_id)
+            remapped.append(row_item)
+        return remapped
+
+    identity_payload = dict(payload)
+    # The strict post-hoc validator restores the oracle to its PRE-gate
+    # semantics (the snapshots captured before the causality/validity gates
+    # demoted it) and requires the restored base to carry the row identity.
+    # The resealed id must therefore always be computed over the restored
+    # base payload, not over the gate-demoted fields, otherwise the base hash
+    # can never match (contract_oracle_posthoc_base_identity_mismatch at scan
+    # persist).  When the reseal remaps child receipts the pre-gate snapshots
+    # first follow the remap, so the restored base reflects the resealed
+    # children exactly as the strict validator will rebuild it.
+    def _remap_failed_assertions(items: Any) -> list[Any]:
+        remapped: list[Any] = []
+        for item in _list(items):
+            if not isinstance(item, dict):
+                continue
+            row_item = dict(item)
+            old_id = _text(row_item.get("receipt_id"))
+            if old_id:
+                row_item["receipt_id"] = id_map.get(old_id, old_id)
+            remapped.append(row_item)
+        return remapped
+
+    _prepared = dict(row)
+    for _snapshot_field in (
+        "pre_validity_oracle_verdict",
+        "pre_causality_oracle_verdict",
+    ):
+        _snap = dict(_dict(_prepared.get(_snapshot_field)))
+        if _snap and isinstance(_snap.get("failed_assertions"), list):
+            _snap = dict(_snap)
+            _snap["failed_assertions"] = _remap_failed_assertions(
+                _snap["failed_assertions"]
+            )
+            _prepared[_snapshot_field] = _snap
+    _base = _restore_pre_gate_oracle(_prepared)
+    identity_payload = {
+        key: value for key, value in _base.items() if key != "receipt_id"
+    }
+    # The row keeps its gate-demoted semantics; only the content-addressed
+    # identity follows the pre-gate base.
+    resealed = dict(payload)
+    resealed["receipt_id"] = _content_receipt(
+        "oracle_", identity_payload
+    )["receipt_id"]
     for field in CONTRACT_ORACLE_POST_HOC_FIELDS:
         if field in row:
             resealed[field] = row[field]
+    # The pre-gate snapshots captured the ORIGINAL oracle identity before the
+    # causality/validity gates demoted the row.  When the reseal remaps child
+    # receipts the resealed oracle receives a NEW receipt_id; the snapshots
+    # must follow it, otherwise the strict validator's pre-gate restore
+    # rebuilds a base whose identity differs from the resealed row and raises
+    # contract_oracle_posthoc_base_identity_mismatch at scan persist (the
+    # snapshots are post-hoc fields, so this remap never changes the resealed
+    # oracle's own content-addressed identity).
+    new_oracle_id = _text(resealed.get("receipt_id"))
+    new_activation_id = _text(resealed.get("activation_receipt_id"))
+    for snapshot_field in (
+        "pre_causality_oracle_verdict",
+        "pre_validity_oracle_verdict",
+    ):
+        snapshot = dict(_dict(resealed.get(snapshot_field)))
+        if not snapshot:
+            continue
+        updated = dict(snapshot)
+        if _text(updated.get("receipt_id")):
+            updated["receipt_id"] = new_oracle_id
+        if _text(updated.get("activation_receipt_id")):
+            updated["activation_receipt_id"] = new_activation_id
+        if isinstance(updated.get("failed_assertions"), list):
+            updated["failed_assertions"] = _remap_failed_assertions(
+                updated["failed_assertions"]
+            )
+        resealed[snapshot_field] = updated
     return resealed
 
 
