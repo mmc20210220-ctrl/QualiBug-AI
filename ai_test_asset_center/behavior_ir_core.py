@@ -664,6 +664,15 @@ _ID_LIKE_SEGMENT_RE = re.compile(
 # Segments that look like versions (v1, v2, v12) should NOT be normalized.
 _VERSION_SEGMENT_RE = re.compile(r"^v\d{1,3}$", re.IGNORECASE)
 
+# openapi component-schema property locator: ``/components/schemas/Product/properties/status``
+# (also ``…/schemas/<Model>/properties/<field>`` with the legacy prefix). Used
+# to bind a source-declared enum to its data model when the declaration's
+# property_path carries only the field segment.
+_COMPONENT_SCHEMA_PROPERTY_RE = re.compile(
+    r"/components/schemas/([^/]+)/properties/([^/;]+)",
+    re.IGNORECASE,
+)
+
 
 def _is_id_like_segment(segment: str) -> bool:
     """Return True if a path segment looks like a resource identifier."""
@@ -3798,9 +3807,28 @@ def build_behavior_ir_from_knowledge_asset(
                 _text(value) for value in _list(_cons.get("enum")) if _text(value)
             ]
             _pp = _list(_td.get("property_path"))
-            if _enum and len(_pp) >= 2:
+            if not _enum:
+                continue
+            _pp_model = _text(_pp[0]) if len(_pp) >= 2 else ""
+            _pp_field = _text(_pp[-1] if _pp else "")
+            if not _pp_model and _pp_field:
+                # The openapi component schema owns the enum (source_locator
+                # ``/components/schemas/Product/properties/status``); a
+                # single-segment property_path (``['status']``) must not drop
+                # the model enum from the index. Extract the model name from
+                # the declaration's own json-pointer.
+                _decl_locator = _text(
+                    _td.get("source_locator")
+                    or _iface_row.get("source_locator")
+                )
+                _schema_match = _COMPONENT_SCHEMA_PROPERTY_RE.search(
+                    _decl_locator
+                )
+                if _schema_match:
+                    _pp_model = _schema_match.group(1)
+            if _pp_model and _pp_field:
                 _model_enum_index.setdefault(
-                    (_text(_pp[0]).lower(), _text(_pp[-1]).lower()),
+                    (_pp_model.lower(), _pp_field.lower()),
                     list(dict.fromkeys(_enum)),
                 )
     if not data and not api_operations and not runtime_actors:
@@ -4462,6 +4490,121 @@ def build_behavior_ir_from_knowledge_asset(
         )
         if canonical:
             entity["fields"] = canonical
+
+    # ── Example-enum normalization ──
+    # A documented example may carry a status/state value the target's own
+    # data model rejects (observed: product.status=ACTIVE into
+    # products_status_check — the openapi example says ACTIVE but the schema
+    # component declares DRAFT/ON_SALE/OFF_SALE/DELETED). The source-declared
+    # enum now lives on the entity field nodes (and in _model_enum_index);
+    # normalize the operation request example so a governed fixture write
+    # never sends a value the target rejects. Only exact string enum fields
+    # are normalized; the value stays as documented when the target model
+    # declares it legal. Nothing is ever inferred — every candidate enum
+    # comes from enterprise material.
+    _entities_with_enum = {
+        (_text(row.get("name")) or "").lower(): row
+        for row in _list(model.get("entities"))
+        if isinstance(row, dict)
+    }
+
+    def _enum_model_key(name: str) -> str:
+        # Table names (inventory_locks) and their data-model names
+        # (InventoryLock) are the same source-declared entity; match enum
+        # models across the naming variants.
+        return _text(name).lower().replace("_", "").replace("-", "").replace(" ", "")
+
+    _projection_entities = list(_entities_with_enum.values())
+    for _op in _list(model.get("operations")):
+        _example = dict(_dict(_op.get("request_example")))
+        if not _example:
+            continue
+        _op_entity = _resolve_projection_entity_for_operation(
+            _op,
+            _projection_entities,
+            allow_field_overlap=True,
+        )
+        _op_entity_name = _text(
+            _op_entity.get("name") or _op_entity.get("id")
+        ) if _op_entity else ""
+        _entity_row = None
+        if _op_entity_name:
+            _entity_row = _entities_with_enum.get(_op_entity_name.lower())
+            if _entity_row is None:
+                _entity_key = _enum_model_key(_op_entity_name)
+                _entity_keys = {
+                    _entity_key,
+                    _entity_key.rstrip("s"),
+                } if _entity_key.endswith("s") else {_entity_key}
+                for _cand_key, _cand_row in _entities_with_enum.items():
+                    if (
+                        _enum_model_key(_cand_key) in _entity_keys
+                        or _enum_model_key(_cand_key).rstrip("s") in _entity_keys
+                    ):
+                        _entity_row = _cand_row
+                        break
+        _entity_enum: dict[str, list[str]] = {}
+        for _fld in _list((_entity_row or {}).get("fields")):
+            if not isinstance(_fld, dict):
+                continue
+            _vals = _list(_fld.get("enum_values"))
+            if _vals:
+                _entity_enum.setdefault(
+                    _text(_fld.get("name") or "").lower(), _vals
+                )
+        _op_enum_index = _entity_enum or {}
+        if not _op_enum_index:
+            # Fallback to the model-index keyed by the operation's own model
+            # when the entity field enum is absent.
+            _op_refs = _list(_op.get("entity_refs"))
+            _op_primary = (
+                _text(_op_entity.get("name") or _op_entity.get("id"))
+                if _op_entity
+                else (_text(_op_refs[0]) if _op_refs else "")
+            )
+            if _op_primary:
+                _op_primary_key = _enum_model_key(_op_primary)
+                _op_primary_keys = {
+                    _op_primary_key,
+                    _op_primary_key.rstrip("s"),
+                } if _op_primary_key.endswith("s") else {_op_primary_key}
+                _op_enum_index = {
+                    _fname: list(_vals)
+                    for (_mname, _fname), _vals in _model_enum_index.items()
+                    if (
+                        _enum_model_key(_mname) in _op_primary_keys
+                        or _enum_model_key(_mname).rstrip("s")
+                        in _op_primary_keys
+                    )
+                }
+        if not _op_enum_index:
+            continue
+        _normalized_example = dict(_example)
+        for _key, _value in list(_example.items()):
+            _legal = _op_enum_index.get(_text(_key).lower())
+            if not _legal or not isinstance(_value, str):
+                continue
+            if _value in _legal:
+                continue
+            _normalized_example[_key] = _legal[0]
+        if _normalized_example != _example:
+            _op["request_example"] = _normalized_example
+            _op["example_enum_normalization_receipt"] = {
+                "schema_version": "qualibug.example-enum-normalization.v1",
+                "status": "NORMALIZED",
+                "normalized_fields": sorted(
+                    key
+                    for key in _example
+                    if _op_enum_index.get(_text(key).lower())
+                    and isinstance(_example.get(key), str)
+                    and _example.get(key) not in _op_enum_index[
+                        _text(key).lower()
+                    ]
+                ),
+                "entity_ref": _op_primary if _op_entity is None else (
+                    _text(_op_entity.get("name") or _op_entity.get("id"))
+                ),
+            }
 
     # Backfill operation.entity_refs from unique request↔column overlap when the
     # path carries no entity vocabulary. Enables produces/consumes derivation
