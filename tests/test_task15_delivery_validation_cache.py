@@ -580,3 +580,65 @@ def test_caches_are_thread_safe() -> None:
     for index in range(8):
         assert results[index]
         assert all(row == results[index][0] for row in results[index])
+
+
+# ── formal_customer_deliverable_findings rebuild (scan-persist recovery) ────
+
+
+def test_missing_envelope_finding_is_rebuilt_from_ledger_bundle() -> None:
+    """A DELIVERABLE attempt whose finding lives in the delivery_evidence_bundle
+    must be rebuilt when the envelope's occurrence list omits it, instead of
+    failing the whole scan persist with formal_deliverable_finding_missing.
+
+    Scenario: a verified archive hold-over — the ledger records the attempt
+    (with gate + bundled finding) but the run itself delivered nothing, so the
+    envelope's occurrence list is empty. The ledger is the authoritative
+    execution record; the finding is recovered from it and the already
+    validated gate is attached.
+    """
+    from ai_test_asset_center.formal_delivery_scope import (
+        formal_customer_deliverable_findings,
+    )
+
+    ledger = _sealed_ledger(attempts=[_valid_legacy_attempt("finding:archived")])
+
+    output = formal_customer_deliverable_findings(
+        [],
+        obligation_attempt_ledger=ledger,
+    )
+
+    assert len(output) == 1
+    rebuilt = output[0]
+    assert rebuilt["finding_id"] == "finding:archived"
+    assert rebuilt["delivery_gate_receipt"]["gate_receipt_id"] == "gate:legacy"
+    assert rebuilt["delivery_gate_receipt"]["schema_version"] == (
+        LEGACY_CUSTOMER_DELIVERY_GATE_RECEIPT_SCHEMA
+    )
+
+
+def test_ledger_that_cannot_produce_finding_still_fails_closed() -> None:
+    """An index-accepted finding that the ledger itself cannot rebuild stays
+    fail-closed: the recovery path must never fabricate a finding."""
+    from ai_test_asset_center.formal_delivery_scope import (
+        formal_customer_deliverable_findings,
+    )
+
+    # DELIVERABLE attempt with gate but NO bundled finding. The attempt
+    # fingerprint must be recomputed after the bundle is emptied so the
+    # ledger stays self-consistent (the recovery path must see a valid ledger
+    # that simply cannot produce the finding).
+    from ai_test_asset_center import _customer_delivery_gate_v2_mechanics as _mech
+
+    attempt = _valid_legacy_attempt("finding:orphan")
+    attempt["delivery_evidence_bundle"] = {}
+    attempt["attempt_fingerprint"] = _mech._fingerprint({
+        key: value
+        for key, value in attempt.items()
+        if key != "attempt_fingerprint"
+    })
+    ledger = _sealed_ledger(attempts=[attempt])
+
+    with pytest.raises(
+        MainlineContractError, match="formal_deliverable_finding_missing"
+    ):
+        formal_customer_deliverable_findings([], obligation_attempt_ledger=ledger)

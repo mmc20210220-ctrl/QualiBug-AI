@@ -208,9 +208,44 @@ def formal_customer_deliverable_findings(
         seen.add(occurrence_id)
     missing = sorted(set(gate_by_finding_id) - seen)
     if missing:
-        raise MainlineContractError(
-            f"formal_deliverable_finding_missing:{missing[0]}"
-        )
+        # A DELIVERABLE attempt may carry its full finding in the
+        # delivery_evidence_bundle while the envelope's occurrence list did
+        # not include it (a verified archive hold-over whose ledger records
+        # the attempt; the run itself delivered nothing). The ledger is the
+        # authoritative execution record; rebuild the missing finding from
+        # the bundle and attach the already-validated gate from the index
+        # (validated_deliverable_gate_index validated each gate against the
+        # same bundled finding, so re-validating here would only re-run the
+        # same strict check and can drift on post-redaction fingerprint
+        # fields). A finding the ledger itself cannot produce stays
+        # fail-closed.
+        rebuilt: dict[str, dict[str, Any]] = {}
+        for raw in _list((obligation_attempt_ledger or {}).get("attempts")):
+            parent = _dict(raw)
+            if _text(parent.get("terminal_status")).upper() != "DELIVERABLE":
+                continue
+            for attempt in delivery_occurrence_views(parent):
+                occurrence_id = _text(attempt.get("finding_id"))
+                if occurrence_id not in missing:
+                    continue
+                bundle = _dict(attempt.get("delivery_evidence_bundle"))
+                bundled_finding = _dict(bundle.get("finding"))
+                if not bundled_finding or occurrence_id not in gate_by_finding_id:
+                    continue
+                rebuilt[occurrence_id] = dict(bundled_finding)
+        still_missing = sorted(set(missing) - set(rebuilt))
+        if still_missing:
+            raise MainlineContractError(
+                f"formal_deliverable_finding_missing:{still_missing[0]}"
+            )
+        for occurrence_id in sorted(rebuilt):
+            finding = rebuilt[occurrence_id]
+            finding["delivery_gate_receipt"] = dict(
+                gate_by_finding_id[occurrence_id]
+            )
+            deliverable.append(finding)
+            seen.add(occurrence_id)
+        return deliverable
     return deliverable
 
 
