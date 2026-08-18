@@ -72,6 +72,27 @@ def _runtime_operation_index(
     return aliases, transports
 
 
+def _intersect_exact_identity_sets(
+    identity_sets: list[set[str]],
+) -> set[str]:
+    """Narrow multiple resolved exact identities instead of broadening them.
+
+    Every non-empty set here comes from an exact, source-backed identity channel.
+    When more than one channel is available they constrain the same implementation
+    target. Disagreement therefore fails closed; unioning those sets would create
+    artificial ambiguity when one exact transport identity disambiguates a reused
+    operation alias.
+    """
+    if not identity_sets:
+        return set()
+    resolved = set(identity_sets[0])
+    for candidates in identity_sets[1:]:
+        resolved.intersection_update(candidates)
+        if not resolved:
+            break
+    return resolved
+
+
 def _resolve_api_binding(
     api_binding: dict[str, Any],
     *,
@@ -85,20 +106,27 @@ def _resolve_api_binding(
     if _text(api_binding.get("derivation")) == "token_overlap_diagnostic":
         return set()
 
-    candidates: set[str] = set()
     identity_declared = False
+    resolved_identity_sets: list[set[str]] = []
     for key in ("interface_id", "operation_id"):
         value = _text(api_binding.get(key))
         if not value:
             continue
         identity_declared = True
-        candidates.update(aliases.get(value, set()))
+        matches = aliases.get(value, set())
+        if matches:
+            resolved_identity_sets.append(set(matches))
     method = _text(api_binding.get("method")).upper()
     path = _text(api_binding.get("path"))
     if method and path:
         identity_declared = True
-        candidates.update(transports.get((method, path), set()))
-    return candidates if identity_declared else set()
+        matches = transports.get((method, path), set())
+        if matches:
+            resolved_identity_sets.append(set(matches))
+
+    if not identity_declared or not resolved_identity_sets:
+        return set()
+    return _intersect_exact_identity_sets(resolved_identity_sets)
 
 
 def project_enterprise_implementation_authority(
