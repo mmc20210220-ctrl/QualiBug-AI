@@ -404,6 +404,30 @@ def _http_request(
     timeout: float = 10.0,
     max_retries: int = 2,
 ) -> dict[str, Any]:
+    _diag_enabled = str(
+        os.environ.get("QUALIBUG_HTTP_REQUEST_DIAG") or ""
+    ).strip().lower() in {"1", "true", "yes", "on"}
+
+    def _diag(status: int, response_body: Any, extra: str = "") -> None:
+        if not _diag_enabled:
+            return
+        print(
+            json.dumps(
+                {
+                    "event": "http_request_diag",
+                    "method": str(method).upper(),
+                    "url": str(url)[:200],
+                    "status": int(status or 0),
+                    "request_body": body,
+                    "response_body": str(response_body or "")[:300],
+                    "extra": extra,
+                },
+                ensure_ascii=False,
+                default=str,
+            ),
+            flush=True,
+        )
+
     headers = {
         "Accept": "application/json",
         **_REQUEST_TRACE_CONTEXT.get(),
@@ -444,6 +468,7 @@ def _http_request(
             status = int(exc.code)
             response_body = _json_or_text(raw)
             response_headers = dict(exc.headers.items()) if exc.headers else {}
+            _diag(status, response_body)
             # HTTP errors are not transient - return immediately
             return {
                 "method": method.upper(),
@@ -474,6 +499,7 @@ def _http_request(
                 time.sleep(delay)
                 continue
             if method.upper() not in _RETRY_SAFE_METHODS:
+                _diag(0, None, f"transport:{type(exc).__name__}")
                 return {
                     "method": method.upper(),
                     "url": url,
@@ -489,6 +515,7 @@ def _http_request(
                     "_not_retried_reason": "MUTATING_METHOD_NOT_RETRY_SAFE",
                 }
         except Exception as exc:
+            _diag(0, None, f"unexpected:{type(exc).__name__}")
             return {
                 "method": method.upper(),
                 "url": url,
