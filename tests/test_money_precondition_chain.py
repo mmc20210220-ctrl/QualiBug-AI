@@ -22,6 +22,7 @@ from ai_test_asset_center.money_precondition_chain import (
     MONEY_PRECONDITION_FAMILIES,
     NOT_APPLICABLE,
     PLANNED,
+    REASON_CREATE_OUT_OF_SCOPE,
     REASON_NO_ACTOR,
     REASON_NO_CLEANUP,
     REASON_NO_CREATE_OPERATION,
@@ -257,6 +258,40 @@ def test_missing_create_operation_blocks_with_named_reason() -> None:
     )
     assert result["status"] == BLOCKED
     assert result["reason_code"] == REASON_NO_CREATE_OPERATION
+
+
+def test_cross_service_create_reports_out_of_scope_not_missing() -> None:
+    """A create op that exists in another service is a scope fact, not a gap.
+
+    Single-service scans cannot establish cross-service subjects; the reader
+    must be told WHICH service owns the create op instead of being pointed at
+    a nonexistent documentation gap.
+    """
+    ir = _base_ir()
+    for entity in ir["entities"]:
+        if entity["id"] == "ent_order":
+            # The entity's declared collection lives under the commerce
+            # service path; the create POST below uses another service's
+            # path spelling, so the regular create lookup finds nothing.
+            entity["collection_path"] = "/api/orders"
+    for op in ir["operations"]:
+        if op["id"] == "op_create_order":
+            op["path"] = "/api/v1/scm/trade/orders"
+            op["_service_name"] = "scm_trade"
+    pay = _pay_operation(ir)
+    pay["_service_name"] = "wms_inventory"
+    result = plan_money_family_precondition(
+        behavior_ir=ir,
+        operation=pay,
+        actor_refs=["actor_buyer"],
+        property_spec={},
+        family="conservation",
+    )
+    assert result["status"] == BLOCKED
+    assert result["reason_code"] == REASON_CREATE_OUT_OF_SCOPE
+    gap = (result.get("unresolved_subjects") or [{}])[0]
+    assert gap["create_operation_hint"] == "op_create_order"
+    assert gap["create_service"] == "scm_trade"
 
 
 def test_create_without_request_example_is_not_a_create() -> None:

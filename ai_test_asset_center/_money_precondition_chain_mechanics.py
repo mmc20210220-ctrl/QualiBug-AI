@@ -54,6 +54,8 @@ BLOCKED = "BLOCKED"
 
 REASON_NO_SUBJECT_ENTITY = "MONEY_PRECONDITION_SUBJECT_ENTITY_UNRESOLVED"
 REASON_NO_CREATE_OPERATION = "MONEY_PRECONDITION_CREATE_OPERATION_MISSING"
+REASON_CREATE_OUT_OF_SCOPE = "MONEY_PRECONDITION_CREATE_OPERATION_OUT_OF_SCOPE"
+REASON_CHAIN_UNPLANNABLE = "MONEY_PRECONDITION_CHAIN_UNPLANNABLE"
 REASON_NO_ACTOR = "MONEY_PRECONDITION_ACTOR_UNRESOLVED"
 REASON_NO_CLEANUP = "MONEY_PRECONDITION_CLEANUP_MISSING"
 REASON_STATE_UNREACHABLE = "MONEY_PRECONDITION_STATE_UNREACHABLE"
@@ -244,6 +246,51 @@ def _create_operation_for_entity(
         return {}
     candidates.sort(key=lambda row: _text(row.get("path") or row.get("raw_path")))
     return candidates[0]
+
+
+def _cross_service_create_hint(
+    behavior_ir: dict[str, Any],
+    entity: dict[str, Any],
+    target_service: str,
+) -> dict[str, Any]:
+    """A create-shaped POST for the entity that lives in another service.
+
+    Distinguishes "the create operation does not exist anywhere in the
+    sources" from "it exists, but not on this scan's service" — the latter
+    is a routing/scope fact (a single-service scan cannot establish a
+    cross-service subject), never a documentation gap. Only used when the
+    regular create lookup found nothing.
+    """
+    entity_name = _text(entity.get("name")).lower()
+    if not entity_name:
+        return {}
+    from .experiment_runtime_support import normalize_path_placeholders
+
+    target = _text(target_service).lower()
+    for op in _list(_dict(behavior_ir).get("operations")):
+        if not isinstance(op, dict):
+            continue
+        if _text(op.get("method")).upper() != "POST":
+            continue
+        op_path = normalize_path_placeholders(
+            _text(op.get("path") or op.get("raw_path"))
+        )
+        if "{" in op_path or ":" in op_path:
+            continue
+        segments = [segment for segment in op_path.strip("/").split("/") if segment]
+        if not segments or _text(segments[-1]).lower() not in {
+            entity_name,
+            entity_name + "s",
+        }:
+            continue
+        if not _request_example(op):
+            continue
+        op_service = _text(
+            op.get("_service_name") or op.get("service")
+        ).lower()
+        if op_service and op_service != target:
+            return op
+    return {}
 
 
 def _state_goal_from_property(property_spec: dict[str, Any]) -> str:
@@ -442,6 +489,9 @@ def plan_money_family_precondition(
     ir = _dict(behavior_ir)
     nonproduction = is_nonproduction_environment(environment_type)
     example = _request_example(operation)
+    target_service = _text(
+        operation.get("_service_name") or operation.get("service")
+    )
     subject_pairs = _subject_entities_from_example(example, ir)
     if not subject_pairs and _text(family) == "state":
         # State-family subject: a path-param transition write (ship
@@ -484,11 +534,33 @@ def plan_money_family_precondition(
             continue
         create_op = _create_operation_for_entity(ir, entity)
         if not create_op:
-            unresolved_reasons.append({
-                "entity_ref": entity_id,
-                "reference_field": reference_field,
-                "reason_code": REASON_NO_CREATE_OPERATION,
-            })
+            # Distinguish "no create op anywhere in the sources" from "the
+            # create op exists but belongs to another service". The latter is
+            # a single-service scan scope fact — the reader must not be told
+            # the operation is missing and go hunting in the docs.
+            _out_of_scope_op = _cross_service_create_hint(
+                ir, entity, target_service
+            )
+            if _out_of_scope_op:
+                unresolved_reasons.append({
+                    "entity_ref": entity_id,
+                    "reference_field": reference_field,
+                    "reason_code": REASON_CREATE_OUT_OF_SCOPE,
+                    "create_operation_hint": _text(
+                        _out_of_scope_op.get("id")
+                        or _out_of_scope_op.get("operation_id")
+                    ),
+                    "create_service": _text(
+                        _out_of_scope_op.get("_service_name")
+                        or _out_of_scope_op.get("service")
+                    ),
+                })
+            else:
+                unresolved_reasons.append({
+                    "entity_ref": entity_id,
+                    "reference_field": reference_field,
+                    "reason_code": REASON_NO_CREATE_OPERATION,
+                })
             continue
         create_op_id = _text(create_op.get("id"))
         # The subject entity is established by a role the SUBJECT'S create
@@ -555,7 +627,7 @@ def plan_money_family_precondition(
             return {
                 "status": BLOCKED,
                 "reason_code": _text(chain_result.get("reason_code"))
-                or REASON_NO_CREATE_OPERATION,
+                or REASON_CHAIN_UNPLANNABLE,
                 "steps": [],
                 "identity_binding_target": reference_field,
                 "entity_ref": entity_id,

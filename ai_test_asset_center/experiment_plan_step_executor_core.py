@@ -63,6 +63,38 @@ _PROBE_RESULT_CACHE: dict[tuple[str, str, str], dict] = {}
 _PROBE_CACHE_LIMIT = 256
 
 
+def _request_body_required(operation: dict[str, Any]) -> bool:
+    """True when the source declares the request body itself as required.
+
+    Covers both shapes: ``request_schema.required`` as a boolean (the whole
+    body is required — e.g. OpenAPI ``requestBody.required=true`` with a
+    permissive ``{"type": "object", "additionalProperties": true}`` schema)
+    or as a list of required field names, and a top-level ``requestBody``
+    declaration. A write with a required body but no step body and no
+    example must go out as ``{}`` (empty object) — sending NO body makes the
+    framework reject it 422 \"Field required\" before any business handler
+    runs, which is a harness artifact, never a target defect.
+    """
+    schema = operation.get("request_schema")
+    if isinstance(schema, dict):
+        required = schema.get("required")
+        if required is True:
+            return True
+        if isinstance(required, list) and required:
+            return True
+    body = operation.get("requestBody")
+    if isinstance(body, dict):
+        if body.get("required") is True:
+            return True
+        content = body.get("content")
+        if isinstance(content, dict):
+            media = content.get("application/json")
+            if isinstance(media, dict) and isinstance(media.get("schema"), dict):
+                if media["schema"].get("required") is True:
+                    return True
+    return False
+
+
 def _response_content_type(obs: dict[str, Any]) -> str:
     """Response media type from a step observation's raw headers."""
     return _content_type(obs.get("headers"))
@@ -780,6 +812,8 @@ def execute_non_barrier_plans(
                 if "body" in step
                 else op.get("request_example")
                 if method in _WRITE_METHODS and op.get("request_example")
+                else {}
+                if method in _WRITE_METHODS and _request_body_required(op)
                 else None
             )
             if method in _WRITE_METHODS:
