@@ -12,7 +12,15 @@ from typing import Any
 
 from . import experiment_compiler_base as _base
 from .experiment_compiler_base import *  # noqa: F401,F403
+from .source_request_schema_materialization import (
+    install_source_request_schema_materialization,
+)
 
+
+# The stable compiler imports _source_request_example by value. Install the
+# fail-closed schema-backed extension only after the base compiler is loaded so
+# every compiler-local binding points at the same request-body authority.
+install_source_request_schema_materialization()
 
 _original_compile_experiment = _base.compile_experiment_for_obligation
 _SENSITIVE_FAMILIES = frozenset({
