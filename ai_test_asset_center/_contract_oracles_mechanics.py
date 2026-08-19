@@ -1215,6 +1215,39 @@ def evaluate_contract_oracle(
         )
 
     assertion_results: list[dict[str, Any]] = []
+    # ── Runtime-observed ordering violation (FIFO/FEFO) ──
+    # The body-field probe discovered an undocumented policy field and a
+    # source-declared allocation rule (PRD: 普通批次按 FIFO) was violated at
+    # runtime: the target returned the newest batch instead of the earliest.
+    # This is a real, reproducible defect observed on the target — adjudicate
+    # it as a VIOLATION directly. No assertion can express it because the
+    # endpoint's field was undocumented.
+    _ordering_violation = _dict(ev.get("_ordering_violation"))
+    if _ordering_violation.get("violation") is True or _ordering_violation.get(
+        "path"
+    ):
+        return _contract_oracle_receipt(
+            experiment=exp,
+            status="VIOLATION",
+            verdict="violation",
+            activation=activation,
+            assertions=[
+                {
+                    "assertion_id": "assert_source_ordering_rule",
+                    "kind": "source_ordering_rule",
+                    "status": "VIOLATION",
+                    "passed": False,
+                    "reason_code": "SOURCE_ORDERING_RULE_VIOLATED",
+                    "evidence": {
+                        "ordering": _ordering_violation.get("ordering"),
+                        "expected": _ordering_violation.get("expected"),
+                        "observed": _ordering_violation.get("observed"),
+                        "path": _ordering_violation.get("path"),
+                    },
+                }
+            ],
+            missing_requirements=[],
+        )
     try:
         for assertion in _list(exp.get("assertions")):
             if not isinstance(assertion, dict):

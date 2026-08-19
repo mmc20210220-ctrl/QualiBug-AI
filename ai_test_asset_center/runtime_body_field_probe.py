@@ -106,6 +106,8 @@ def probe_undocumented_request_fields(
     token: str,
     behavior_ir: dict[str, Any] | None = None,
     max_fields: int = _MAX_PROBE_FIELDS,
+    root: Any = None,
+    project: str = "",
 ) -> dict[str, Any]:
     """Probe which field name makes an undocumented policy endpoint 2xx.
 
@@ -114,13 +116,11 @@ def probe_undocumented_request_fields(
     observed response. ``{}`` must have been rejected (422) before probing is
     worth attempting; the caller decides that gate.
 
-    Returns:
-        {
-            "schema_version": "qualibug.runtime-body-field-probe.v1",
-            "probed": bool, "attempts": int, "accepted_field": str|"",
-            "accepted_body": {...}|None, "response_status": int|0,
-            "receipts": [{field, status, response_preview}],
-        }
+    When ``root``/``project`` are supplied, a source-driven FIFO/FEFO ordering
+    check runs after the field is found: the PRD declares allocation rules
+    (``普通批次按 FIFO``), and a two-element payload with distinct timestamps
+    verifies the target returns the earliest batch. The assertion comes from
+    the source text, never from a hardcoded rule.
     """
     candidates: list[str] = []
     seen: set[str] = set()
@@ -144,7 +144,7 @@ def probe_undocumented_request_fields(
             "response_preview": preview,
         })
         if 200 <= status < 300:
-            return {
+            result: dict[str, Any] = {
                 "schema_version": "qualibug.runtime-body-field-probe.v1",
                 "probed": True,
                 "attempts": len(receipts),
@@ -154,6 +154,24 @@ def probe_undocumented_request_fields(
                 "response_body": response,
                 "receipts": receipts,
             }
+            ordering = _source_ordering_check(
+                base_url=base_url,
+                path=path,
+                token=token,
+                field=field,
+                root=root,
+                project=project,
+            )
+            if ordering:
+                result["ordering_check"] = ordering
+                print(
+                    f"[body-probe] ordering check path={path} "
+                    f"ordering={ordering.get('ordering')} "
+                    f"violation={ordering.get('violation')} "
+                    f"observed={ordering.get('observed')}",
+                    flush=True,
+                )
+            return result
     return {
         "schema_version": "qualibug.runtime-body-field-probe.v1",
         "probed": True,
@@ -163,6 +181,78 @@ def probe_undocumented_request_fields(
         "response_status": 0,
         "response_body": None,
         "receipts": receipts,
+    }
+
+
+def _source_ordering_check(
+    *,
+    base_url: str,
+    path: str,
+    token: str,
+    field: str,
+    root: Any = None,
+    project: str = "",
+) -> dict[str, Any]:
+    """Source-driven FIFO/FEFO ordering verification on a discovered array field.
+
+    The PRD declares allocation semantics (``普通批次按 FIFO`` /
+    ``有有效期物料按 FEFO``). When such a statement exists, send a two-element
+    payload with distinct timestamps and check the target returns the earliest
+    (FIFO) batch. The expectation comes from the source text; the observed
+    response is the evidence. No ordering statement in the source → no check
+    (never invent a sorting rule).
+    """
+    import re
+    from pathlib import Path
+
+    if not root or not project:
+        print("[body-probe] ordering check skipped: no root/project", flush=True)
+        return {}
+    prd_text = ""
+    try:
+        for candidate in (
+            Path(root) / "platform_inputs" / project / "01_PRD.md",
+            Path(root) / "platform_inputs" / project / "PRD.md",
+        ):
+            if candidate.exists():
+                prd_text = candidate.read_text(encoding="utf-8", errors="replace")
+                break
+    except OSError as exc:
+        print(f"[body-probe] ordering PRD read failed: {exc}", flush=True)
+        return {}
+    if not prd_text:
+        print(
+            f"[body-probe] ordering check skipped: PRD not found under "
+            f"{Path(root)}/platform_inputs/{project}",
+            flush=True,
+        )
+        return {}
+    # Source-declared ordering: FIFO (earliest batch first) or FEFO.
+    fifo_declared = bool(re.search(r"FIFO|先进先出", prd_text))
+    fefo_declared = bool(re.search(r"FEFO|先到期|效期.*先", prd_text))
+    if not (fifo_declared or fefo_declared):
+        return {}
+    ordering = "FIFO" if fifo_declared else "FEFO"
+    # Two batches with distinct timestamps; FIFO expects the earliest (ts=10).
+    payload = {field: [
+        {"id": "BATCH-NEW", "ts": 100, "qty": 5},
+        {"id": "BATCH-OLD", "ts": 10, "qty": 5},
+    ]}
+    status, response = _call_json(base_url, path, token, payload)
+    response_text = _text(json.dumps(response, ensure_ascii=False))
+    expected_batch = "BATCH-OLD" if ordering == "FIFO" else "BATCH-OLD"
+    selected_oldest = "BATCH-OLD" in response_text
+    selected_newest = "BATCH-NEW" in response_text and not selected_oldest
+    return {
+        "ordering": ordering,
+        "status": status,
+        "selected_oldest": selected_oldest,
+        "selected_newest": selected_newest,
+        "expected": "earliest batch (FIFO)" if ordering == "FIFO" else "earliest expiry (FEFO)",
+        "observed": response_text[:120],
+        "violation": bool(
+            200 <= status < 300 and selected_newest and not selected_oldest
+        ),
     }
 
 

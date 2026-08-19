@@ -1759,6 +1759,8 @@ def execute_non_barrier_plans(
                             path=path,
                             token=token,
                             behavior_ir={},
+                            root=root,
+                            project=project,
                         )
                         print(
                             f"[body-probe] probe result path={path_template} "
@@ -1808,7 +1810,25 @@ def execute_non_barrier_plans(
                                     "field": _probe_result.get("accepted_field"),
                                     "attempts": _probe_result.get("attempts"),
                                     "receipts": _probe_result.get("receipts"),
+                                    "ordering_check": _probe_result.get(
+                                        "ordering_check"
+                                    ),
                                 }
+                                # A source-declared ordering violation (FIFO/
+                                # FEFO returns the wrong batch) is a real defect
+                                # observed at runtime: surface it as experiment
+                                # evidence so the oracle can adjudicate it.
+                                _ordering = _dict(
+                                    _probe_result.get("ordering_check")
+                                )
+                                if _ordering.get("violation") is True:
+                                    observations["_ordering_violation"] = {
+                                        "ordering": _ordering.get("ordering"),
+                                        "expected": _ordering.get("expected"),
+                                        "observed": _ordering.get("observed"),
+                                        "path": path_template,
+                                        "operation_ref": op_ref,
+                                    }
                                 request_body = deepcopy(_probed_body)
                                 request_body_fingerprint = _sha256(request_body)
                                 request_semantics_fingerprint = _sha256({
