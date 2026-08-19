@@ -1126,6 +1126,23 @@ def validate_assertion_receipt(receipt: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _framework_generic_404_body(obs: dict[str, Any]) -> bool:
+    """True when the observation body is a framework-generic 404 marker.
+
+    Starlette/FastAPI return ``{"detail": "Not Found"}`` for unmatched routes;
+    business 404s carry specific details (entity names/ids) and never match
+    this exact marker. Also accepts the raw-string form for bodies that were
+    not JSON-parsed (proxy/gateway variants).
+    """
+    body = obs.get("body")
+    if isinstance(body, dict):
+        return bool(body) and set(body) == {"detail"} and body.get("detail") == "Not Found"
+    raw = str(body or "")
+    if not raw:
+        return False
+    return '"detail": "Not Found"' in raw or "'detail': 'Not Found'" in raw
+
+
 def _typed_observer_receipts(
     observations: dict[str, Any],
 ) -> list[dict[str, Any]]:
@@ -1605,6 +1622,21 @@ def evaluate_assertion(
                 ):
                     passed = None
                     reason_code = "HTTP_INPUT_REJECTED_INDETERMINATE"
+                # A framework-level 404 — the deployed target has no route for
+                # this path (Starlette/FastAPI generic {"detail": "Not Found"},
+                # or an HTML/"Cannot METHOD" default) — proves nothing about
+                # the target's business behavior: the request never reached a
+                # handler. Cross-service routing artifacts and interface-drift
+                # observations must stay INDETERMINATE, never authorization /
+                # validation defects.
+                if (
+                    passed is False
+                    and expected == 2
+                    and actual == 404
+                    and _framework_generic_404_body(obs)
+                ):
+                    passed = None
+                    reason_code = "HTTP_ROUTE_NOT_FOUND_INDETERMINATE"
                 # Soft business reject on an accepted HTTP class must not pass a
                 # success-class assertion when the body declares failure.
                 if (

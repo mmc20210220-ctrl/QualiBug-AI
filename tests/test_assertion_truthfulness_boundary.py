@@ -3,6 +3,63 @@ from __future__ import annotations
 from ai_test_asset_center.assertion_dsl import evaluate_assertion
 
 
+def test_framework_generic_404_is_indeterminate_not_violation() -> None:
+    # A framework-level route-not-found (Starlette/FastAPI {"detail": "Not
+    # Found"}) proves nothing about the target's business behavior: the request
+    # never reached a handler. Cross-service routing artifacts must never be
+    # reported as authorization defects.
+    receipt = evaluate_assertion(
+        {
+            "assertion_id": "status-404fw",
+            "kind": "http_status_class",
+            "expected": 2,
+            "authorization_semantics": "authorization",
+        },
+        observations={
+            "status_code": 404,
+            "body": {"detail": "Not Found"},
+        },
+    )
+    assert receipt["status"] == "INDETERMINATE"
+    assert receipt["passed"] is None
+    assert receipt["reason_code"] == "HTTP_ROUTE_NOT_FOUND_INDETERMINATE"
+
+
+def test_framework_generic_404_raw_body_is_indeterminate() -> None:
+    receipt = evaluate_assertion(
+        {
+            "assertion_id": "status-404raw",
+            "kind": "http_status_class",
+            "expected": 2,
+        },
+        observations={
+            "status_code": 404,
+            "body": '{"detail": "Not Found"}',
+        },
+    )
+    assert receipt["status"] == "INDETERMINATE"
+    assert receipt["reason_code"] == "HTTP_ROUTE_NOT_FOUND_INDETERMINATE"
+
+
+def test_business_404_remains_violation() -> None:
+    # A 404 with a specific business detail is the target's own response and
+    # keeps its pre-existing semantics.
+    receipt = evaluate_assertion(
+        {
+            "assertion_id": "status-404biz",
+            "kind": "http_status_class",
+            "expected": 2,
+            "authorization_semantics": "authorization",
+        },
+        observations={
+            "status_code": 404,
+            "body": {"detail": "order 5 not found"},
+        },
+    )
+    assert receipt["status"] == "VIOLATION"
+    assert receipt["passed"] is False
+
+
 def test_postcondition_missing_field_evidence_is_not_violation() -> None:
     receipt = evaluate_assertion(
         {

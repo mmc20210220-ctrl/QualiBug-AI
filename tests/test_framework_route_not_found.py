@@ -33,6 +33,34 @@ def test_business_404_with_json_content_type_is_not_route_not_found() -> None:
     )
 
 
+def test_starlette_generic_json_404_is_route_not_found() -> None:
+    # FastAPI/Starlette default for unmatched routes: {"detail": "Not Found"}.
+    assert (
+        framework_route_not_found(404, "application/json", {"detail": "Not Found"})
+        is True
+    )
+    # Raw-string form for bodies that were not JSON-parsed.
+    assert (
+        framework_route_not_found(404, "application/json", '{"detail": "Not Found"}')
+        is True
+    )
+
+
+def test_specific_json_404_with_extra_keys_is_not_route_not_found() -> None:
+    # A business 404 that happens to carry a detail key plus other fields, or a
+    # specific message, is NOT the generic framework marker.
+    assert (
+        framework_route_not_found(
+            404, "application/json", {"detail": "Not Found", "code": 7}
+        )
+        is False
+    )
+    assert (
+        framework_route_not_found(404, "application/json", {"detail": "order 5 not found"})
+        is False
+    )
+
+
 def test_non_404_is_never_route_not_found() -> None:
     assert framework_route_not_found(200, "text/html") is False
     assert framework_route_not_found(500, "text/html") is False

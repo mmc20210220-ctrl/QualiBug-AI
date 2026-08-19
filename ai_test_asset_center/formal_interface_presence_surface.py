@@ -100,16 +100,17 @@ def _observe_interface_presence(envelope: dict[str, Any]) -> dict[str, Any]:
     obs = treatment if _int_status(treatment.get("status_code")) > 0 else control
     status_code = _int_status(obs.get("status_code"))
     content_type = _content_type(obs.get("headers"))
+    obs_body = obs.get("body")
     evidence = {
         EVIDENCE_KEY: {
             "status_code": status_code,
             "content_type": content_type,
             "framework_route_not_found": framework_route_not_found(
-                status_code, content_type
+                status_code, content_type, obs_body
             ),
             "interface_present": (
                 status_code > 0
-                and not framework_route_not_found(status_code, content_type)
+                and not framework_route_not_found(status_code, content_type, obs_body)
             ),
         }
     }

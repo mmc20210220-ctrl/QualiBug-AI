@@ -179,13 +179,21 @@ def framework_route_not_found(
 
     A framework default 404 is distinguishable from a business 404 by its
     media type (text/html) and, when the body is available, by the generic
-    ``Cannot <METHOD> <path>`` marker. The media-type signal alone is
-    sufficient — business services return application/json for their own 404s.
+    ``Cannot <METHOD> <path>`` marker or Starlette/FastAPI's generic JSON
+    ``{"detail": "Not Found"}``. The media-type signal alone is sufficient for
+    HTML; business services return application/json with a SPECIFIC detail for
+    their own 404s, so only the exact generic marker qualifies as framework
+    route-not-found.
     """
     if int(status_code or 0) != 404:
         return False
     media_type = str(content_type or "").split(";", 1)[0].strip().lower()
     if media_type == "text/html":
+        return True
+    # Starlette/FastAPI default 404: {"detail": "Not Found"} with the exact
+    # generic message. Business 404s carry specific details (entity names,
+    # ids) and never match this exact marker.
+    if isinstance(body, dict) and set(body) == {"detail"} and body.get("detail") == "Not Found":
         return True
     # Fallback when content-type is missing but the body carries the framework
     # marker (some gateways/proxies strip the header yet keep the HTML body).
@@ -194,6 +202,8 @@ def framework_route_not_found(
         raw = str(body.get("_raw") or "")
     else:
         raw = str(body or "")
+    if '"detail": "Not Found"' in raw or "'detail': 'Not Found'" in raw:
+        return True
     if "cannot" in raw.lower() and any(
         f"cannot {method.lower()} " in raw.lower()
         for method in _FRAMEWORK_ROUTE_NOT_FOUND_METHODS
