@@ -99,6 +99,35 @@ def _declared_array_fields(behavior_ir: dict[str, Any]) -> list[str]:
     return fields
 
 
+def _declared_scalar_fields(behavior_ir: dict[str, Any]) -> list[str]:
+    """Scalar-type request fields already declared by any service's schemas.
+
+    Undocumented policy endpoints often read single scalar fields (status,
+    qty, limit). A field the enterprise documents anywhere is a legitimate
+    probe target; the probe sends a minimal scalar value (1) for it.
+    """
+    fields: list[str] = []
+    seen: set[str] = set()
+    for op in _list(behavior_ir.get("operations")):
+        if not isinstance(op, dict):
+            continue
+        schema = _dict(op.get("request_schema"))
+        media = _dict(_dict(schema.get("content")).get("application/json"))
+        props = _dict(media.get("schema")).get("properties")
+        for name, prop in _dict(props).items():
+            if isinstance(prop, dict) and _text(prop.get("type")).lower() in {
+                "string",
+                "integer",
+                "number",
+                "boolean",
+            }:
+                norm = _text(name)
+                if norm and norm not in seen:
+                    seen.add(norm)
+                    fields.append(norm)
+    return fields
+
+
 def probe_undocumented_request_fields(
     *,
     base_url: str,
@@ -111,10 +140,11 @@ def probe_undocumented_request_fields(
 ) -> dict[str, Any]:
     """Probe which field name makes an undocumented policy endpoint 2xx.
 
-    Tries each candidate field with a minimal non-empty value (``[{"id": 1,
-    "ts": 1}]`` for arrays) and returns the first accepted field set plus the
-    observed response. ``{}`` must have been rejected (422) before probing is
-    worth attempting; the caller decides that gate.
+    Tries each candidate field with a minimal non-empty value: source-declared
+    scalar fields get ``1``, arrays get ``[{"id": 1, "ts": 1}]``, and generic
+    collection nouns get the array shape. Returns the first accepted field set
+    plus the observed response. ``{}`` must have been rejected (422) before
+    probing is worth attempting; the caller decides that gate.
 
     When ``root``/``project`` are supplied, a source-driven FIFO/FEFO ordering
     check runs after the field is found: the PRD declares allocation rules
@@ -122,20 +152,26 @@ def probe_undocumented_request_fields(
     verifies the target returns the earliest batch. The assertion comes from
     the source text, never from a hardcoded rule.
     """
-    candidates: list[str] = []
+    _scalar_set = set(_declared_scalar_fields(behavior_ir or {}))
+    candidates: list[tuple[str, Any]] = []
     seen: set[str] = set()
-    for field in (*_declared_array_fields(behavior_ir or {}), *_GENERIC_COLLECTION_FIELDS):
+    for field in (
+        *_declared_array_fields(behavior_ir or {}),
+        *_declared_scalar_fields(behavior_ir or {}),
+        *_GENERIC_COLLECTION_FIELDS,
+    ):
         norm = _text(field)
         if norm and norm not in seen:
             seen.add(norm)
-            candidates.append(norm)
+            candidates.append(
+                (norm, 1 if norm in _scalar_set else [{"id": 1, "ts": 1}])
+            )
         if len(candidates) >= max_fields:
             break
 
     receipts: list[dict[str, Any]] = []
-    probe_body = [{"id": 1, "ts": 1}]
-    for field in candidates:
-        body = {field: probe_body}
+    for field, field_value in candidates:
+        body = {field: field_value}
         status, response = _call_json(base_url, path, token, body)
         preview = _text(json.dumps(response, ensure_ascii=False))[:120]
         receipts.append({

@@ -53,6 +53,15 @@ from .sandbox_write_executor_base import (
     evaluator_request_trace,
 )
 
+# Run-scoped probe memoization: the undocumented-body probe is bounded but
+# expensive (one HTTP request per candidate field); the same (campaign,
+# base_url, path) tuple re-probing in every phase/experiment wasted 14+
+# requests per obligation. One probe per path per campaign is enough — the
+# governed re-issue still happens per experiment, so no observation is shared
+# across experiments. Bounded so a long campaign can never grow unbounded.
+_PROBE_RESULT_CACHE: dict[tuple[str, str, str], dict] = {}
+_PROBE_CACHE_LIMIT = 256
+
 
 def _response_content_type(obs: dict[str, Any]) -> str:
     """Response media type from a step observation's raw headers."""
@@ -1755,14 +1764,30 @@ def execute_non_barrier_plans(
                             probe_undocumented_request_fields,
                         )
 
-                        _probe_result = probe_undocumented_request_fields(
-                            base_url=base_url,
-                            path=path,
-                            token=token,
-                            behavior_ir={},
-                            root=root,
-                            project=project,
-                        )
+                        _probe_key = (campaign_id, _text(base_url), _text(path))
+                        _probe_result = _PROBE_RESULT_CACHE.get(_probe_key)
+                        if _probe_result is None:
+                            _probe_result = probe_undocumented_request_fields(
+                                base_url=base_url,
+                                path=path,
+                                token=token,
+                                behavior_ir={
+                                    "operations": list(ops.values())
+                                    if isinstance(ops, dict)
+                                    else []
+                                },
+                                root=root,
+                                project=project,
+                            )
+                            if len(_PROBE_RESULT_CACHE) >= _PROBE_CACHE_LIMIT:
+                                _PROBE_RESULT_CACHE.pop(next(iter(_PROBE_RESULT_CACHE)))
+                            _PROBE_RESULT_CACHE[_probe_key] = dict(_probe_result)
+                        else:
+                            print(
+                                f"[body-probe] cache hit path={path_template} "
+                                f"field={_probe_result.get('accepted_field')!r}",
+                                flush=True,
+                            )
                         print(
                             f"[body-probe] probe result path={path_template} "
                             f"field={_probe_result.get('accepted_field')!r} "
