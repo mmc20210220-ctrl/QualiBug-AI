@@ -41,6 +41,16 @@ _ASSERTION_REQUIREMENTS: dict[str, dict[str, Any]] = {
         "required_entities": [],
         "requires_control": True,
     },
+    "response_consistency": {
+        # Decision-surface idempotency: the property is that the identical
+        # replayed input yields the same decision body. The two writes'
+        # responses ARE the evidence — no entity readback exists on /check
+        # /resolve /validate surfaces, so no entity requirement may gate it.
+        "required_phases": ["control", "treatment"],
+        "required_fields": ["status_code", "body"],
+        "required_entities": [],
+        "requires_control": True,
+    },
     "isolation": {
         "required_phases": ["control", "treatment"],
         "required_fields": ["status_code", "body"],

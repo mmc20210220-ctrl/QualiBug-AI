@@ -346,6 +346,10 @@ SUPPORTED_KINDS = {
     # text must not carry state vocabulary outside the rule's declared
     # allowed set.
     "ui_state_consistency",
+    # Decision-surface idempotency (idempotency on /check /resolve /validate
+    # endpoints): the operation's response IS its effect, so the property is
+    # that the identical replayed input yields the same decision body.
+    "response_consistency",
 }
 
 
@@ -954,6 +958,34 @@ def _concurrent_boundary_held(
     return None, "CONCURRENCY_INVARIANT_NOT_COMPARABLE"
 
 
+def _decision_pair_consistency(observations: dict[str, Any]) -> bool | None:
+    """Response consistency of the two concurrent decision writes.
+
+    Decision surfaces (/check, /resolve, /validate…) return their decision in
+    the response body and have no entity boundary to hold. Both arms must
+    have been accepted (2xx) with comparable response bodies; a rejected arm
+    means the race was serialized/guarded and is not evidence of divergence.
+    """
+    control = _dict(observations.get("control_observation"))
+    treatment = _dict(observations.get("treatment_observation"))
+    ctl_status = control.get("status_code")
+    trt_status = treatment.get("status_code")
+    try:
+        ctl_status_i = int(ctl_status) if ctl_status is not None else 0
+        trt_status_i = int(trt_status) if trt_status is not None else 0
+    except (TypeError, ValueError):
+        return None
+    if ctl_status_i <= 0 or trt_status_i <= 0:
+        return None
+    if not (200 <= ctl_status_i < 300 and 200 <= trt_status_i < 300):
+        return None
+    control_body = control.get("body")
+    treatment_body = treatment.get("body")
+    if not isinstance(control_body, (dict, list)) or not isinstance(treatment_body, (dict, list)):
+        return None
+    return control_body == treatment_body
+
+
 def _dual_write_statuses(
     observations: dict[str, Any], phase: str
 ) -> list[int]:
@@ -1558,6 +1590,21 @@ def evaluate_assertion(
                 actual = int(obs["status_code"])
                 expected = int(expected_value)
                 passed = (actual // 100) == expected
+                # A 422 (input validation rejection) on a success-expected
+                # authorization/validation experiment is the harness's own
+                # request being invalid — it proves neither permission nor
+                # denial. 401/403 are the authorization signals; 422 is an
+                # input-contract gap and must stay INDETERMINATE instead of
+                # being reported as an authorization defect.
+                if (
+                    passed is False
+                    and expected == 2
+                    and actual == 422
+                    and _text(spec.get("authorization_semantics") or spec.get("_authz_semantics"))
+                    in {"", "authorization", "permitted_invocation"}
+                ):
+                    passed = None
+                    reason_code = "HTTP_INPUT_REJECTED_INDETERMINATE"
                 # Soft business reject on an accepted HTTP class must not pass a
                 # success-class assertion when the body declares failure.
                 if (
@@ -2284,6 +2331,51 @@ def evaluate_assertion(
                 reason_code = "BUSINESS_EFFECT_MISSING"
             else:
                 passed = int(obs["effect_count"]) == int(expected_count)
+        elif effective_kind == "response_consistency":
+            # Decision-surface idempotency (/check, /resolve, /validate…):
+            # the operation's response IS its effect, so the property is that
+            # the identical replayed input yields the same decision. Verdict
+            # is conservative: only two ACCEPTED calls are compared — a
+            # rejected replay (quota/guard) is a valid idempotency control
+            # and stays INDETERMINATE, never a violation; missing evidence
+            # stays INDETERMINATE.
+            control_step = _dict(obs.get("control_observation"))
+            treatment_step = _dict(obs.get("treatment_observation"))
+            expected = {
+                "control_status_class": "2xx",
+                "treatment_status_class": "2xx",
+                "bodies_equal": True,
+            }
+            actual = {
+                "control_status": control_step.get("status_code"),
+                "treatment_status": treatment_step.get("status_code"),
+            }
+            ctl_status = control_step.get("status_code")
+            trt_status = treatment_step.get("status_code")
+            try:
+                ctl_status_i = int(ctl_status) if ctl_status is not None else 0
+                trt_status_i = int(trt_status) if trt_status is not None else 0
+            except (TypeError, ValueError):
+                reason_code = "RESPONSE_CONSISTENCY_STATUS_INVALID"
+            else:
+                if ctl_status_i <= 0 or trt_status_i <= 0:
+                    reason_code = "RESPONSE_CONSISTENCY_EVIDENCE_MISSING"
+                elif not (200 <= ctl_status_i < 300 and 200 <= trt_status_i < 300):
+                    # A rejected replay is an enforced idempotency guard; the
+                    # decision surface has no verdict to compare.
+                    reason_code = "RESPONSE_REPLAY_REJECTED_INDETERMINATE"
+                else:
+                    control_body = control_step.get("body")
+                    treatment_body = treatment_step.get("body")
+                    if not isinstance(control_body, (dict, list)) or not isinstance(treatment_body, (dict, list)):
+                        reason_code = "RESPONSE_CONSISTENCY_BODY_UNSUPPORTED"
+                    else:
+                        actual["bodies_equal"] = control_body == treatment_body
+                        if control_body != treatment_body:
+                            passed = False
+                            reason_code = "RESPONSE_BODY_DIVERGED"
+                        else:
+                            passed = True
         elif effective_kind == "concurrency_final_invariant":
             expected = {"invariant_held": True}
             actual = {
@@ -2390,6 +2482,21 @@ def evaluate_assertion(
                         passed = _held
                         if not _held:
                             reason_code = "CONCURRENT_BOUNDARY_VIOLATED"
+                    elif _decision_pair_consistency(obs) is not None:
+                        # Decision surfaces (/check, /resolve, /validate…): no
+                        # entity boundary exists — the property under the race
+                        # is that both accepted calls return the same decision.
+                        # Divergent decisions under a proven concurrent release
+                        # is itself the race defect; equal decisions pass.
+                        _consistent = _decision_pair_consistency(obs)
+                        obs["invariant_held"] = _consistent
+                        actual["invariant_held"] = _consistent
+                        actual["invariant_held_basis"] = (
+                            "DECISION_RESPONSE_CONSISTENCY"
+                        )
+                        passed = _consistent
+                        if not _consistent:
+                            reason_code = "CONCURRENT_DECISION_DIVERGED"
                     else:
                         reason_code = "FINAL_INVARIANT_MISSING"
                         actual["invariant_held_missing_reason"] = _basis

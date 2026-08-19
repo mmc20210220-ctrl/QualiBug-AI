@@ -588,6 +588,23 @@ def _is_action_verb_path(path: str) -> bool:
     return segments[-1] in _ACTION_VERB_SEGMENTS
 
 
+def _is_decision_endpoint(operation: dict[str, Any]) -> bool:
+    """True when the operation decides/validates rather than mutating an entity.
+
+    Decision surfaces (/check, /resolve, /validate, /calculate…) return a
+    decision in the response body and have no observable entity effect to
+    read back; their idempotency/concurrency property is response consistency
+    across the repeated or concurrent writes.
+    """
+    from .experiment_protocols_base import _DECISION_ENDPOINT_TOKENS
+
+    surface = (
+        f"{_text(operation.get('path') or operation.get('raw_path'))} "
+        f"{_text(operation.get('summary'))} {_text(operation.get('operation_id'))}"
+    ).casefold()
+    return any(token in surface for token in _DECISION_ENDPOINT_TOKENS)
+
+
 def _resolve_fallback_cleanup_tier(
     *,
     primary_op: dict[str, Any],
@@ -3472,6 +3489,13 @@ def compile_experiment_for_obligation(
         or _FAMILY_ASSERTION_KIND.get(family)
         or "http_status"
     )
+    if family == "idempotency" and _is_decision_endpoint(primary_op):
+        # Decision endpoints (/check, /resolve, /validate…) have no entity to
+        # read back — the operation's response IS its effect. The family
+        # default kind idempotency (→ effect-count) is structurally
+        # undecidable there and would block every such obligation forever;
+        # response consistency is the decidable property.
+        assertion_kind = "response_consistency"
     # Kind-to-evidence contract. An assertion kind whose required observation key no
     # observer writes can never return a verdict; compiling it produces an experiment
     # that executes, consumes budget, and dies as a permanent INDETERMINATE that is
@@ -3578,7 +3602,14 @@ def compile_experiment_for_obligation(
     # target adds zero new business effect on the repeated write (an enforced
     # quota refuses the replay; a no-op replay changes nothing). A buggy
     # target that applies the effect again yields treatment-window effect 1.
-    if family == "idempotency":
+    if family == "idempotency" and not _is_decision_endpoint(primary_op):
+        # Entity-mutating idempotency: the effect-count assertion measures the
+        # replay window — a correct target adds zero new business effect on
+        # the repeated write (an enforced quota refuses the replay; a no-op
+        # replay changes nothing). A buggy target that applies the effect
+        # again yields treatment-window effect 1. Decision endpoints are
+        # covered by the response_consistency primary assertion above and
+        # must not carry the undecidable effect-count assertion.
         assertions.append({
             "assertion_id": "assert_idempotency_effect",
             "kind": "idempotency_effect",

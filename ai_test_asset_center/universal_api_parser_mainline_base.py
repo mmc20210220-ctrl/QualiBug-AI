@@ -146,6 +146,42 @@ def parse_to_openapi(text_or_path: str | Path) -> dict[str, Any]:
         return _empty_spec()
 
 
+def _resolve_schema_refs(value: Any, spec: dict[str, Any], _depth: int = 0) -> Any:
+    """Inline ``$ref`` schemas against the document's own ``components``.
+
+    OpenAPI ``requestBody`` schemas are frequently bare ``$ref`` pointers into
+    ``components.schemas``. Downstream request-body construction resolves
+    properties only from inline schema objects, so a bare ref made
+    ``POST /sales-orders`` send ``{}`` and the target's 422 ``customer_id
+    required`` was misread as a defect. Resolution is document-local and
+    follows the JSON pointer exactly; unresolvable or cyclic refs stay as-is
+    (fail-open, never synthesized).
+    """
+    if not isinstance(value, dict) or _depth > 12:
+        return value
+    ref = value.get("$ref")
+    if isinstance(ref, str) and ref.startswith("#/components/schemas/"):
+        name = ref[len("#/components/schemas/"):]
+        schema = _dict_value(_dict_value(spec.get("components")).get("schemas")).get(name)
+        if isinstance(schema, dict):
+            resolved = {
+                key: _resolve_schema_refs(item, spec, _depth + 1)
+                for key, item in schema.items()
+                if key != "$ref"
+            }
+            resolved.setdefault("title", name)
+            return resolved
+        return value
+    return {
+        key: _resolve_schema_refs(item, spec, _depth + 1)
+        for key, item in value.items()
+    }
+
+
+def _dict_value(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
 def build_api_operations_from_text(
     api_spec_text: str,
     *,
@@ -207,10 +243,11 @@ def build_api_operations_from_text(
                     "tags": list(operation.get("tags") or []),
                     "parameters": list(operation.get("parameters") or []),
                     "required_roles": required_roles,
-                    "request_schema": (
+                    "request_schema": _resolve_schema_refs(
                         operation.get("requestBody")
                         if isinstance(operation.get("requestBody"), dict)
-                        else {}
+                        else {},
+                        spec,
                     ),
                     "response_schema": (
                         operation.get("responses")

@@ -76,6 +76,7 @@ def build_behavior_ir_from_knowledge_asset(
     api_operations: list[dict[str, Any]] | None = None,
     runtime_actors: list[dict[str, Any]] | None = None,
     available_surfaces: dict[str, bool] | None = None,
+    operation_path_scope: set[tuple[str, str]] | None = None,
 ) -> dict[str, Any]:
     role_bound_actors, role_identity_receipt = resolve_runtime_actor_roles(
         asset, runtime_actors
@@ -88,6 +89,7 @@ def build_behavior_ir_from_knowledge_asset(
         api_operations=api_operations,
         runtime_actors=prepared,
         available_surfaces=available_surfaces,
+        operation_path_scope=operation_path_scope,
     )
     for actor in _list(model.get("actors")):
         if not isinstance(actor, dict):

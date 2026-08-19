@@ -223,9 +223,21 @@ def execute_barrier_plans(
         )
         if not observation_path and _has_response_bound_create_observers(op, ops):
             observation_path = normalize_path_placeholders(path_template)
+        if not observation_path and _text(step.get("barrier_group")):
+            # Concurrency barrier participant: the experiment IS the concurrent
+            # double-write — the release/participant timeline plus each write's
+            # own HTTP response is the evidence (concurrent_double_write
+            # assertion). No entity readback exists for decision endpoints
+            # (/check, /resolve); blocking on a missing observation read would
+            # freeze every concurrency obligation on exactly the endpoints
+            # concurrency rules target. The write path is used as the
+            # observation anchor so the barrier executes and the timeline
+            # observer can attest the release.
+            observation_path = normalize_path_placeholders(path_template)
         # Only a source-declared read can observe the effect; the write path is
         # not an observation path just because it is a URL — except for
-        # collection creates whose effect proof is response-bound after 2xx.
+        # collection creates whose effect proof is response-bound after 2xx,
+        # and barrier participants whose evidence is the timeline itself.
         if not observation_path:
             return {
                 "harness_error": False,

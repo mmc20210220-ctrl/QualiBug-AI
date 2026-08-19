@@ -117,6 +117,32 @@ def _minimal_body_from_schema(operation: dict[str, Any]) -> dict[str, Any]:
     return body
 
 
+def _operation_has_required_body(operation: dict[str, Any]) -> bool:
+    """True when the operation's contract declares a mandatory JSON body.
+
+    ``requestBody.required`` may be declared at the top level, at the media
+    level, or as a boolean ``schema.required``. Presence-validated payloads
+    (``{"type": "object"}`` with no ``properties``) are exactly the case that
+    must be carried as an explicit body — a bodyless POST is rejected with
+    422 ``Field required`` and gets misread as an authorization defect.
+    """
+    request_schema = _dict(operation.get("request_schema") or operation.get("requestBody"))
+    if not request_schema:
+        return False
+    if request_schema.get("required") is True:
+        return True
+    content = request_schema.get("content")
+    if isinstance(content, dict):
+        for media in content.values():
+            if not isinstance(media, dict):
+                continue
+            if media.get("required") is True:
+                return True
+            if _dict(media.get("schema")).get("required") is True:
+                return True
+    return False
+
+
 def _minimal_array_rows(items_schema: dict[str, Any], *, depth: int = 0) -> list[dict[str, Any]]:
     """Build one structurally-valid detail row from an array item schema.
 
@@ -2283,21 +2309,38 @@ def compile_family_protocol(
                 "reason_code": "BLOCKED_MISSING_ACTOR",
                 "detail": "permitted_actor",
             }
+        body: dict[str, Any] | None = source_request_example(
+            operation, sibling_operations=sibling_operations
+        )
+        if not body and method in {"POST", "PUT", "PATCH"}:
+            body = _minimal_body_from_schema(operation)
+        if not body:
+            if _operation_has_required_body(operation):
+                # Source-declared required body with no field-level schema: a
+                # bodyless POST is rejected 422 Field required and misread as
+                # a defect; {} exercises the real permitted invocation.
+                body = {}
+            else:
+                body = None
+        step: dict[str, Any] = {
+            "step_id": "treatment_1",
+            "actor_ref": actor,
+            "operation_ref": operation_ref,
+            "intent": "permitted_operation_invocation",
+            "protocol_step": "permitted_invocation",
+            "property_template": template,
+        }
+        if body is not None:
+            step["body"] = deepcopy(body)
         return {
             "status": "COMPILED",
             "control_plan": [],
-            "treatment_plan": [{
-                "step_id": "treatment_1",
-                "actor_ref": actor,
-                "operation_ref": operation_ref,
-                "intent": "permitted_operation_invocation",
-                "protocol_step": "permitted_invocation",
-                "property_template": template,
-            }],
+            "treatment_plan": [step],
             "assertion": {
                 "kind": "http_status_class",
                 "expected_class": 2,
                 "compare_field": "status_code",
+                "authorization_semantics": "permitted_invocation",
             },
         }
     # ── Credential-gated write guard ──
@@ -2431,6 +2474,10 @@ def compile_family_protocol(
                 "body": deepcopy(body),
                 "property_template": _text(property_spec.get("template")),
             }],
+            "observers": [
+                {"observer_id": "http_response"},
+                {"observer_id": "business_effect"},
+            ],
         }
 
     if family == "concurrency":
@@ -3607,7 +3654,7 @@ def compile_family_protocol(
             "detail": "conservation_requires_non_empty_equation_terms",
         }
 
-    write_body: dict[str, Any] = {}
+    write_body: dict[str, Any] | None = None
     if (
         family in {"authorization", "isolation", "visibility"}
         and method in {"POST", "PUT", "PATCH"}
@@ -3615,6 +3662,20 @@ def compile_family_protocol(
         write_body = source_request_example(operation, sibling_operations=sibling_operations)
         if not write_body and not property_spec.get("defer_write_body_to_runtime"):
             write_body = _minimal_body_from_schema(operation)
+        if not write_body:
+            if (
+                not property_spec.get("defer_write_body_to_runtime")
+                and _operation_has_required_body(operation)
+            ):
+                # Source-declared required body with no field-level schema: the
+                # target validates presence only, so attach an explicit empty
+                # object. A bodyless POST is rejected 422 Field required and
+                # misread as an authorization defect; {} exercises the real rule.
+                write_body = {}
+            else:
+                # No example, no schema material, or the body is deferred to
+                # the runtime observed-entity projection: no compile-time body.
+                write_body = None
 
     # ── Identity-addressed path reads (isolation/visibility) ──
     # A resource-targeted owned read (profile/{id} 权限：本人或管理员) has no
@@ -3649,7 +3710,7 @@ def compile_family_protocol(
             "intent": "authorized_control",
             "protocol_step": "positive_control",
         }
-        if write_body:
+        if write_body is not None:
             control_step["body"] = deepcopy(write_body)
         control_plan.append(control_step)
     treatment_step = {
@@ -3660,7 +3721,7 @@ def compile_family_protocol(
         "protocol_step": "treatment",
         "property_template": _text(property_spec.get("template")),
     }
-    if write_body:
+    if write_body is not None:
         treatment_step["body"] = deepcopy(write_body)
     ownership_param = _text(property_spec.get("ownership_param"))
     ownership_location = _text(property_spec.get("ownership_param_location")).lower()

@@ -713,6 +713,15 @@ def build_discovery_plan(
         api_operations=operations,
         runtime_actors=runtime_actors,
         available_surfaces=observation_surfaces_for_adapters(_available_adapters),
+        operation_path_scope=(
+            {
+                (_text(op.get("method")).upper(), _text(op.get("path")).rstrip("/"))
+                for op in operations
+                if isinstance(op, dict) and _text(op.get("path"))
+            }
+            if operations
+            else None
+        ),
     )
     invariants = [
         row

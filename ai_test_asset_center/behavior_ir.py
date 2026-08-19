@@ -24,6 +24,7 @@ def build_behavior_ir_from_knowledge_asset(
     api_operations: list[dict[str, Any]] | None = None,
     runtime_actors: list[dict[str, Any]] | None = None,
     available_surfaces: dict[str, bool] | None = None,
+    operation_path_scope: set[tuple[str, str]] | None = None,
 ) -> dict[str, Any]:
     model = _original_build_behavior_ir(
         asset,
@@ -32,6 +33,7 @@ def build_behavior_ir_from_knowledge_asset(
         api_operations=api_operations,
         runtime_actors=runtime_actors,
         available_surfaces=available_surfaces,
+        operation_path_scope=operation_path_scope,
     )
     model = project_database_body_reference_relations(model, asset)
     model = project_operation_security_provenance(

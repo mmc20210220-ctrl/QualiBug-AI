@@ -1377,6 +1377,41 @@ def build_source_backed_coverage_obligations(
 
             # Fail visible: do not paper over factory errors with a bare-family
             # obligation that can only die later as invariant_assertion_kind_missing.
+            # ── Authorization permit-gate ──
+            # A coverage node for "actor × operation" becomes an executable
+            # authorization obligation ONLY when the source declares the actor
+            # is permitted (a permits relation, a permission-matrix row, or a
+            # source-declared required-role that includes the actor). Without
+            # permit evidence the pair carries no "must succeed" contract: the
+            # target's 403 would be correct RBAC, and asserting 2xx on it
+            # fabricates an authorization defect from the harness's own guess.
+            # The pair stays a visible coverage gap instead.
+            if (
+                node_type == "actor_operation"
+                and _text(node.get("risk_family")) == "authorization"
+            ):
+                _actor_id = _text(node.get("actor_id"))
+                _op_for_gate = _text(node.get("operation_id"))
+                _permit_actor_ids = {
+                    _text(r.get("actor_ref") or r.get("from_ref"))
+                    for r in _list(behavior_ir.get("relations"))
+                    if _text(r.get("relation_type")) == "permits"
+                    and (
+                        _text(r.get("operation_ref")) == _op_for_gate
+                        or _text(r.get("to_ref")) == _op_for_gate
+                    )
+                }
+                _role_actor_row = next(
+                    (
+                        a
+                        for a in _list(behavior_ir.get("actors"))
+                        if isinstance(a, dict) and _text(a.get("id")) == _actor_id
+                    ),
+                    {},
+                )
+                _permitted = _actor_id in _permit_actor_ids
+                if not _permitted and not _list(_role_actor_row.get("allowed_actions")):
+                    continue
             obl = make_obligation(
                 risk_family=family,
                 subject_refs=[_op_ref] + ([actor_ref] if actor_ref else []),

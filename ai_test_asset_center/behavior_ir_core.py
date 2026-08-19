@@ -3778,6 +3778,7 @@ def build_behavior_ir_from_knowledge_asset(
     api_operations: list[dict[str, Any]] | None = None,
     runtime_actors: list[dict[str, Any]] | None = None,
     available_surfaces: dict[str, bool] | None = None,
+    operation_path_scope: set[tuple[str, str]] | None = None,
 ) -> dict[str, Any]:
     """Build Behavior IR from enterprise knowledge asset + optional OpenAPI ops.
 
@@ -3788,9 +3789,31 @@ def build_behavior_ir_from_knowledge_asset(
     ``adapter_capability.observation_surfaces_for_adapters`` so the IR and the
     experiment compiler answer the same question the same way. Omitting it keeps the
     historical http-only default.
+
+    ``operation_path_scope`` declares which ``(method, path)`` operations the
+    current run may execute against this base_url. A multi-service enterprise
+    knowledge asset carries every service's interfaces; without a scope, a
+    single-base_url run would compile obligations for paths that 404 on the
+    target service and surface those as defects. When the scope is provided,
+    knowledge-asset interfaces outside it are excluded from the IR; explicitly
+    submitted ``api_operations`` always stay (they are this run's contract).
+    Omitting it keeps the historical all-interfaces behavior.
     """
     model = empty_behavior_ir(project_id=project_id, source_snapshot_hash=source_snapshot_hash)
     data = _dict(asset)
+    _submitted_operations = _list(api_operations)
+    _submitted_scope: set[tuple[str, str]] = set()
+    if operation_path_scope is not None:
+        _submitted_scope = {
+            (_text(m).upper(), _text(p).rstrip("/"))
+            for (m, p) in operation_path_scope
+            if _text(m) and _text(p)
+        }
+        _submitted_scope.update(
+            (_text(op.get("method")).upper(), _text(op.get("path")).rstrip("/"))
+            for op in _submitted_operations
+            if isinstance(op, dict) and _text(op.get("path"))
+        )
     # ── Data-model enum index ──
     # The asset's interface technical declarations carry the source data
     # models' enums (Payment.status: [INIT, SUCCESS, FAILED, REFUNDED]) that
@@ -4023,6 +4046,13 @@ def build_behavior_ir_from_knowledge_asset(
         path = _text(op.get("path") or op.get("endpoint") or op.get("url"))
         if not path:
             continue
+        if operation_path_scope is not None:
+            # Single-base_url run: only operations this run may actually reach
+            # on the target stay in the IR. Knowledge-asset interfaces from
+            # other services would compile obligations that 404 on this service
+            # and surface as fabricated authorization defects.
+            if (method, path.rstrip("/")) not in _submitted_scope:
+                continue
         service = _text(op.get("service") or op.get("service_name") or op.get("server"))
         op_id = _text(op.get("operation_id") or op.get("operationId") or op.get("id")) or _stable_id("op", method, path)
         side_effect = _infer_operation_effect(op, method)

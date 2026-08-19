@@ -455,6 +455,7 @@ def build_behavior_ir_with_semantic_operation_bindings(
     api_operations: list[dict[str, Any]] | None = None,
     runtime_actors: list[dict[str, Any]] | None = None,
     available_surfaces: dict[str, bool] | None = None,
+    operation_path_scope: set[tuple[str, str]] | None = None,
 ) -> dict[str, Any]:
     """Build canonical IR and apply exact source-grounded joins on every surface."""
     ui_asset, scan_ui_receipt = overlay_scan_ui_contracts(asset)
@@ -504,6 +505,7 @@ def build_behavior_ir_with_semantic_operation_bindings(
         api_operations=api_operations,
         runtime_actors=runtime_actors,
         available_surfaces=available_surfaces,
+        operation_path_scope=operation_path_scope,
     )
     behavior_ir, _surface_receipt = reconcile_declared_observation_surfaces(
         behavior_ir,

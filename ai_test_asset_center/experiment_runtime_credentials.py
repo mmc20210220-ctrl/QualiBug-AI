@@ -552,7 +552,27 @@ def load_actor_tokens(root: Path, project: str, *, base_url: str = "") -> dict[s
     foreign key. Preferring live login closes that gap without inventing bodies.
     """
     base_url = _text(base_url) or _text(os.environ.get("QUALIBUG_TARGET_BASE_URL") or "")
-    login_path = _text(os.environ.get("QUALIBUG_LOGIN_PATH") or "/api/auth/login")
+    # Login endpoint authority: project-declared login_api/login_base_url first,
+    # environment override second, the generic default last. In a multi-service
+    # deployment the auth service is a different host than the scan target, so
+    # login must be sent to the declared auth base_url while stored cross-service
+    # JWTs remain a valid credential channel when login is unreachable.
+    login_path = _text(os.environ.get("QUALIBUG_LOGIN_PATH") or "")
+    login_base_url = _text(os.environ.get("QUALIBUG_LOGIN_BASE_URL") or "")
+    try:
+        from .project_runtime_config import load_real_project_config
+
+        _rpc = load_real_project_config(project, root) or {}
+    except Exception:
+        _rpc = {}
+    if not login_path:
+        login_path = _text(_rpc.get("login_api") or "/api/auth/login")
+    if not login_base_url:
+        login_base_url = _text(_rpc.get("login_base_url") or "")
+    login_url_base = login_base_url or base_url
+    multi_service_login = bool(
+        login_base_url and login_base_url.rstrip("/") != base_url.rstrip("/")
+    )
     path = Path(root) / "platform_inputs" / str(project) / "test_accounts.json"
     if path.exists():
         try:
@@ -614,7 +634,7 @@ def load_actor_tokens(root: Path, project: str, *, base_url: str = "") -> dict[s
             if base_url and email and password:
                 try:
                     live_token, login_status = _login_declared_account(
-                        base_url=base_url,
+                        base_url=login_url_base,
                         login_path=login_path,
                         email=email,
                         password=password,
@@ -648,16 +668,18 @@ def load_actor_tokens(root: Path, project: str, *, base_url: str = "") -> dict[s
                     else:
                         _LOGGER.warning(
                             "actor_login_rejected project=%s role=%s status=%s "
-                            "token_present=%s action=skip_orphan_snapshot",
+                            "token_present=%s action=%s",
                             project,
                             role or account_ref or email,
                             login_status,
                             False,
+                            "skip_orphan_snapshot" if not multi_service_login else "fallback_stored_token",
                         )
                         password_login_failed.append(role or account_ref or email)
-                        # Password was the authority. Do not hand the executor an
-                        # orphan JWT that reads as authenticated but cannot insert.
-                        continue
+                        if not multi_service_login:
+                            # Password was the authority. Do not hand the executor an
+                            # orphan JWT that reads as authenticated but cannot insert.
+                            continue
             if not token:
                 if not role or not stored_token:
                     continue
@@ -741,7 +763,7 @@ def load_actor_tokens(root: Path, project: str, *, base_url: str = "") -> dict[s
                 continue
             try:
                 token, status = _login_declared_account(
-                    base_url=base_url,
+                    base_url=login_url_base,
                     login_path=login_path,
                     email=email,
                     password=password,
