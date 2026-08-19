@@ -59,6 +59,46 @@ def _response_content_type(obs: dict[str, Any]) -> str:
     return _content_type(obs.get("headers"))
 
 
+def _http_probe_reissue(
+    *,
+    base_url: str,
+    path: str,
+    token: str,
+    method: str,
+    body: Any,
+    timeout: float = 8.0,
+) -> tuple[int, Any]:
+    """Plain re-issue of the probed write to confirm the target accepts it.
+
+    The field probe already proved the field name; this confirmation re-sends
+    the exact probed body once and returns the observed status/body. The
+    governed re-write that follows is the experiment's actual observation.
+    """
+    import json
+    import urllib.request
+    import urllib.error
+
+    url = base_url.rstrip("/") + "/" + str(path).lstrip("/")
+    req = urllib.request.Request(url, method=str(method).upper())
+    req.add_header("Content-Type", "application/json")
+    if token:
+        req.add_header("Authorization", "Bearer " + token)
+    req.data = json.dumps(body, ensure_ascii=False).encode("utf-8")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            raw = response.read(200_000).decode("utf-8", errors="replace")
+            try:
+                return int(response.status), json.loads(raw) if raw else None
+            except Exception:
+                return int(response.status), raw
+    except urllib.error.HTTPError as exc:
+        raw = exc.read().decode("utf-8", errors="replace")
+        try:
+            return int(exc.code), json.loads(raw) if raw else None
+        except Exception:
+            return int(exc.code), raw
+
+
 def _datetime_now_utc() -> datetime:
     """Current UTC instant for observed validity-date comparisons."""
     return datetime.now(timezone.utc)
@@ -1686,6 +1726,105 @@ def execute_non_barrier_plans(
                         or governed.get("reason")
                     ) or "runtime_body_materialization_blocked"
                     pre_transport_block_reasons.append(reason_code)
+                # ── Undocumented request-body field probe ──
+                # A policy endpoint (/resolve /check) declares a permissive
+                # object body; a `{}`/empty write is rejected 422 "invalid or
+                # incomplete business input" and the endpoint's real semantics
+                # stay untestable. Probe which field name the target accepts,
+                # then re-issue the write with that field so the experiment can
+                # actually exercise the operation. The probe is bounded and
+                # observational; the found field is target-confirmed evidence.
+                _write_status_after = int(
+                    _dict(governed.get("write")).get("status") or 0
+                )
+                if (
+                    _write_status_after == 422
+                    and method in {"POST", "PUT", "PATCH"}
+                    and phase in {"control", "treatment"}
+                    and not _dict(governed.get("write")).get("body", {}).get("detail")
+                    in ({}, None)
+                ):
+                    print(
+                        f"[body-probe] triggering probe path={path_template} "
+                        f"status={_write_status_after} method={method} phase={phase}",
+                        flush=True,
+                    )
+                    try:
+                        from .runtime_body_field_probe import (
+                            probe_undocumented_request_fields,
+                        )
+
+                        _probe_result = probe_undocumented_request_fields(
+                            base_url=base_url,
+                            path=path,
+                            token=token,
+                            behavior_ir={},
+                        )
+                        print(
+                            f"[body-probe] probe result path={path_template} "
+                            f"field={_probe_result.get('accepted_field')!r} "
+                            f"attempts={_probe_result.get('attempts')}",
+                            flush=True,
+                        )
+                        if _probe_result.get("accepted_field"):
+                            _probed_body = _probe_result.get("accepted_body")
+                            _probe_status, _probe_response = _http_probe_reissue(
+                                base_url=base_url,
+                                path=path,
+                                token=token,
+                                method=method,
+                                body=_probed_body,
+                            )
+                            if 200 <= _probe_status < 300:
+                                # The probed write is accepted: re-issue through
+                                # the governed write path so the experiment
+                                # observes a real accepted control write.
+                                governed = execute_governed_control_write(
+                                    root=root,
+                                    project=project,
+                                    base_url=base_url,
+                                    runtime_contract=runtime_contract,
+                                    campaign_id=campaign_id,
+                                    operation_phase=f"experiment_{phase}",
+                                    actor_identity=_text(
+                                        actor.get("role") or actor_ref
+                                    ),
+                                    actor_token=token,
+                                    method=method,
+                                    path=path,
+                                    body=_probed_body,
+                                    observation_path=observation_path,
+                                    restorable_identity_mutation=_restorable_identity,
+                                    runtime_body_plan=(
+                                        runtime_body_plan
+                                        if _text(
+                                            runtime_body_plan.get("schema_version")
+                                        )
+                                        == "qualibug.source-observed-mutation-plan.v1"
+                                        else None
+                                    ),
+                                )
+                                governed["_undocumented_field_probe"] = {
+                                    "field": _probe_result.get("accepted_field"),
+                                    "attempts": _probe_result.get("attempts"),
+                                    "receipts": _probe_result.get("receipts"),
+                                }
+                                request_body = deepcopy(_probed_body)
+                                request_body_fingerprint = _sha256(request_body)
+                                request_semantics_fingerprint = _sha256({
+                                    "operation_ref": op_ref,
+                                    "method": method,
+                                    "path_template": path_template,
+                                    "mutation_class": mutation_class,
+                                })
+                    except Exception as _probe_exc:
+                        # Probing is best-effort enrichment; never let it abort
+                        # the experiment or fabricate evidence.
+                        print(
+                            f"[body-probe] undocumented_field_probe_failed "
+                            f"path={path_template} error={type(_probe_exc).__name__}",
+                            flush=True,
+                        )
                 materialized_body = governed.get("materialized_request_body")
                 if isinstance(materialized_body, dict) and materialized_body:
                     request_body = deepcopy(materialized_body)
@@ -1703,6 +1842,13 @@ def execute_non_barrier_plans(
                         source_observed_control_bodies[op_ref] = deepcopy(request_body)
                 request_bodies_for_cleanup[subject_id] = request_body
                 write_receipt = _dict(governed.get("write"))
+                if governed.get("_undocumented_field_probe"):
+                    print(
+                        f"[body-probe] probed write reissued path={path_template} "
+                        f"status={write_receipt.get('status')} "
+                        f"field={governed['_undocumented_field_probe'].get('field')}",
+                        flush=True,
+                    )
                 # Zero-transport governance blocks after a real before-GET are
                 # identity/mutation gaps, not connection failures. The write step
                 # keeps status_code=0, which previously fell through finalize's
