@@ -1829,6 +1829,11 @@ def execute_non_barrier_plans(
                                         "path": path_template,
                                         "operation_ref": op_ref,
                                     }
+                                    print(
+                                        f"[body-probe] ORDERING VIOLATION SET path={path_template} "
+                                        f"violation={_ordering.get('violation')}",
+                                        flush=True,
+                                    )
                                 request_body = deepcopy(_probed_body)
                                 request_body_fingerprint = _sha256(request_body)
                                 request_semantics_fingerprint = _sha256({
