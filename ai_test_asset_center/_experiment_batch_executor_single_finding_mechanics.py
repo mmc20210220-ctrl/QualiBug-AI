@@ -505,6 +505,53 @@ def execute_selected_experiments(
         budget_deferred = [dict(_dict(item)) for item in selected[_budget:]]
         selected = selected[:_budget]
     budget_exceeded = _total_selected - len(selected)
+    # ── Single-service execution scope ──
+    # The IR carries every service's operations so cross-service resolvers
+    # stay available, but a single-base_url run must never EXECUTE another
+    # service's operations (they 404 on this base_url). Filter the selected
+    # set by the experiment's control/treatment operation service. The target
+    # service is derived from the approved base_url port.
+    _target_svc_name = ""
+    try:
+        from .discovery_runtime_planning import _target_service_name_from_base_url
+
+        _target_svc_name = _target_service_name_from_base_url(base_url)
+    except Exception:
+        _target_svc_name = ""
+    if _target_svc_name:
+        _op_service_map: dict[str, str] = {}
+        for _op_row in _list(_dict(behavior_ir).get("operations")):
+            if isinstance(_op_row, dict) and _text(_op_row.get("id")):
+                _op_service_map[_text(_op_row.get("id"))] = _text(
+                    _op_row.get("_service_name") or _op_row.get("service")
+                )
+        _service_filtered: list[Any] = []
+        _cross_service_skipped = 0
+        for _item in selected:
+            _oid = _text(_dict(_item).get("obligation_id"))
+            _exp = experiments_by_obligation.get(_oid) or {}
+            _op_refs: list[str] = []
+            for _plan_name in ("control_plan", "treatment_plan"):
+                for _step in _list(_exp.get(_plan_name)):
+                    if isinstance(_step, dict) and _text(_step.get("operation_ref")):
+                        _op_refs.append(_text(_step.get("operation_ref")))
+            _op_refs.extend(_text(v) for v in _list(_exp.get("operation_refs")) if _text(v))
+            _foreign = [
+                _op_service_map.get(op_ref)
+                for op_ref in _op_refs
+                if _op_service_map.get(op_ref) and _op_service_map[op_ref] != _target_svc_name
+            ]
+            if _foreign:
+                _cross_service_skipped += 1
+                continue
+            _service_filtered.append(_item)
+        if _cross_service_skipped:
+            print(
+                f"[execution-scope] skipped {_cross_service_skipped} experiments "
+                f"whose operations belong to other services (target={_target_svc_name})",
+                flush=True,
+            )
+        selected = _service_filtered
     for index, item in enumerate(selected):
         row = _dict(item)
         oid = _text(row.get("obligation_id"))

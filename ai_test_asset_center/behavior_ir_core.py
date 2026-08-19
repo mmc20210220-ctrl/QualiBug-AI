@@ -4202,11 +4202,33 @@ def build_behavior_ir_from_knowledge_asset(
             derivation="schema-derived" if not op.get("operation_id") else "explicit",
         )
         transport_identity = (service, method, _path_shape(path))
+        # Deduplicate by (method, path): the submitted parser operations and
+        # the knowledge-asset interfaces describe the SAME endpoint, but the
+        # submitted row carries no service while the asset row does — keying
+        # on (service, method, path) would keep both and every operation
+        # without a service marker would look foreign to the execution scope
+        # guard. Key on (method, path) and let the asset row's service win.
+        transport_identity = (method, _path_shape(path))
         existing = operations_by_transport_identity.get(transport_identity)
         if existing is None:
             operations_by_transport_identity[transport_identity] = operation
             model["operations"].append(operation)
             continue
+
+        if not _text(existing.get("_service_name") or existing.get("service")) and (
+            _text(operation.get("_service_name") or operation.get("service"))
+        ):
+            existing["_service_name"] = _text(
+                operation.get("_service_name") or operation.get("service")
+            )
+            existing["service"] = existing["_service_name"]
+        elif not _text(operation.get("_service_name") or operation.get("service")) and (
+            _text(existing.get("_service_name") or existing.get("service"))
+        ):
+            operation["_service_name"] = _text(
+                existing.get("_service_name") or existing.get("service")
+            )
+            operation["service"] = operation["_service_name"]
 
         existing["source_refs"] = merge_unique(
             _list(existing.get("source_refs")),
