@@ -47,6 +47,16 @@ from .discovery_runtime_planning import (  # noqa: E402,F401
     _contract,
     _runtime_actors,
 )
+from .recall_execution_variant_authority import (  # noqa: E402
+    install_exact_execution_variant_authority,
+)
+
+# Coverage-unit planning may fan one semantic unit into several compiler input
+# variants and actor arms. Install the exact execution-face identity authority
+# before the semantic-binding facade captures the planning entrypoint, so every
+# compiled face reaches transport without a lossy obligation-id dict collision.
+install_exact_execution_variant_authority()
+
 from .discovery_runtime_semantic_binding import (  # noqa: E402
     build_discovery_plan as _build_discovery_plan,
 )
