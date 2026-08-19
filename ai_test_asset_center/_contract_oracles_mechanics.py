@@ -1211,7 +1211,7 @@ def evaluate_contract_oracle(
         return _contract_oracle_receipt(
             experiment=exp,
             status="VIOLATION",
-            verdict="violation",
+            verdict="customer_deliverable_defect_candidate",
             activation={},
             assertions=[
                 {
