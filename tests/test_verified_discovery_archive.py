@@ -60,6 +60,92 @@ def test_identity_distinguishes_different_operations():
     assert finding_stable_identity(a) != finding_stable_identity(b)
 
 
+def _artifact_finding(
+    finding_id: str, title: str, actual: int, body: dict | None,
+    family: str = "authorization",
+) -> dict:
+    """A delivered finding shaped like the pre-fix 404/422 artifacts."""
+    finding = _finding(finding_id, title, family=family)
+    finding["evidence"] = {
+        "assertion": {
+            "kind": "http_status_class",
+            "status": "VIOLATION",
+            "expected": 2,
+            "actual": actual,
+        },
+        "response": f"HTTP {actual}",
+    }
+    finding["raw_evidence"] = {
+        "response_raw": {"status_code": actual, "body": body},
+    }
+    return finding
+
+
+def test_framework_404_artifact_is_quarantined_not_held(tmp_path):
+    project = "demo"
+    artifact = _artifact_finding(
+        "f404", "[ContractOracle] http_status_class: admin POST /api/v1/scm/sales-orders",
+        actual=404, body={"detail": "Not Found"},
+    )
+    archive = merge_run_deliveries(
+        {"entries": {}, "retired": {}},
+        run_id="run-1",
+        campaign_id="cmp-1",
+        findings=[artifact],
+    )
+    output, receipt = apply_archive_to_run(archive, run_id="run-2", findings=[])
+    assert output == []
+    assert receipt["archive_held"] == 0
+    assert receipt["archive_quarantined"] == 1
+    retired = archive.get("retired") or {}
+    assert len(retired) == 1
+    entry = next(iter(retired.values()))
+    assert entry["retire_reason"] == "framework_route_not_found_artifact"
+
+
+def test_authorization_422_artifact_is_quarantined(tmp_path):
+    artifact = _artifact_finding(
+        "f422", "[ContractOracle] http_status_class: admin POST /api/v1/scm/purchase-orders",
+        actual=422, body=None,
+    )
+    archive = merge_run_deliveries(
+        {"entries": {}, "retired": {}},
+        run_id="run-1",
+        campaign_id="cmp-1",
+        findings=[artifact],
+    )
+    output, receipt = apply_archive_to_run(archive, run_id="run-2", findings=[])
+    assert output == []
+    assert receipt["archive_quarantined"] == 1
+    assert next(iter((archive.get("retired") or {}).values()))[
+        "retire_reason"
+    ] == "authorization_input_rejected_artifact"
+
+
+def test_business_404_and_validation_findings_stay_held(tmp_path):
+    # A 404 with a specific business detail is a real defect signal and stays.
+    business_404 = _artifact_finding(
+        "b404", "[ContractOracle] http_status_class: admin POST /api/orders",
+        actual=404, body={"detail": "order 5 not found"},
+    )
+    # A validation-family 422 is not an authorization artifact.
+    validation_422 = _artifact_finding(
+        "v422", "[ContractOracle] http_status_class: admin POST /api/products/admin",
+        actual=422, body=None, family="validation",
+    )
+    archive = merge_run_deliveries(
+        {"entries": {}, "retired": {}},
+        run_id="run-1",
+        campaign_id="cmp-1",
+        findings=[business_404, validation_422],
+    )
+    output, receipt = apply_archive_to_run(archive, run_id="run-2", findings=[])
+    assert receipt["archive_held"] == 2
+    assert receipt["archive_quarantined"] == 0
+    assert len(output) == 2
+    assert all(item["archive_entry"] is True for item in output)
+
+
 def test_merge_keeps_verified_finding_across_runs(tmp_path):
     project = "demo"
     run1 = _finding("f1", "[ContractOracle] owner_tenant_visibility: buyer POST /api/orders/batch-cancel")

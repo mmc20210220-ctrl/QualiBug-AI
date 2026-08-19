@@ -853,7 +853,15 @@ def _scan_impl(project: str, root: Optional[Path] = None, *, prd_text: str = "",
                 _finding["gate_override_reason"] = "INFERRED_OP_CONTROL_FAILED"
                 _downgraded += 1
     if _downgraded:
-        _formal = [f for f in (result.get("findings") or []) if f.get("customer_delivery_status") == "defect"]
+        # The headline count may only reflect THIS run's formal deliveries.
+        # Verified-archive hold-overs (archive_entry=True) are historical
+        # rows from previous runs — counting them here made a delivery-less
+        # run report total_findings=42 while current_formal_findings was 0.
+        _formal = [
+            f
+            for f in (result.get("current_formal_findings") or [])
+            if f.get("customer_delivery_status") == "defect"
+        ]
         result["total_findings"] = len(_formal)
         # Keep the canonical projection self-consistent after demotion: the
         # count must equal the surviving canonical defect id set, otherwise

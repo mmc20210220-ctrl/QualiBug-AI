@@ -502,6 +502,42 @@ def _representative_rank(row: dict[str, Any]) -> tuple[float, str]:
     return (-confidence, occurrence_id)
 
 
+def _archived_finding_inadmissible_reason(finding: dict[str, Any]) -> str:
+    """Return why an archived finding must no longer be re-emitted, or "".
+
+    Oracle rules evolve: framework-generic 404 responses (route-not-found
+    artifacts) and authorization-family 422 responses (harness request
+    formation artifacts) are now adjudicated INDETERMINATE. Findings produced
+    before those rules must never be held over as customer defects — the
+    archive is monotone for REAL defects, not for artifacts of a corrected
+    adjudication rule.
+    """
+    evidence = _dict(finding.get("evidence"))
+    assertion = _dict(evidence.get("assertion"))
+    if _text(assertion.get("kind")) != "http_status_class":
+        return ""
+    actual = assertion.get("actual")
+    if actual == 404:
+        raw = _dict(_dict(finding.get("raw_evidence")).get("response_raw"))
+        body = raw.get("body")
+        if body is None:
+            return ""
+        if isinstance(body, dict) and set(body) == {"detail"} and body.get(
+            "detail"
+        ) == "Not Found":
+            return "framework_route_not_found_artifact"
+        raw_text = str(body)
+        if '"detail": "Not Found"' in raw_text or "'detail': 'Not Found'" in raw_text:
+            return "framework_route_not_found_artifact"
+        return ""
+    if (
+        actual == 422
+        and _text(finding.get("risk_family")).lower() == "authorization"
+    ):
+        return "authorization_input_rejected_artifact"
+    return ""
+
+
 def apply_archive_to_run(
     archive: dict[str, Any],
     *,
@@ -515,7 +551,10 @@ def apply_archive_to_run(
     ``archive_entry=true`` plus provenance (first/last verified run) so the
     consumer can distinguish freshly discovered findings from held-over
     verified ones. Retired entries are excluded — for those, not finding the
-    bug is the expected outcome (target fixed).
+    bug is the expected outcome (target fixed). Archived findings whose
+    evidence class has since been corrected (framework 404 / authorization
+    422 artifacts) are quarantined into ``retired`` with a visible reason
+    instead of being re-emitted as customer defects.
     """
     merged: dict[str, dict[str, Any]] = {}
     for finding in findings:
@@ -535,12 +574,28 @@ def apply_archive_to_run(
         if _representative_rank(finding) < _representative_rank(existing):
             merged[identity] = finding
     held = 0
+    quarantined = 0
     for identity, entry in (archive.get("entries") or {}).items():
         if identity in merged:
             continue
         if entry.get("retired") or identity in (archive.get("retired") or {}):
             continue
         finding = dict(entry.get("finding") or {})
+        inadmissible_reason = _archived_finding_inadmissible_reason(finding)
+        if inadmissible_reason:
+            # The evidence class this finding was produced under is no longer
+            # admissible (framework route-not-found / authorization input
+            # rejection artifacts). Retire visibly — never re-emit a routing
+            # artifact as a customer defect across future runs.
+            archive.setdefault("retired", {})[identity] = dict(entry)
+            archive["retired"][identity]["retired_run"] = run_id
+            archive["retired"][identity]["retire_reason"] = inadmissible_reason
+            entries = archive.setdefault("entries", {})
+            if identity in entries:
+                entries[identity]["retired"] = True
+                entries[identity]["retire_reason"] = inadmissible_reason
+            quarantined += 1
+            continue
         finding["archive_entry"] = True
         finding["first_verified_run"] = entry.get("first_verified_run")
         finding["last_verified_run"] = entry.get("last_verified_run")
@@ -552,6 +607,7 @@ def apply_archive_to_run(
         "run_id": run_id,
         "run_delivered": len(findings),
         "archive_held": held,
+        "archive_quarantined": quarantined,
         "total_output": len(output),
         "retired_count": len(archive.get("retired") or {}),
     }
