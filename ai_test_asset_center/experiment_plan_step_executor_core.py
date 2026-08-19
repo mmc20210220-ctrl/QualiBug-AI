@@ -1746,7 +1746,8 @@ def execute_non_barrier_plans(
                 ):
                     print(
                         f"[body-probe] triggering probe path={path_template} "
-                        f"status={_write_status_after} method={method} phase={phase}",
+                        f"status={_write_status_after} method={method} phase={phase} "
+                        f"oid={oid}",
                         flush=True,
                     )
                     try:
@@ -1828,6 +1829,7 @@ def execute_non_barrier_plans(
                                         "observed": _ordering.get("observed"),
                                         "path": path_template,
                                         "operation_ref": op_ref,
+                                        "violation": True,
                                     }
                                     print(
                                         f"[body-probe] ORDERING VIOLATION SET path={path_template} "

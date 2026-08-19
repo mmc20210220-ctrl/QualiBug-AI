@@ -213,6 +213,16 @@ def _actual_accepted_business_write(
     ):
         return False
 
+    # A runtime-observed ordering violation (FIFO/FEFO) is produced by the
+    # body-field probe re-issuing a read-only decision-endpoint write. The
+    # probe is a pure observation — no durable business write occurred, so it
+    # is never an "accepted business write" and never demands cleanup.
+    for raw in _list(steps_out):
+        step = _dict(raw)
+        governance = _dict(step.get("governance_receipt"))
+        if _dict(governance.get("_undocumented_field_probe")):
+            return False
+
     for raw in _list(steps_out):
         step = _dict(raw)
         if _text(step.get("phase")) not in {"control", "treatment"}:

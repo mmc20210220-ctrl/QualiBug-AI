@@ -2413,6 +2413,78 @@ def compile_obligations_from_behavior_ir(
                             ),
                         ))
 
+    # ── Undocumented policy-endpoint probe obligations ──
+    # A policy/decision endpoint (/resolve /check /calculate) often declares a
+    # permissive object body while the implementation reads specific fields.
+    # These endpoints carry source-declared business rules (PRD: 普通批次按
+    # FIFO) but no executable obligation exists for them: authorization pairs
+    # are gated on permit evidence, and the rule never reached an invariant.
+    # Generate one probe obligation per such endpoint so the runtime body-field
+    # probe can discover the field and verify the source ordering rule.
+    #
+    # Service scope is enforced HERE as well as at the planning guard: every
+    # caller (planning, adaptive expansion, coverage augmentation) must see the
+    # same executable surface. A single-service run may only probe the target
+    # service's own policy endpoints — probing another service's path against
+    # this base_url yields a 404 that is a routing artifact, never a defect.
+    for _probe_op in operations:
+        if not isinstance(_probe_op, dict):
+            continue
+        if _text(_probe_op.get("method")).upper() not in {"POST", "PUT", "PATCH"}:
+            continue
+        if target_service_name and _text(
+            _probe_op.get("_service_name") or _probe_op.get("service")
+        ) not in {target_service_name, ""}:
+            continue
+        _probe_path = normalize_path_placeholders(
+            _text(_probe_op.get("path") or _probe_op.get("raw_path"))
+        )
+        if "{" in _probe_path or ":" in _probe_path:
+            continue
+        _probe_surface = _probe_path.casefold()
+        if not any(
+            token in _probe_surface
+            for token in ("/resolve", "/check", "/calculate", "/preview", "/validate")
+        ):
+            continue
+        _probe_schema = _dict(_probe_op.get("request_schema"))
+        _probe_media = _dict(_dict(_probe_schema.get("content")).get("application/json"))
+        _probe_schema_obj = _dict(_probe_media.get("schema"))
+        if _dict(_probe_schema_obj.get("properties")):
+            continue  # documented fields; normal obligations cover it
+        _probe_op_id = _text(_probe_op.get("id"))
+        if not _probe_op_id:
+            continue
+        _probe_actor = next(
+            (
+                _text(a.get("id"))
+                for a in actors
+                if isinstance(a, dict) and a.get("runtime_bound") is True
+            ),
+            "",
+        )
+        _probe_src = _list(_probe_op.get("source_refs")) or [
+            {"source_id": _text(_probe_op.get("source_id")) or "api_spec",
+             "locator": f"{_probe_op.get('method')} {_probe_path}",
+             "kind": "api_operation"}
+        ]
+        obligations.append(make_obligation(
+            risk_family="validation",
+            subject_refs=[_probe_op_id, f"policy:{_probe_path}"],
+            property_spec={
+                "template": "policy_endpoint_probe",
+                "operation_ref": _probe_op_id,
+                "operation_path_prefix": _text(_probe_op.get("path")),
+                "_strategy": "policy_probe",
+            },
+            required_actors=[_probe_actor] if _probe_actor else None,
+            required_operations=[_probe_op_id],
+            required_observers=["http_response", "actor_identity"],
+            cleanup_requirement={"required": False, "mode": "read_only_probe"},
+            source_refs=_probe_src,
+            confidence=0.5,
+        ))
+
     deduped = dedupe_obligations(
         _seed_obligation_fact_refs(obligations, invariants, relations)
     )

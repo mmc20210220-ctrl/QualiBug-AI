@@ -71,7 +71,7 @@ def test_runtime_observation_creates_a_traceable_second_planning_round(
     monkeypatch.setattr(
         expansion,
         "compile_obligations_from_behavior_ir",
-        lambda behavior_ir: {"obligations": [
+        lambda behavior_ir, **kwargs: {"obligations": [
             {"obligation_id": "obl-existing"},
             delta_obligation,
         ]},
@@ -158,7 +158,7 @@ def test_compile_blocked_obligation_is_recompiled_after_runtime_expansion(
     monkeypatch.setattr(
         expansion,
         "compile_obligations_from_behavior_ir",
-        lambda behavior_ir: {
+        lambda behavior_ir, **kwargs: {
             "obligations": [blocked_obligation, delta_obligation],
         },
     )

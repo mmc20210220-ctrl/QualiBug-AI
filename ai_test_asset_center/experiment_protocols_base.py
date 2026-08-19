@@ -2299,6 +2299,40 @@ def compile_family_protocol(
     # Source-grounded permitted invocation: one actor, observe the documented
     # operation. Used when IR has permits but no executable deny pair — must
     # not invent a second actor or silently drop the module from scheduling.
+    if template == "policy_endpoint_probe":
+        # Undocumented policy endpoint: permissive object body, implementation
+        # reads specific fields. The runtime body-field probe discovers the
+        # field and verifies the source-declared ordering rule; the write is a
+        # single treatment arm (probe re-issues with the found field). No
+        # entity effect readback exists for a decision endpoint.
+        actor = control_actor_ref or treatment_actor_ref or _text(
+            property_spec.get("actor_ref")
+        )
+        if not actor:
+            return {
+                "status": "BLOCKED",
+                "reason_code": "BLOCKED_MISSING_ACTOR",
+                "detail": "policy_probe_actor",
+            }
+        return {
+            "status": "COMPILED",
+            "control_plan": [],
+            "treatment_plan": [{
+                "step_id": "treatment_1",
+                "actor_ref": actor,
+                "operation_ref": operation_ref,
+                "intent": "policy_endpoint_probe",
+                "protocol_step": "policy_probe",
+                "property_template": template,
+                "body": {},
+            }],
+            "assertion": {
+                "kind": "http_status_class",
+                "expected_class": 2,
+                "compare_field": "status_code",
+                "authorization_semantics": "policy_probe",
+            },
+        }
     if template == "permitted_operation_invocation":
         actor = control_actor_ref or treatment_actor_ref or _text(
             property_spec.get("actor_ref")

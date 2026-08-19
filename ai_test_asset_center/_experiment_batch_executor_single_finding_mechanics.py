@@ -770,7 +770,7 @@ def execute_selected_experiments(
                 "selected_obligation_id": oid,
                 "obligation_id": execution_oid,
                 "experiment_id": eid,
-                "execution_id": execution_id,
+                "execution_id": effective_execution_id,
                 "evidence_id": evidence_id,
                 "campaign_id": campaign_id,
                 "mainline_run": {

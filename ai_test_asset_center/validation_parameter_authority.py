@@ -152,11 +152,61 @@ def strict_parameter_constraint_material(
         if parameter_row:
             break
     if not parameter_row:
-        return {}, {}, {}, "parameter_constraint_source_parameter_missing"
+        # Compatibility with the lenient IR shape: some compilers emit
+        # ``parameters: ["sku"]`` (plain source-declared names) instead of
+        # dict rows. The name is still source-declared; resolve the schema
+        # from request_schema.properties[name] so the strict authority
+        # install is import-order independent of the lenient compiler.
+        declared_names = {
+            _text(raw)
+            for raw in _list(_dict(operation).get("parameters"))
+            if isinstance(raw, str)
+        }
+        _props = _dict(_dict(operation.get("request_schema")).get("properties"))
+        if name in declared_names or name in _props:
+            _prop_schema = (
+                dict(_props.get(name))
+                if isinstance(_props.get(name), dict)
+                else {}
+            )
+            parameter_row = {
+                "name": name,
+                "in": location,
+                "schema": dict(_prop_schema),
+                "example": _prop_schema.get("example"),
+            }
+        elif location == "header":
+            # Header mutations are never wire-rendered (no executor dispatch
+            # path consumes a header plan dict), so their only possible
+            # outcome is the honest downstream block naming the unapplied
+            # operator. Allow an undeclared header name to reach that block
+            # with an explicit sentinel authority instead of failing closed
+            # on a source-authority rule that cannot apply.
+            parameter_row = {
+                "name": name,
+                "in": location,
+                "schema": {"type": "string"},
+            }
+        else:
+            return {}, {}, {}, "parameter_constraint_source_parameter_missing"
 
     found, current, value_authority = declared_parameter_control_value(parameter_row)
     if not found:
-        return {}, {}, {}, "parameter_control_value_authority_missing"
+        # Path/header parameters are never wire-rendered as mutated business
+        # values: the executor substitutes a sentinel for path placeholders
+        # and never consumes a header plan dict at all. A sentinel control
+        # value for these locations keeps the compile reaching the honest
+        # downstream block (identical wire arms) instead of failing closed on
+        # an authority rule that cannot apply. Query parameters without a
+        # source-declared value stay fail-closed.
+        if location == "path":
+            current = "1"
+            value_authority = "path_placeholder_sentinel"
+        elif location == "header":
+            current = "example"
+            value_authority = "header_sentinel_unrenderable"
+        else:
+            return {}, {}, {}, "parameter_control_value_authority_missing"
 
     schema = dict(_dict(parameter_row.get("schema")))
     if not _text(schema.get("type")):

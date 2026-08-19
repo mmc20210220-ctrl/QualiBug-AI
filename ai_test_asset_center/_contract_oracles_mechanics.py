@@ -16,6 +16,7 @@ from .assertion_dsl import (
     materialize_assertion,
     validate_assertion_receipt,
 )
+from .assertion_dsl_base import _assertion_receipt
 from .assertion_control_policy import assertion_requires_control
 from .observer_contracts_base import validate_observer_receipt
 from .sandbox_write_executor_base import framework_route_not_found
@@ -1182,6 +1183,48 @@ def validate_contract_oracle_receipt(receipt: dict[str, Any]) -> dict[str, Any]:
     return dict(row)
 
 
+def _source_ordering_assertion_receipt(
+    *,
+    experiment: dict[str, Any],
+    ordering_violation: dict[str, Any],
+    evidence: dict[str, Any],
+) -> dict[str, Any]:
+    """Seal a typed VIOLATION assertion receipt for a runtime-observed
+    source-ordering rule break (FIFO/FEFO returns the wrong batch).
+
+    The body-field probe discovered an undocumented policy field and the
+    source-declared allocation rule was violated at runtime. The receipt must
+    be a fully sealed assertion receipt (schema_version / receipt_id /
+    campaign / execution lineage) because the oracle outcome wrapper and the
+    sealed-receipt validator validate every assertion strictly — a raw dict
+    there raises ``assertion_receipt_fields_invalid`` and kills the whole
+    experiment group before a finding can be created.
+    """
+    observer_receipt_ids = sorted({
+        _text(_dict(row).get("receipt_id"))
+        for row in _list(evidence.get("observer_receipts"))
+        if isinstance(row, dict) and _text(row.get("receipt_id"))
+    })
+    return _assertion_receipt(
+        assertion_id="assert_source_ordering_rule",
+        kind="source_ordering_rule",
+        status="VIOLATION",
+        reason_code="SOURCE_ORDERING_RULE_VIOLATED",
+        expected=_text(ordering_violation.get("expected")) or "source ordering rule",
+        actual=_dict(ordering_violation.get("observed")),
+        error="",
+        observer_receipt_ids=observer_receipt_ids,
+        source_refs=[
+            dict(item)
+            for item in _list(experiment.get("source_refs"))
+            if isinstance(item, dict)
+        ],
+        harness_error=False,
+        campaign_id=_text(experiment.get("campaign_id")),
+        execution_id=_text(experiment.get("execution_id")),
+    )
+
+
 def evaluate_contract_oracle(
     *,
     experiment: dict[str, Any],
@@ -1194,11 +1237,12 @@ def evaluate_contract_oracle(
     # The body-field probe discovered an undocumented policy field and a
     # source-declared allocation rule (PRD: 普通批次按 FIFO) was violated at
     # runtime: the target returned the newest batch instead of the earliest.
-    # This is a real, reproducible defect observed on the target — adjudicate
-    # it as a VIOLATION directly. No assertion can express it because the
-    # endpoint's field was undocumented, and activation requirements cannot
-    # be met for an undocumented endpoint (no observer receipt exists for a
-    # field the docs never declared).
+    # The probe re-issued the write through the governed path, so real
+    # treatment/actor/observer receipts exist and activation can be proven.
+    # When activation is ACTIVE the violation is a customer-deliverable
+    # candidate; when the undocumented endpoint left activation unproven the
+    # standard BLOCKED semantics hold (no candidate is fabricated) and the
+    # ordering evidence stays in the experiment evidence for the trace ledger.
     _ordering_violation = _dict(ev.get("_ordering_violation"))
     if _ordering_violation.get("violation") is True or _ordering_violation.get(
         "path"
@@ -1208,27 +1252,33 @@ def evaluate_contract_oracle(
             f"ordering={_ordering_violation.get('ordering')}",
             flush=True,
         )
+        _ordering_activation = build_contract_oracle_activation_receipt(
+            experiment=exp,
+            evidence=ev,
+        )
+        _ordering_assertion = _source_ordering_assertion_receipt(
+            experiment=exp,
+            ordering_violation=_ordering_violation,
+            evidence=ev,
+        )
+        if _text(_ordering_activation.get("status")) == "ACTIVE":
+            return _contract_oracle_receipt(
+                experiment=exp,
+                status="VIOLATION",
+                verdict="customer_deliverable_defect_candidate",
+                activation=_ordering_activation,
+                assertions=[_ordering_assertion],
+                missing_requirements=[],
+            )
         return _contract_oracle_receipt(
             experiment=exp,
-            status="VIOLATION",
-            verdict="customer_deliverable_defect_candidate",
-            activation={},
-            assertions=[
-                {
-                    "assertion_id": "assert_source_ordering_rule",
-                    "kind": "source_ordering_rule",
-                    "status": "VIOLATION",
-                    "passed": False,
-                    "reason_code": "SOURCE_ORDERING_RULE_VIOLATED",
-                    "evidence": {
-                        "ordering": _ordering_violation.get("ordering"),
-                        "expected": _ordering_violation.get("expected"),
-                        "observed": _ordering_violation.get("observed"),
-                        "path": _ordering_violation.get("path"),
-                    },
-                }
-            ],
-            missing_requirements=[],
+            status="BLOCKED",
+            verdict="blocked_experiment",
+            activation=_ordering_activation,
+            assertions=[],
+            missing_requirements=list(
+                _ordering_activation.get("reason_codes") or []
+            ),
         )
     activation = build_contract_oracle_activation_receipt(
         experiment=exp,

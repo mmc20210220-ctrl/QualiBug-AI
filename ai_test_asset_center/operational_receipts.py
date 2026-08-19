@@ -323,7 +323,13 @@ def build_execution_operational_receipt(
                     if not is_adapter_cleanup:
                         accepted_cleanup += 1
             elif accepted:
-                accepted_non_cleanup += 1
+                # A body-field-probe reissue (undocumented policy endpoint) is a
+                # read-only decision-endpoint observation, not a durable business
+                # write: it never creates state that a compensator must restore,
+                # so it must not count as an accepted write demanding cleanup
+                # coverage at the delivery gate.
+                if not _dict(governance.get("_undocumented_field_probe")):
+                    accepted_non_cleanup += 1
             continue
 
         status_code = int(step.get("status_code") or 0)

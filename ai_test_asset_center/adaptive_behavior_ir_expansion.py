@@ -8,6 +8,7 @@ from typing import Any
 
 from .adaptive_discovery_planner import build_agent_intent_plan, plan_obligation_round
 from .behavior_ir import build_behavior_ir_from_knowledge_asset
+from .discovery_runtime_planning import _target_service_name_from_base_url
 from .experiment_compiler import compile_experiments
 from .fixture_dag import attach_fixture_dag_to_experiments
 from .obligation_compiler import compile_obligations_from_behavior_ir
@@ -209,6 +210,14 @@ def expand_behavior_ir_from_runtime_observations(
         for row in merged_operations
         if _operation_key(row) not in documented_keys
     ]
+    # Single-service scope: the expansion recompiles the IR for a run pinned to
+    # one approved base_url. Derive the target service the same way planning
+    # does and scope the compile so other services' operations never become
+    # executable obligations here (they would 404 against this base_url and
+    # surface as routing artifacts, not defects).
+    _expansion_target_service = _target_service_name_from_base_url(
+        _text(_dict(planning_context).get("base_url"))
+    )
     # Recompile-only feedback may reopen BLOCKED/ABSTRACT obligations after
     # materialization capabilities improve, even when no new operation identity
     # was discovered. New-operation stagnation still applies when neither path
@@ -247,7 +256,12 @@ def expand_behavior_ir_from_runtime_observations(
             api_operations=merged_operations,
             runtime_actors=runtime_actors,
         )
-        obligation_pack = compile_obligations_from_behavior_ir(behavior_ir)
+        obligation_pack = compile_obligations_from_behavior_ir(
+            behavior_ir,
+            root=_text(_dict(planning_context).get("root")),
+            project=_text(_dict(planning_context).get("project")),
+            target_service_name=_expansion_target_service,
+        )
         all_obligations = [
             dict(row)
             for row in _list(obligation_pack.get("obligations"))
@@ -258,7 +272,12 @@ def expand_behavior_ir_from_runtime_observations(
         # Recompile-only: keep the immutable IR identity and retry named
         # obligations against the same operation set + planning materialization.
         behavior_ir = dict(initial_behavior_ir)
-        obligation_pack = compile_obligations_from_behavior_ir(behavior_ir)
+        obligation_pack = compile_obligations_from_behavior_ir(
+            behavior_ir,
+            root=_text(_dict(planning_context).get("root")),
+            project=_text(_dict(planning_context).get("project")),
+            target_service_name=_expansion_target_service,
+        )
         all_obligations = [
             dict(row)
             for row in _list(obligation_pack.get("obligations"))

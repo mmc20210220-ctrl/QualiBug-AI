@@ -1096,6 +1096,19 @@ def finalize_experiment_execution(
     _finalizer_family = _text(exp.get("risk_family")).lower()
     if _finalizer_family in {"authorization", "validation", "isolation", "visibility"}:
         is_governed_write = False
+    # A runtime-observed ordering violation (FIFO/FEFO) is produced by the
+    # body-field probe re-issuing a read-only decision-endpoint write. The
+    # probe is a pure observation — no durable business write occurred, so no
+    # cleanup is applicable and the verified Oracle VIOLATION must never be
+    # demoted by the cleanup equivalence gate (AGENTS.md Non-Production
+    # Execution Contract: cleanup/residue is post-test environment hygiene and
+    # never erases a proven verdict).
+    _ordering_violation_evidence = _dict(observations.get("_ordering_violation"))
+    if (
+        _ordering_violation_evidence.get("violation") is True
+        or _ordering_violation_evidence.get("path")
+    ):
+        is_governed_write = False
     if is_governed_write:
         proof = _dict(exp.get("write_reversibility_proof"))
         if proof and _text(proof.get("proof_status")) == "PROVEN":
