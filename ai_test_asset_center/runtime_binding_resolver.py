@@ -347,6 +347,7 @@ def resolve_state_scoped_bindings(
     base_url: str,
     *,
     max_resolution_attempts: int = 40,
+    service_base_urls: dict[str, str] | None = None,
 ) -> dict[str, dict[str, str]]:
     """Per-experiment resolution of ``@state=``-scoped path placeholders.
 
@@ -407,8 +408,15 @@ def resolve_state_scoped_bindings(
                 if attempts >= max_resolution_attempts:
                     break
                 attempts += 1
+                resolver_base_url = base_url
+                if service_base_urls:
+                    svc = _text(
+                        binding.get("_resolver_service_name")
+                    )
+                    if svc and svc in service_base_urls:
+                        resolver_base_url = service_base_urls[svc]
                 for candidate_token in tokens_to_try:
-                    response = _call_get_endpoint(base_url, resolver_path, candidate_token)
+                    response = _call_get_endpoint(resolver_base_url, resolver_path, candidate_token)
                     if response is None:
                         continue
                     value = _state_aware_value(response, target, target_path)
@@ -430,6 +438,7 @@ def auto_resolve_bindings(
     required_placeholders: set[str] | None = None,
     placeholder_collection_hints: dict[str, set[str]] | None = None,
     max_resolution_attempts: int = 20,
+    service_base_urls: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Automatically resolve path placeholders by calling GET endpoints.
 
@@ -565,6 +574,17 @@ def auto_resolve_bindings(
             attempts += 1
 
             path = _text(endpoint.get("path") or endpoint.get("raw_path"))
+            # Cross-service resolver routing: the resolver endpoint's owning
+            # service (scm_trade for GET /scm/purchase-orders) may differ from
+            # the scan target service. Route the read to the service's base_url
+            # when the caller supplies the map; otherwise keep the target.
+            endpoint_base_url = base_url
+            if service_base_urls:
+                svc = _text(
+                    endpoint.get("_service_name") or endpoint.get("service")
+                )
+                if svc and svc in service_base_urls:
+                    endpoint_base_url = service_base_urls[svc]
             value = ""
             used_token = ""
             # Owner-scoped list reads only succeed with the resource owner's
@@ -575,7 +595,7 @@ def auto_resolve_bindings(
                     break
                 attempts += 1
                 candidate_response = _call_get_endpoint(
-                    base_url,
+                    endpoint_base_url,
                     path,
                     candidate_token,
                 )

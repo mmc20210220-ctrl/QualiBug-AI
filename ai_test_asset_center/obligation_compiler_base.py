@@ -1076,6 +1076,7 @@ def compile_obligations_from_behavior_ir(
     *,
     root: str = "",
     project: str = "",
+    target_service_name: str = "",
 ) -> dict[str, Any]:
     """Produce obligations from IR facts using generic property templates.
 
@@ -1095,6 +1096,17 @@ def compile_obligations_from_behavior_ir(
     if validation_errors:
         raise BehaviorIRError("behavior_ir_v2_invalid:" + ",".join(validation_errors))
     operations = _accepted(_list(ir.get("operations")))
+    if target_service_name:
+        # Single-service run over a multi-service IR: only the target
+        # service's operations may compile into executable obligations.
+        # Operations of other services stay in the IR for cross-service
+        # resolvers/fixtures but never become execution targets here.
+        operations = [
+            op
+            for op in operations
+            if _text(op.get("_service_name") or op.get("service")) == target_service_name
+            or not _text(op.get("_service_name") or op.get("service"))
+        ]
     actors = _accepted(_list(ir.get("actors")))
     invariants = _accepted(_list(ir.get("invariants")))
     relations = _accepted(_list(ir.get("relations")))

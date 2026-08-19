@@ -155,6 +155,76 @@ def _source_ref(source_id: str = "", *, version: str = "", locator: str = "", qu
     }
 
 
+def _service_name_from_source_refs(operation: dict[str, Any], data: dict[str, Any]) -> str:
+    """Resolve the owning service name from an operation's source references.
+
+    The knowledge asset stores each service's OpenAPI under a distinct source
+    whose interface locators name the file (``scm_trade_service.json``). The
+    operation's ``source_refs`` carry the source id; matching it against the
+    asset's interface/source inventory recovers the service file name, which
+    is the service's deployment identity. Fully generic — never an industry
+    or benchmark term. Returns "" when ownership is not resolvable.
+    """
+    # ``api_spec`` / ``submitted_api_spec`` are the submitted-run's generic
+    # source labels, not the asset's per-service source ids; they never name
+    # a service file and must not steer the match.
+    source_ids = {
+        _text(ref.get("source_id"))
+        for ref in _list(operation.get("source_refs"))
+        if _text(ref.get("source_id"))
+        and _text(ref.get("source_id")) not in {"api_spec", "submitted_api_spec"}
+    }
+    # Knowledge-asset interfaces carry source_ids / canonical_contract_source_id
+    # directly (no source_refs list); the submitted parser operations carry
+    # source_refs. Accept either shape.
+    source_ids.update(
+        _text(value)
+        for value in (
+            _list(operation.get("source_ids"))
+            + [_text(operation.get("canonical_contract_source_id"))]
+        )
+        if _text(value) and _text(value) not in {"api_spec", "submitted_api_spec"}
+    )
+    if not source_ids:
+        return ""
+    # Source inventory first: exact source_id → filename. This is the precise
+    # ownership channel — each service's OpenAPI is a distinct source whose
+    # filename names the service. Shared interfaces (e.g. /health present in
+    # every service) must not steer the match through a shared locator list.
+    for source in _list(data.get("sources") or data.get("source_inventory")):
+        if not isinstance(source, dict):
+            continue
+        sid = _text(source.get("source_id") or source.get("id"))
+        if sid not in source_ids:
+            continue
+        file_name = _text(
+            source.get("filename")
+            or source.get("original_name")
+            or source.get("name")
+            or source.get("logical_key")
+        )
+        if file_name.endswith("_service.json"):
+            return file_name[: -len("_service.json")]
+    # Interface inventory fallback: canonical_contract_source_id / source_ids
+    # → locator file, restricted to the operation's own source ids so shared
+    # interfaces cannot resolve to a foreign service.
+    for interface in _list(data.get("interfaces")):
+        if not isinstance(interface, dict):
+            continue
+        own_ids = set(_list(interface.get("source_ids")))
+        own_ids.add(_text(interface.get("canonical_contract_source_id")))
+        if not (own_ids & source_ids):
+            continue
+        for locator in _list(interface.get("source_locators")):
+            locator_text = _text(locator)
+            if "_service.json" in locator_text:
+                head = locator_text.split("#", 1)[0]
+                file_name = head.strip()
+                if file_name.endswith("_service.json"):
+                    return file_name[: -len("_service.json")]
+    return ""
+
+
 def parse_source_locator(locator_str: str) -> dict[str, Any]:
     """Parse a structured locator string into a dict for downstream consumers.
 
@@ -4046,14 +4116,22 @@ def build_behavior_ir_from_knowledge_asset(
         path = _text(op.get("path") or op.get("endpoint") or op.get("url"))
         if not path:
             continue
-        if operation_path_scope is not None:
-            # Single-base_url run: only operations this run may actually reach
-            # on the target stay in the IR. Knowledge-asset interfaces from
-            # other services would compile obligations that 404 on this service
-            # and surface as fabricated authorization defects.
-            if (method, path.rstrip("/")) not in _submitted_scope:
-                continue
+        # Operation service ownership. The knowledge asset carries each
+        # service's OpenAPI under a distinct source; the interface locator
+        # names the file (scm_trade_service.json) so the owning service is
+        # recoverable without any industry or benchmark vocabulary. When no
+        # ownership is resolvable the operation stays service-agnostic (empty).
         service = _text(op.get("service") or op.get("service_name") or op.get("server"))
+        if not service:
+            service = _service_name_from_source_refs(op, data)
+        # Scope note: the historical operation_path_scope filter is retired
+        # from the IR layer. Obligation compilation now receives the target
+        # service and compiles only that service's operations; the IR itself
+        # keeps every service's operations so cross-service resolvers and
+        # fixtures (create an order on scm_trade, then drive
+        # integration/sales/{so_id}/to-outbound) remain available to the
+        # binding graph. Single-service runs see the same executable set as
+        # before because compilation filters by the declared service.
         op_id = _text(op.get("operation_id") or op.get("operationId") or op.get("id")) or _stable_id("op", method, path)
         side_effect = _infer_operation_effect(op, method)
         field_dictionary = _merge_unique_sorted(
@@ -4092,6 +4170,7 @@ def build_behavior_ir_from_knowledge_asset(
             typed_fields={
                 "operation_id": op_id,
                 "service": service,
+                "_service_name": service,
                 "method": method,
                 "path": path,
                 "request_schema": request_schema,

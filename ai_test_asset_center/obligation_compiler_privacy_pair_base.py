@@ -377,13 +377,14 @@ def compile_obligations_from_behavior_ir(
     base_compile: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     root: str = "",
     project: str = "",
+    target_service_name: str = "",
 ) -> dict[str, Any]:
     compiler = base_compile or _original_compile
     if root or project:
         # Forwarded only when the caller actually has a workspace identity; a
         # base_compile that predates the parameters still works on plain IR.
         result = _pair_obligations(
-            compiler(behavior_ir, root=root, project=project),
+            compiler(behavior_ir, root=root, project=project, target_service_name=target_service_name),
             behavior_ir,
         )
     else:

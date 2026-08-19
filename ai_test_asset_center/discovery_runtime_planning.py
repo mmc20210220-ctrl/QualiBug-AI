@@ -70,6 +70,43 @@ def _text(value: Any) -> str:
     return str(value or "").strip()
 
 
+# Well-known service port mapping for the manufacturing SUT. This maps the
+# scan target's approved_base_url port to the service deployment name the IR
+# operations carry (scm_trade_service.json → scm_trade). Generic contract
+# identity, not customer business data. Unknown ports yield "" (no filter).
+_SERVICE_PORT_MAP = {
+    "8101": "auth",
+    "8110": "scm_master",
+    "8111": "scm_trade",
+    "8120": "wms_inventory",
+    "8121": "wms_ops",
+    "8130": "mes_master",
+    "8131": "mes_exec",
+    "8132": "mes_quality",
+    "8140": "integration",
+    "8150": "report",
+    "8160": "platform",
+    "8161": "jobs",
+}
+
+
+def _target_service_name_from_base_url(base_url: str) -> str:
+    """Resolve the target service name from the approved base_url port.
+
+    A single-service scan pins one base_url; its port names the service the
+    IR operations carry as ``_service_name``. When the port is not a known
+    service the filter stays empty and all service-agnostic operations
+    compile, preserving pre-multi-service behavior.
+    """
+    port = ""
+    url_text = _text(base_url)
+    if ":" in url_text:
+        tail = url_text.rsplit(":", 1)[-1].split("/", 1)[0]
+        if tail.isdigit():
+            port = tail
+    return _SERVICE_PORT_MAP.get(port, "")
+
+
 def _apply_mainline_reasoner_hypotheses(
     *,
     hypotheses: list[dict],
@@ -770,6 +807,9 @@ def build_discovery_plan(
         behavior_ir,
         root=str(inputs.root),
         project=inputs.project,
+        target_service_name=_target_service_name_from_base_url(
+            _text(inputs.approved_base_url)
+        ),
     )
     obligations = [
         dict(row)
@@ -1593,6 +1633,53 @@ def build_discovery_plan(
     # fall back to compiling all their variants individually (today's behavior
     # for that unit), so no executable variant is ever lost.
     compile_input = representative_obligations if representative_obligations else obligations
+    # ── Single-service scope guard ──
+    # The IR now carries every service's operations (so cross-service
+    # resolvers/fixtures stay available), which means the coverage / matrix /
+    # audit / reasoner augmentation passes above can generate obligations
+    # whose operations belong to OTHER services. On a single-base_url scan
+    # those would be executed against the wrong service and 404. Keep only
+    # obligations whose operations are the target service's (or service
+    # agnostic); the target service is derived from the approved base_url.
+    _target_svc = _target_service_name_from_base_url(
+        _text(inputs.approved_base_url)
+    )
+    if _target_svc:
+        _op_service_by_id: dict[str, str] = {}
+        for _op_row in _list(behavior_ir.get("operations")):
+            if not isinstance(_op_row, dict):
+                continue
+            _op_id = _text(_op_row.get("id"))
+            if _op_id:
+                _op_service_by_id[_op_id] = _text(
+                    _op_row.get("_service_name") or _op_row.get("service")
+                )
+        _filtered = []
+        _dropped_cross_service = 0
+        for _obl_row in compile_input:
+            if not isinstance(_obl_row, dict):
+                continue
+            _ops = [
+                _text(value)
+                for value in _list(_obl_row.get("required_operations"))
+                if _text(value)
+            ]
+            _cross = [
+                _op_service_by_id.get(op_id)
+                for op_id in _ops
+                if _op_service_by_id.get(op_id) and _op_service_by_id[op_id] != _target_svc
+            ]
+            if _cross:
+                _dropped_cross_service += 1
+                continue
+            _filtered.append(_obl_row)
+        if _dropped_cross_service:
+            print(
+                f"[service-scope] dropped {_dropped_cross_service} obligations "
+                f"whose operations belong to other services (target={_target_svc})",
+                flush=True,
+            )
+        compile_input = _filtered
     _stage_timing_enabled = (
         str(os.environ.get("QUALIBUG_STAGE_TIMING") or "").strip().lower()
         in {"1", "true", "yes", "on"}

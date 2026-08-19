@@ -13,12 +13,12 @@ for _name in dir(_base):
 
 
 def compile_obligations_from_behavior_ir(
-    behavior_ir: dict[str, Any], *, root: str = "", project: str = ""
+    behavior_ir: dict[str, Any], *, root: str = "", project: str = "", target_service_name: str = ""
 ) -> dict[str, Any]:
     if str(behavior_ir.get("schema_version") or "").strip() == "qualibug.behavior-ir.v2":
         behavior_ir.setdefault("ui_specs", [])
     compiled = _base.compile_obligations_from_behavior_ir(
-        behavior_ir, root=root, project=project
+        behavior_ir, root=root, project=project, target_service_name=target_service_name
     )
     return append_operation_schema_validation_seeds(
         compiled,

@@ -613,6 +613,7 @@ def compile_obligations_from_behavior_ir(
     *,
     root: str = "",
     project: str = "",
+    target_service_name: str = "",
 ) -> dict[str, Any]:
     normalized_ir = _with_source_declared_ownership_relations(behavior_ir)
     baseline_compile = _original_compile
@@ -621,8 +622,9 @@ def compile_obligations_from_behavior_ir(
         base_compile=baseline_compile,
         root=root,
         project=project,
+        target_service_name=target_service_name,
     )
-    original_result = baseline_compile(normalized_ir, root=root, project=project)
+    original_result = baseline_compile(normalized_ir, root=root, project=project, target_service_name=target_service_name)
     additions: list[dict[str, Any]] = []
     field_gaps: list[dict[str, Any]] = []
     expanded_keys: set[tuple[str, str]] = set()

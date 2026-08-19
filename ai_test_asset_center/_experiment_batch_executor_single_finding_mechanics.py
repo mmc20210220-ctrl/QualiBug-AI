@@ -31,6 +31,31 @@ from .sandbox_write_executor_base import evaluator_request_trace
 from .small_scale_validation_gate import HARD_BUDGET_CAP
 
 
+def _load_service_base_urls(project: str, root: Path) -> dict[str, str]:
+    """Load the project's multi-service base_url map (service name → base_url).
+
+    Reads ``real_project_config.json`` → ``multi_service.services``. The map
+    routes cross-service resolvers/fixtures (create an order on scm_trade,
+    then drive integration/sales/{so_id}/to-outbound) to the owning service.
+    Returns {} when the project declares no multi-service topology.
+    """
+    try:
+        from .project_runtime_config import load_real_project_config
+
+        config = load_real_project_config(str(project), Path(root)) or {}
+    except Exception:
+        return {}
+    multi = config.get("multi_service") or {}
+    services = multi.get("services") if isinstance(multi, dict) else None
+    if not isinstance(services, dict):
+        return {}
+    return {
+        str(name).strip(): str(url).strip()
+        for name, url in services.items()
+        if str(name).strip() and str(url).strip()
+    }
+
+
 def _deliverable_dedupe_key(finding: dict[str, Any]) -> str:
     """Collapse repeated deliveries of one operation-level property.
 
@@ -335,6 +360,7 @@ def execute_selected_experiments(
     if not run_contract or _text(run_contract.get("campaign_id")) != _text(campaign_id):
         raise ValueError("experiment batch mainline campaign identity mismatch")
     tokens = load_actor_tokens(root, project, base_url=base_url)
+    service_base_urls = _load_service_base_urls(project, root)
 
     # ── Phase 2: Auto-resolve runtime bindings before execution ──
     # Pre-resolve path placeholders by calling GET list endpoints from Behavior IR.
@@ -358,6 +384,7 @@ def execute_selected_experiments(
                 behavior_ir, tokens, base_url,
                 required_placeholders=_required_phs,
                 placeholder_collection_hints=_ph_hints,
+                service_base_urls=service_base_urls,
             )
             _pre_resolved_bindings = dict(_resolution.get("bindings") or {})
         # State-scoped placeholders cannot share one batch value: a
@@ -371,6 +398,7 @@ def execute_selected_experiments(
         )
         _state_scoped_bindings = resolve_state_scoped_bindings(
             _exps_for_placeholders, tokens, base_url,
+            service_base_urls=service_base_urls,
         )
 
     results: list[dict[str, Any]] = []
