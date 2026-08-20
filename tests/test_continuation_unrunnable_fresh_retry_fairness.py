@@ -1,4 +1,4 @@
-"""Unavailable fresh authority must not block runnable retry continuation."""
+"""Unavailable fresh authority must not block planner-runnable retry work."""
 from __future__ import annotations
 
 
@@ -15,7 +15,7 @@ def _obl(oid: str) -> dict:
     }
 
 
-def test_missing_fresh_experiment_does_not_starve_runnable_retry(monkeypatch) -> None:
+def test_missing_fresh_experiment_does_not_starve_compiled_retry(monkeypatch) -> None:
     import ai_test_asset_center.adaptive_discovery_planner as planner
     import ai_test_asset_center.discovery_runtime_execution_support as support
     import ai_test_asset_center.experiment_executor as executor
@@ -98,10 +98,12 @@ def test_missing_fresh_experiment_does_not_starve_runnable_retry(monkeypatch) ->
         },
         obligations=[_obl(missing_fresh), _obl(retry)],
         experiments_by_obligation={
+            # Retry reason is execution-level; its experiment remains COMPILED,
+            # which is what the real adaptive planner can actually schedule.
             retry: {
                 "obligation_id": retry,
                 "experiment_id": f"exp_{retry}",
-                "compile_receipt": {"status": "BLOCKED_MISSING_BINDING"},
+                "compile_receipt": {"status": "COMPILED"},
             }
         },
         behavior_ir={"operations": []},
@@ -127,3 +129,38 @@ def test_missing_fresh_experiment_does_not_starve_runnable_retry(monkeypatch) ->
     assert final_plan["early_stop_reason"] == "NO_CONTINUATION_EXPERIMENTS"
     assert final_plan["held_unrunnable_fresh_count"] == 1
     executor.clear_continuation_retry_receipts(campaign_id)
+
+
+def test_blocked_retry_experiment_does_not_trigger_fresh_bypass() -> None:
+    from ai_test_asset_center.continuation_runnable_fresh_authority import (
+        hold_unrunnable_fresh,
+    )
+
+    fresh = "fresh-missing"
+    retry = "retry-compile-blocked"
+    plan = {
+        "fresh_pending_pool": [{"obligation_id": fresh}],
+        "fresh_pending_pool_count": 1,
+        "blocked_retry_pool": [{
+            "obligation_id": retry,
+            "block_reason": "BLOCKED_MISSING_BINDING",
+        }],
+        "blocked_retry_pool_count": 1,
+        "budget_deferred_pool": [],
+        "budget_deferred_pool_count": 0,
+    }
+
+    active, held = hold_unrunnable_fresh(
+        plan,
+        {
+            retry: {
+                "obligation_id": retry,
+                "experiment_id": f"exp_{retry}",
+                "compile_receipt": {"status": "BLOCKED_MISSING_BINDING"},
+            }
+        },
+    )
+
+    assert held == []
+    assert active["fresh_pending_pool"] == [{"obligation_id": fresh}]
+    assert "held_unrunnable_fresh_count" not in active
