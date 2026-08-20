@@ -53,6 +53,7 @@ def _representative(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
     return sorted(
         rows,
         key=lambda row: (
+            bool(row.get("compiled_variant_view")),
             -float(row.get("confidence") or 0.0),
             _text(row.get("obligation_id")),
         ),
@@ -190,6 +191,20 @@ def complete_pending_continuation_rows(
                 "not_in_plan_reason": "CONTINUATION_VIEW_TRUNCATED",
                 "continuation_origin": "reconstructed_obligation",
             })
+
+    # Compiler-only views are useful continuation faces, but they were not part
+    # of the source planner population that produced ``pending_count``. When a
+    # bounded generic declaration leaves fewer restore slots than currently
+    # eligible identities, source obligations must consume those slots first.
+    source_rows: list[dict[str, Any]] = []
+    compiler_rows: list[dict[str, Any]] = []
+    for row in eligible_restored:
+        source = obligations_by_id.get(_text(row.get("obligation_id"))) or {}
+        if source.get("compiled_variant_view") is True:
+            compiler_rows.append(row)
+        else:
+            source_rows.append(row)
+    eligible_restored = [*source_rows, *compiler_rows]
 
     restored = eligible_restored[:declared_restore_budget]
     result = [*visible, *restored]
