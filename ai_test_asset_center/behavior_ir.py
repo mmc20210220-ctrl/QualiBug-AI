@@ -1,10 +1,13 @@
-"""Public Behavior IR facade with fail-closed compensation derivation."""
+"""Public Behavior IR facade with fail-closed authority projections."""
 from __future__ import annotations
 from typing import Any
 
 from . import behavior_ir_mainline_base as _base
 from .compensation_derivation_authority import install_compensation_derivation_authority
 from .database_body_reference_projection import project_database_body_reference_relations
+from .enterprise_implementation_authority_projection import (
+    project_enterprise_implementation_authority,
+)
 from .openapi_security_authority import project_operation_security_provenance
 from .operation_service_ownership_authority import (
     install_operation_service_ownership_authority,
@@ -43,6 +46,11 @@ def build_behavior_ir_from_knowledge_asset(
         available_surfaces=available_surfaces,
         operation_path_scope=operation_path_scope,
     )
+    # Enterprise Understanding already owns the source-backed behavior→interface
+    # decision. Project that exact authority into runtime invariants through the
+    # shared fact identity before obligation compilation. Candidate-only, fuzzy,
+    # ambiguous, and conflicting bindings remain fail-closed.
+    model = project_enterprise_implementation_authority(model, asset)
     model = project_database_body_reference_relations(model, asset)
     model = project_operation_security_provenance(
         model,
