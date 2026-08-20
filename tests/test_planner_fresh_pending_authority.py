@@ -1,4 +1,4 @@
-"""Planner must persist the exact fresh tail before bounding its public preview."""
+"""Continuation must seal the exact fresh tail before preview reconstruction."""
 from __future__ import annotations
 
 
@@ -22,14 +22,19 @@ def _exp(oid: str) -> dict:
     }
 
 
-def test_obligation_planner_persists_full_fresh_pool_before_preview_cap(monkeypatch) -> None:
+def test_obligation_boundary_seals_full_fresh_pool_after_preview_cap(monkeypatch) -> None:
     import ai_test_asset_center.adaptive_discovery_planner as planner
+    from ai_test_asset_center.initial_fresh_pending_authority import (
+        seed_initial_fresh_pending_authority,
+    )
 
     monkeypatch.setattr(planner, "_ABS_MAX_SLICE_BUDGET", 2)
     ids = ["a", "b", "c", "d"]
+    obligations = [_obl(oid) for oid in ids]
+    experiments = {oid: _exp(oid) for oid in ids}
     plan = planner.plan_obligation_round(
-        [_obl(oid) for oid in ids],
-        experiments_by_obligation={oid: _exp(oid) for oid in ids},
+        obligations,
+        experiments_by_obligation=experiments,
         behavior_ir={"operations": []},
         budget=1,
     )
@@ -37,53 +42,74 @@ def test_obligation_planner_persists_full_fresh_pool_before_preview_cap(monkeypa
     assert plan["selected_count"] == 1
     assert plan["pending_count"] == 3
     assert plan["pending_truncated"] == 1
-    assert [row["obligation_id"] for row in plan["pending_next_round"]] == [
-        "b",
-        "c",
-    ]
-    assert plan["fresh_pending_pool_count"] == 3
-    assert [row["obligation_id"] for row in plan["fresh_pending_pool"]] == [
-        "b",
-        "c",
-        "d",
-    ]
+    assert len(plan["pending_next_round"]) == 2
+    sealed = seed_initial_fresh_pending_authority(
+        obligation_plan=plan,
+        obligations=obligations,
+        experiments_by_obligation=experiments,
+        behavior_ir={"operations": []},
+    )
+    selected_ids = {row["obligation_id"] for row in plan["selected"]}
+    expected = set(ids) - selected_ids
+    assert sealed["fresh_pending_pool_count"] == 3
+    assert {
+        row["obligation_id"] for row in sealed["fresh_pending_pool"]
+    } == expected
+    assert {
+        row["obligation_id"] for row in plan["pending_next_round"]
+    }.issubset(expected)
 
 
-def test_coverage_unit_planner_persists_full_fresh_pool_before_preview_cap(monkeypatch) -> None:
+def test_coverage_unit_boundary_seals_full_fresh_pool_after_preview_cap(monkeypatch) -> None:
     import ai_test_asset_center.adaptive_discovery_planner as planner
+    from ai_test_asset_center.coverage_unit_registry import (
+        attach_canonical_obligation_keys,
+        build_coverage_units,
+    )
+    from ai_test_asset_center.initial_fresh_pending_authority import (
+        seed_initial_fresh_pending_authority,
+    )
 
     monkeypatch.setattr(planner, "_ABS_MAX_SLICE_BUDGET", 2)
     ids = ["a", "b", "c", "d"]
-    obligations = {oid: _obl(oid) for oid in ids}
-    units = [
-        {
-            "coverage_unit_id": f"unit-{oid}",
-            "canonical_obligation_key": f"canonical-{oid}",
-            "representative_obligation_id": oid,
-            "obligation_ids": [oid],
-            "variant_count": 1,
-            "actor_variants": [],
-        }
-        for oid in ids
-    ]
+    behavior_ir = {"operations": []}
+    obligations = attach_canonical_obligation_keys(
+        [_obl(oid) for oid in ids],
+        behavior_ir=behavior_ir,
+    )
+    units = build_coverage_units(
+        obligations,
+        behavior_ir=behavior_ir,
+    )["coverage_units"]
+    obligations_by_id = {
+        row["obligation_id"]: row for row in obligations
+    }
+    experiments = {oid: _exp(oid) for oid in ids}
     plan = planner.plan_coverage_unit_round(
         units,
-        obligations_by_id=obligations,
-        experiments_by_obligation={oid: _exp(oid) for oid in ids},
-        behavior_ir={"operations": []},
+        obligations_by_id=obligations_by_id,
+        experiments_by_obligation=experiments,
+        behavior_ir=behavior_ir,
         budget=1,
     )
 
     assert plan["selected_unit_count"] == 1
     assert plan["pending_count"] == 3
     assert plan["pending_truncated"] == 1
-    assert [row["obligation_id"] for row in plan["pending_next_round"]] == [
-        "b",
-        "c",
-    ]
-    assert plan["fresh_pending_pool_count"] == 3
-    assert [row["obligation_id"] for row in plan["fresh_pending_pool"]] == [
-        "b",
-        "c",
-        "d",
-    ]
+    assert len(plan["pending_next_round"]) == 2
+    sealed = seed_initial_fresh_pending_authority(
+        obligation_plan=plan,
+        obligations=obligations,
+        experiments_by_obligation=experiments,
+        behavior_ir=behavior_ir,
+    )
+    selected_units = {
+        row["coverage_unit_id"] for row in plan["selected_units"]
+    }
+    expected_units = {
+        row["coverage_unit_id"] for row in units
+    } - selected_units
+    assert sealed["fresh_pending_pool_count"] == 3
+    assert {
+        row["coverage_unit_id"] for row in sealed["fresh_pending_pool"]
+    } == expected_units
