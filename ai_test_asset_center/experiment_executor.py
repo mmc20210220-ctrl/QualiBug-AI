@@ -42,13 +42,13 @@ _original_actor_execution_plan = _core._actor_execution_plan
 _original_execute_one_experiment = _core.execute_one_experiment
 
 # Runtime outcomes produced before continuation starts cannot be inferred from
-# the immutable planning bundle. Keep a bounded, campaign-scoped in-memory
+# the immutable planning bundle. Keep a lossless, campaign-scoped in-memory
 # receipt ledger at the public executor boundary. Every initially selected
 # identity is recorded as a real terminal result, explicit budget deferral, or
-# UNRECEIPTED. Continuation can therefore seed retry work and sanitize caller
-# exclusion sets from evidence instead of equating "scheduled" with "executed".
-# Capture closes when the first continuation consumer starts; follow-on rounds
-# are then owned directly by that consumer and are not double-recorded here.
+# UNRECEIPTED. This ledger is execution/resume authority, not a UI preview, so
+# it must never be clipped by an arbitrary count. Capture closes when the first
+# continuation consumer starts; follow-on rounds are then owned directly by the
+# continuation engine and are not double-recorded here.
 _CONTINUATION_RETRY_REASONS = {
     "BLOCKED_MISSING_BINDING",
     "HARNESS_FAILED",
@@ -59,7 +59,6 @@ _CONTINUATION_RETRY_REASONS = {
 _CONTINUATION_EXECUTION_RECEIPTS: dict[str, list[dict[str, str]]] = {}
 _CONTINUATION_CAPTURE_CLOSED: set[str] = set()
 _CONTINUATION_RECEIPT_LOCK = threading.Lock()
-_MAX_CONTINUATION_RECEIPTS_PER_CAMPAIGN = 4000
 
 
 def __getattr__(name: str) -> Any:
@@ -300,9 +299,9 @@ def _capture_continuation_execution_receipts(
         }
         for row in captured:
             by_identity[(row["obligation_id"], row["experiment_id"])] = row
-        _CONTINUATION_EXECUTION_RECEIPTS[campaign] = list(by_identity.values())[
-            -_MAX_CONTINUATION_RECEIPTS_PER_CAMPAIGN:
-        ]
+        # This is resume authority, not a diagnostic preview. Retain every
+        # distinct identity until its owning continuation domain consumes it.
+        _CONTINUATION_EXECUTION_RECEIPTS[campaign] = list(by_identity.values())
 
 
 def consume_continuation_execution_receipts(
