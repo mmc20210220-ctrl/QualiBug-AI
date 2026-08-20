@@ -51,7 +51,6 @@ def _text(value: Any) -> str:
 
 def _mechanical_execution_gap(receipt: Any) -> bool:
     """Whether a base execution row is only a mainline-generated gap filler."""
-
     row = _dict(receipt)
     status = _text(row.get("status")).upper()
     reason = _text(row.get("reason_code"))
@@ -77,15 +76,7 @@ def _normalize_variant_selected_identity(
     variant_id: str,
     sealed: bool,
 ) -> dict[str, Any]:
-    """Project compiler-local selection onto the formal selected obligation.
-
-    The raw batch remains untouched.  This copy is the mainline stage projection
-    consumed by the attempt ledger: ``base_id`` is the selected formal
-    obligation and ``variant_id`` is its actually executed compiler face.
-    Fingerprint-sealed delivery-gate receipts are never mutated here; their
-    separate stage-identity receipt is attached by the core binder.
-    """
-
+    """Project compiler-local selection onto the formal selected obligation."""
     row = dict(receipt)
     if sealed:
         return row
@@ -109,36 +100,39 @@ def _project_variant_stage_receipts(
     compile_results: Mapping[str, Any],
     execution_results: Mapping[str, Any],
     gate_results: Mapping[str, Any],
-) -> tuple[
-    dict[str, Any],
-    dict[str, Any],
-    dict[str, Any],
-]:
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     """Project one concrete compiler variant onto each selected formal base.
 
-    Runtime field-constraint expansion may execute ``base__v_<digest>`` while
-    terminal accounting still owns exactly one formal ``base`` attempt.  Before
-    identity binding, preserve the concrete variant as ``executed_obligation_id``
-    and key the chosen stage chain by the formal base.  A real base execution
-    receipt always wins.  A variant may replace only the two mechanical gap
-    fillers produced after continuation/round-limit accounting; otherwise the
-    historical base-first precedence is unchanged.
+    Once a variant execution face is chosen, compile and gate stages must come
+    from that same variant first. Falling back to a stale direct-base stage can
+    splice different experiment lineages into one formal attempt. A real direct
+    base execution still has precedence over every variant.
     """
-
     selected_ids = {
         _text(row.get("obligation_id"))
         for row in selected
         if isinstance(row, dict) and _text(row.get("obligation_id"))
     }
-    compile_out = dict(compile_results) if isinstance(compile_results, Mapping) else compile_results
-    execution_out = dict(execution_results) if isinstance(execution_results, Mapping) else execution_results
-    gate_out = dict(gate_results) if isinstance(gate_results, Mapping) else gate_results
+    compile_out = (
+        dict(compile_results)
+        if isinstance(compile_results, Mapping)
+        else compile_results
+    )
+    execution_out = (
+        dict(execution_results)
+        if isinstance(execution_results, Mapping)
+        else execution_results
+    )
+    gate_out = (
+        dict(gate_results)
+        if isinstance(gate_results, Mapping)
+        else gate_results
+    )
     if not (
         isinstance(compile_out, dict)
         and isinstance(execution_out, dict)
         and isinstance(gate_out, dict)
     ):
-        # Preserve the core validator as the fail-closed type authority.
         return compile_out, execution_out, gate_out
 
     chosen_variant_by_base: dict[str, str] = {}
@@ -154,7 +148,11 @@ def _project_variant_stage_receipts(
         ):
             continue
         direct = execution_out.get(base_id)
-        if isinstance(direct, dict) and direct and not _mechanical_execution_gap(direct):
+        if (
+            isinstance(direct, dict)
+            and direct
+            and not _mechanical_execution_gap(direct)
+        ):
             continue
         chosen_variant_by_base[base_id] = variant_id
 
@@ -162,29 +160,32 @@ def _project_variant_stage_receipts(
         variant_execution = execution_out.get(variant_id)
         if not isinstance(variant_execution, dict):
             continue
+
         execution_face = _normalize_variant_selected_identity(
             variant_execution,
             base_id=base_id,
             variant_id=variant_id,
             sealed=False,
         )
-        declared_executed = _text(execution_face.get("executed_obligation_id"))
+        declared_executed = _text(
+            execution_face.get("executed_obligation_id")
+        )
         if not declared_executed:
             declared_executed = _text(
-                _dict(execution_face.get("delivery_execution_receipt")).get(
-                    "obligation_id"
-                )
+                _dict(
+                    execution_face.get("delivery_execution_receipt")
+                ).get("obligation_id")
             )
         if not declared_executed:
             execution_face["executed_obligation_id"] = variant_id
         execution_out[base_id] = execution_face
 
-        # Compile may already have been copied onto the base by manual terminal
-        # accounting. Normalize that copy; otherwise project the matching
-        # variant compile receipt. This is not a sealed customer gate.
-        compile_source = compile_out.get(base_id)
+        # The execution face decides the lineage. Prefer the matching variant
+        # compile receipt; use a base compile row only when that variant stage
+        # is genuinely absent.
+        compile_source = compile_out.get(variant_id)
         if not isinstance(compile_source, dict) or not compile_source:
-            compile_source = compile_out.get(variant_id)
+            compile_source = compile_out.get(base_id)
         if isinstance(compile_source, dict) and compile_source:
             compile_out[base_id] = _normalize_variant_selected_identity(
                 compile_source,
@@ -193,12 +194,12 @@ def _project_variant_stage_receipts(
                 sealed=False,
             )
 
-        # Gate-v2 is fingerprint sealed: re-key a copy for formal ownership but
-        # never rewrite its signed payload. The core binder adds a separate
-        # stage_identity_receipt carrying selected=base, executed=variant.
-        gate_source = gate_out.get(base_id)
+        # Gate-v2 is fingerprint sealed. Re-key the matching variant gate for
+        # formal ownership but never rewrite its signed payload. A base gate is
+        # only a fallback when the chosen execution face has no gate stage.
+        gate_source = gate_out.get(variant_id)
         if not isinstance(gate_source, dict) or not gate_source:
-            gate_source = gate_out.get(variant_id)
+            gate_source = gate_out.get(base_id)
         if isinstance(gate_source, dict) and gate_source:
             is_sealed = (
                 gate_source.get("schema_version")
@@ -211,14 +212,13 @@ def _project_variant_stage_receipts(
                 sealed=is_sealed,
             )
 
-        # Once the concrete face is projected onto the formal base, remove all
-        # sibling variant stage keys for that base from the ledger input. The
-        # executed variant identity remains explicit on the base receipt; this
-        # avoids a second unbound copy competing with the bound mainline chain.
         for mapping in (compile_out, execution_out, gate_out):
             for raw_key in list(mapping):
                 key = _text(raw_key)
-                if key != base_id and _core._base_obligation_id(key) == base_id:
+                if (
+                    key != base_id
+                    and _core._base_obligation_id(key) == base_id
+                ):
                     mapping.pop(raw_key, None)
 
     return compile_out, execution_out, gate_out
@@ -231,9 +231,12 @@ def bind_stage_receipt_identity(
     compile_results: Mapping[str, Any],
     execution_results: Mapping[str, Any],
     gate_results: Mapping[str, Any],
-) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+) -> tuple[
+    dict[str, dict[str, Any]],
+    dict[str, dict[str, Any]],
+    dict[str, dict[str, Any]],
+]:
     """Bind mainline identity after losslessly projecting compiler variants."""
-
     projected_compile, projected_execution, projected_gate = (
         _project_variant_stage_receipts(
             selected=selected,
@@ -254,7 +257,9 @@ def bind_stage_receipt_identity(
 def _occurrence_bundle(row: dict[str, Any]) -> dict[str, Any]:
     return {
         "finding": dict(_dict(row.get("finding"))) or None,
-        "execution_receipt": dict(_dict(row.get("delivery_execution_receipt"))),
+        "execution_receipt": dict(
+            _dict(row.get("delivery_execution_receipt"))
+        ),
         "contract_evidence_receipts": [
             dict(item)
             for item in _list(row.get("contract_evidence_receipts"))
@@ -266,7 +271,9 @@ def _occurrence_bundle(row: dict[str, Any]) -> dict[str, Any]:
             if isinstance(item, dict)
         ],
         "oracle_receipt": dict(_dict(row.get("oracle_receipt"))),
-        "reproduction_receipt": dict(_dict(row.get("reproduction_receipt"))),
+        "reproduction_receipt": dict(
+            _dict(row.get("reproduction_receipt"))
+        ),
     }
 
 
@@ -332,14 +339,18 @@ def _validate_occurrence_row(
         "finding_id": finding_id,
         "outcome_ref": outcome_ref,
         "gate_receipt_id": _text(validated.get("gate_receipt_id")),
-        "gate_output_fingerprint": _text(validated.get("output_fingerprint")),
+        "gate_output_fingerprint": _text(
+            validated.get("output_fingerprint")
+        ),
         "gate_receipt": dict(validated),
         "delivery_evidence_bundle": bundle,
         "parent_oracle_receipt": dict(parent),
     }
 
 
-def delivery_occurrence_views(attempt: dict[str, Any]) -> list[dict[str, Any]]:
+def delivery_occurrence_views(
+    attempt: dict[str, Any],
+) -> list[dict[str, Any]]:
     """Return one synthetic attempt view per independently gated occurrence."""
     row = _dict(attempt)
     occurrences = [
@@ -360,20 +371,22 @@ def delivery_occurrence_views(attempt: dict[str, Any]) -> list[dict[str, Any]]:
                 "delivery_occurrence_finding_ids",
             }
         }
-        view.update(
-            {
-                "finding_id": _text(occurrence.get("finding_id")),
-                "outcome_ref": _text(occurrence.get("outcome_ref")),
-                "gate_receipt_id": _text(occurrence.get("gate_receipt_id")),
-                "output_fingerprint": _text(
-                    occurrence.get("gate_output_fingerprint")
-                ),
-                "gate_receipt": dict(_dict(occurrence.get("gate_receipt"))),
-                "delivery_evidence_bundle": dict(
-                    _dict(occurrence.get("delivery_evidence_bundle"))
-                ),
-            }
-        )
+        view.update({
+            "finding_id": _text(occurrence.get("finding_id")),
+            "outcome_ref": _text(occurrence.get("outcome_ref")),
+            "gate_receipt_id": _text(
+                occurrence.get("gate_receipt_id")
+            ),
+            "output_fingerprint": _text(
+                occurrence.get("gate_output_fingerprint")
+            ),
+            "gate_receipt": dict(
+                _dict(occurrence.get("gate_receipt"))
+            ),
+            "delivery_evidence_bundle": dict(
+                _dict(occurrence.get("delivery_evidence_bundle"))
+            ),
+        })
         views.append(view)
     return views
 
@@ -384,17 +397,23 @@ def _enrich_attempt_occurrences(
 ) -> dict[str, Any]:
     output = dict(ledger)
     execution_by_id = {
-        _text(key): _dict(value) for key, value in execution_results.items()
+        _text(key): _dict(value)
+        for key, value in execution_results.items()
     }
     attempts: list[dict[str, Any]] = []
     for raw_attempt in _list(output.get("attempts")):
         attempt = dict(_dict(raw_attempt))
-        execution = execution_by_id.get(_text(attempt.get("obligation_id")), {})
+        execution = execution_by_id.get(
+            _text(attempt.get("obligation_id")),
+            {},
+        )
         raw_occurrences = [
             _dict(item)
             for item in _list(execution.get("delivery_occurrences"))
             if isinstance(item, dict)
-            and _text(_dict(_dict(item).get("gate_receipt")).get("status"))
+            and _text(
+                _dict(_dict(item).get("gate_receipt")).get("status")
+            )
             == "DELIVERABLE"
         ]
         if raw_occurrences:
@@ -408,8 +427,14 @@ def _enrich_attempt_occurrences(
                     _text(item.get("finding_id")),
                 )
             )
-            finding_ids = [_text(item.get("finding_id")) for item in canonical]
-            outcome_refs = [_text(item.get("outcome_ref")) for item in canonical]
+            finding_ids = [
+                _text(item.get("finding_id"))
+                for item in canonical
+            ]
+            outcome_refs = [
+                _text(item.get("outcome_ref"))
+                for item in canonical
+            ]
             if (
                 len(finding_ids) != len(set(finding_ids))
                 or len(outcome_refs) != len(set(outcome_refs))
@@ -423,7 +448,9 @@ def _enrich_attempt_occurrences(
                 )
             attempt["delivery_occurrences"] = canonical
             attempt["delivery_occurrence_count"] = len(canonical)
-            attempt["delivery_occurrence_finding_ids"] = sorted(finding_ids)
+            attempt["delivery_occurrence_finding_ids"] = sorted(
+                finding_ids
+            )
         attempt.pop("attempt_fingerprint", None)
         attempt["attempt_fingerprint"] = _core._fingerprint(attempt)
         attempts.append(attempt)
@@ -455,15 +482,6 @@ def build_obligation_attempt_ledger(
 def validate_obligation_attempt_ledger(
     ledger: dict[str, Any],
 ) -> dict[str, Any]:
-    # The ledger is validated (with full per-attempt and per-occurrence gate
-    # rebuilds) at every delivery stage — formal findings path, formal
-    # delivery authority, canonical defect registry and redaction chain each
-    # re-validate the SAME sealed ledger several times per run.  Validation is
-    # a deterministic pure function of the ledger content, so the result is
-    # cached by the ledger's own content address.  A content change changes
-    # the address and forces recomputation; failures are never cached and
-    # re-raise on every call, so no fail-closed gate is relaxed.  Callers
-    # treat the validated ledger as read-only (sealed attempt authority).
     cache_key = content_fingerprint(_dict(ledger))
     cached = LEDGER_VALIDATION_CACHE.get(cache_key)
     if cached is not _MISSING:
@@ -483,14 +501,22 @@ def validate_obligation_attempt_ledger(
                 "nondeliverable_attempt_has_delivery_occurrences"
             )
         validated = [
-            _validate_occurrence_row(item, attempt=attempt) for item in occurrences
+            _validate_occurrence_row(item, attempt=attempt)
+            for item in occurrences
         ]
-        finding_ids = sorted(_text(item.get("finding_id")) for item in validated)
-        if int(attempt.get("delivery_occurrence_count") or 0) != len(validated):
+        finding_ids = sorted(
+            _text(item.get("finding_id")) for item in validated
+        )
+        if int(attempt.get("delivery_occurrence_count") or 0) != len(
+            validated
+        ):
             raise _core.ObligationAttemptLedgerError(
                 "delivery_occurrence_count_mismatch"
             )
-        if _list(attempt.get("delivery_occurrence_finding_ids")) != finding_ids:
+        if (
+            _list(attempt.get("delivery_occurrence_finding_ids"))
+            != finding_ids
+        ):
             raise _core.ObligationAttemptLedgerError(
                 "delivery_occurrence_finding_ids_mismatch"
             )
@@ -502,14 +528,15 @@ def validate_obligation_attempt_ledger(
     return value
 
 
-def reseal_obligation_attempt_ledger(ledger: dict[str, Any]) -> dict[str, Any]:
+def reseal_obligation_attempt_ledger(
+    ledger: dict[str, Any],
+) -> dict[str, Any]:
     resealed = _original_reseal_obligation_attempt_ledger(ledger)
     return validate_obligation_attempt_ledger(resealed)
 
 
 def derive_campaign_terminal_status(ledger: dict[str, Any]) -> str:
     """Derive campaign status through this facade's validated ledger authority."""
-
     validated = validate_obligation_attempt_ledger(ledger)
     return _core.derive_campaign_terminal_status(validated)
 
