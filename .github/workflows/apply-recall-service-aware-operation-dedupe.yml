@@ -69,3 +69,5 @@ jobs:
           git diff --cached --check
           git commit -m 'fix(recall): preserve service-aware operation identity'
           git push origin HEAD:fix/recall-service-aware-operation-dedupe
+
+# Force a PR synchronize event after the base verifier was installed.
