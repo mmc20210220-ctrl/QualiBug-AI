@@ -4,6 +4,12 @@ An experiment obligation may only enter the execution queue when ALL required
 binding dimensions are in EXECUTABLE state. The gate produces precise blocking
 reasons referencing specific binding IDs.
 
+Source-declared request-schema fields are a special structural authority: their
+existence is already proven by the API/Behavior IR source and must not require a
+runtime probe merely to prove that the declared field exists. This does not
+weaken runtime-sensitive actor, fixture, scope, state, relation, or oracle-input
+requirements.
+
 Schema: qualibug.binding-completeness-gate.v1
 """
 from __future__ import annotations
@@ -37,7 +43,7 @@ def check_binding_completeness(
     obligation: dict[str, Any],
     behavior_ir: dict[str, Any],
 ) -> dict[str, Any]:
-    """Check if all required bindings for an obligation are EXECUTABLE.
+    """Check if all required bindings for an obligation are executable.
 
     Returns:
         {
@@ -171,6 +177,87 @@ def _determine_required_dimensions(
     return required
 
 
+def _field_binding_matches_ref(
+    binding: dict[str, Any],
+    ref: str,
+    obligation: dict[str, Any],
+) -> bool:
+    """Match a field by exact schema identity within the obligation's operation.
+
+    Field bindings are keyed as ``<operation path>:<field>`` while their
+    ``source_node_id`` is the operation id, so the generic substring matcher is
+    unsafe: a field named ``id`` could match ``{id}`` in the path of an unrelated
+    field. Use exact builder metadata and require operation ownership when the
+    obligation declares operations.
+    """
+    row = _dict(binding)
+    metadata = _dict(row.get("metadata"))
+    required_ops = {
+        _text(value)
+        for value in _list(_dict(obligation).get("required_operations"))
+        if _text(value)
+    }
+    operation_ref = _text(metadata.get("operation_ref"))
+    if required_ops and operation_ref not in required_ops:
+        return False
+
+    target_key = _text(row.get("target_key"))
+    target_field = target_key.rsplit(":", 1)[-1] if ":" in target_key else ""
+    exact_names = {
+        _text(metadata.get("field_name")),
+        _text(metadata.get("request_path")),
+        target_field,
+    }
+    exact_names.discard("")
+    return _text(ref) in exact_names
+
+
+def _source_declared_field_binding_is_authoritative(
+    binding: dict[str, Any],
+    ref: str,
+    obligation: dict[str, Any],
+) -> bool:
+    """Whether an exact request-schema field proves structural executability.
+
+    ``binding_builder`` creates these rows directly from a source-declared
+    request schema. CANDIDATE/HIGH_CONFIDENCE here means the generic confidence
+    scorer lacks enough independent dimensions; it does not mean the field's
+    schema identity is unknown. Rejected/conflicted/stale rows remain blocked.
+    """
+    row = _dict(binding)
+    if not _field_binding_matches_ref(row, ref, obligation):
+        return False
+    if _text(row.get("source_module")) != "binding_builder":
+        return False
+    status = _text(row.get("status")).upper()
+    if status not in {
+        BindingStatus.CANDIDATE.value,
+        BindingStatus.HIGH_CONFIDENCE.value,
+        BindingStatus.RUNTIME_CONFIRMED.value,
+        BindingStatus.EXECUTABLE.value,
+    }:
+        return False
+    metadata = _dict(row.get("metadata"))
+    return bool(
+        _text(metadata.get("operation_ref"))
+        and _text(metadata.get("request_path") or metadata.get("field_name"))
+    )
+
+
+def _binding_matches_ref(
+    binding: dict[str, Any],
+    dimension: str,
+    ref: str,
+    obligation: dict[str, Any],
+) -> bool:
+    if dimension == "field":
+        return _field_binding_matches_ref(binding, ref, obligation)
+    return (
+        _text(binding.get("source_node_id")) == ref
+        or ref in _text(binding.get("target_key"))
+    )
+
+
 def _check_dimension(
     ledger: BindingLedger,
     dimension: str,
@@ -199,6 +286,7 @@ def _check_dimension(
 
     # Check if needed refs have executable bindings
     missing: list[str] = []
+    source_authoritative_count = 0
     for ref in needed_refs:
         # Generic fixture roles (owned_resource, disposable_fixture, …) name a
         # capability, not an IR node. Any executable fixture binding on the
@@ -229,23 +317,46 @@ def _check_dimension(
             if not executable:
                 missing.append(f"{ref}(no_binding)")
             continue
+
         found = any(
-            b.get("source_node_id") == ref or ref in _text(b.get("target_key"))
+            _binding_matches_ref(b, dimension, ref, obl)
             for b in executable
         )
-        if not found:
-            # Check if binding exists but not executable
-            existing = [
-                b for b in all_of_type
-                if b.get("source_node_id") == ref or ref in _text(b.get("target_key"))
-            ]
-            if existing:
-                missing.append(f"{ref}(status={existing[0].get('status')})")
-            else:
-                missing.append(f"{ref}(no_binding)")
+        if found:
+            continue
+
+        # Exact request-schema field identity is already source-proven. Requiring
+        # an independent runtime probe to promote the generic binding ledger row
+        # would create a circular gate: validation cannot execute until the
+        # field is probed, while probes are not invoked before planning.
+        if dimension == "field" and any(
+            _source_declared_field_binding_is_authoritative(b, ref, obl)
+            for b in all_of_type
+        ):
+            source_authoritative_count += 1
+            continue
+
+        # Check if binding exists but not executable
+        existing = [
+            b for b in all_of_type
+            if _binding_matches_ref(b, dimension, ref, obl)
+        ]
+        if existing:
+            missing.append(f"{ref}(status={existing[0].get('status')})")
+        else:
+            missing.append(f"{ref}(no_binding)")
 
     if not missing:
-        return {"dimension": dimension, "passed": True, "reason": "all_refs_executable"}
+        return {
+            "dimension": dimension,
+            "passed": True,
+            "reason": (
+                "source_declared_field_identity"
+                if dimension == "field" and source_authoritative_count
+                else "all_refs_executable"
+            ),
+            "source_authoritative_count": source_authoritative_count,
+        }
 
     return {
         "dimension": dimension,
