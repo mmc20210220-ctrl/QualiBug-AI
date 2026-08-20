@@ -10,6 +10,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from ._obligation_attempt_ledger_single_occurrence_mechanics import (
+    _base_obligation_id,
+)
+
 
 def _dict(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
@@ -31,6 +35,68 @@ def _compile_status(experiment: Any) -> str:
     return status
 
 
+def _formal_accounting_id(
+    obligation_id: str,
+    accounting_by_id: dict[str, dict[str, Any]],
+) -> str:
+    """Map a compiler variant to its formal accounting owner when present."""
+
+    oid = _text(obligation_id)
+    base = _base_obligation_id(oid)
+    return base if base in accounting_by_id else oid
+
+
+def _experiment_faces(
+    experiments: dict[str, Any],
+    formal_id: str,
+) -> list[tuple[str, dict[str, Any]]]:
+    """Return the direct experiment plus compiler-expanded faces of one base."""
+
+    result: list[tuple[str, dict[str, Any]]] = []
+    direct = _dict(experiments.get(formal_id))
+    if direct:
+        result.append((formal_id, direct))
+    for raw_id, raw_experiment in experiments.items():
+        oid = _text(raw_id)
+        if not oid or oid == formal_id or _base_obligation_id(oid) != formal_id:
+            continue
+        experiment = _dict(raw_experiment)
+        if experiment:
+            result.append((oid, experiment))
+    return result
+
+
+def _compiled_experiment_face(
+    experiments: dict[str, Any],
+    formal_id: str,
+) -> tuple[str, dict[str, Any]]:
+    """Return the executable compiled face that can justify pending sealing."""
+
+    faces = _experiment_faces(experiments, formal_id)
+    for oid, experiment in faces:
+        if _compile_status(experiment) == "COMPILED":
+            return oid, experiment
+    return faces[0] if faces else ("", {})
+
+
+def _coverage_unit_for_identity(
+    obligation_id: str,
+    *,
+    accounting_by_id: dict[str, dict[str, Any]],
+    experiments: dict[str, Any],
+) -> str:
+    raw_id = _text(obligation_id)
+    formal_id = _formal_accounting_id(raw_id, accounting_by_id)
+    raw_experiment = _dict(experiments.get(raw_id))
+    formal_row = _dict(accounting_by_id.get(formal_id))
+    _, compiled_face = _compiled_experiment_face(experiments, formal_id)
+    return _text(
+        raw_experiment.get("coverage_unit_id")
+        or formal_row.get("coverage_unit_id")
+        or compiled_face.get("coverage_unit_id")
+    )
+
+
 def _terminal_pending_rows(
     *,
     selected_rows: list[dict[str, Any]],
@@ -38,32 +104,72 @@ def _terminal_pending_rows(
     obligation_plan: dict[str, Any],
     execution_results: dict[str, dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Rebuild the full pending identity set used only for terminal sealing.
+    """Rebuild the full formal pending set used only for terminal sealing.
 
-    ``pending_next_round`` is a bounded public preview.  Once continuation has
-    stopped with ``pending_count`` greater than that preview, sealing from the
-    preview alone turns the omitted tail into OBLIGATION_NOT_IN_PLAN.  Rebuild
-    only the transient terminal view from the full accounting scope; do not add
-    another unbounded field to the customer-visible obligation plan.
+    ``pending_next_round`` is a bounded public preview and may contain
+    compiler-expanded ``base__v_*`` identities that do not exist as separate
+    formal accounting rows.  Terminal sealing therefore projects every pending
+    face back to its formal base, while preserving the compiled face as the
+    proof that work remains executable.  A real terminal receipt for any face
+    closes the formal base for the current run.
 
-    Coverage-unit plans retain one representative per unfinished unit.  An
-    already terminally executed member closes that unit for sealing so backup
-    members are not falsely projected as pending work.
+    Coverage-unit plans retain one representative per unfinished unit.  The
+    reconstruction is transient only; no new unbounded customer-visible plan
+    field is introduced.
     """
     plan = _dict(obligation_plan)
     experiments = _dict(experiments_by_obligation)
-    visible = [
+    accounting_by_id = {
+        _text(row.get("obligation_id")): dict(row)
+        for row in selected_rows
+        if isinstance(row, dict) and _text(row.get("obligation_id"))
+    }
+
+    terminal_raw_ids = {
+        _text(oid)
+        for oid, raw in _dict(execution_results).items()
+        if _text(oid)
+        and _text(_dict(raw).get("status")).upper()
+        not in {"", "DEFERRED", "UNRECEIPTED"}
+    }
+    terminal_formal_ids = {
+        _formal_accounting_id(oid, accounting_by_id)
+        for oid in terminal_raw_ids
+    }
+
+    raw_visible = [
         dict(row)
         for row in _list(plan.get("pending_next_round"))
         if isinstance(row, dict) and _text(row.get("obligation_id"))
     ]
-    visible_ids = {
-        _text(row.get("obligation_id"))
-        for row in visible
-        if _text(row.get("obligation_id"))
-    }
-    declared_pending = int(plan.get("pending_count") or len(visible))
-    missing_from_preview = max(0, declared_pending - len(visible))
+    declared_pending = int(plan.get("pending_count") or len(raw_visible))
+    missing_from_preview = max(0, declared_pending - len(raw_visible))
+
+    visible: list[dict[str, Any]] = []
+    visible_ids: set[str] = set()
+    for raw in raw_visible:
+        raw_id = _text(raw.get("obligation_id"))
+        formal_id = _formal_accounting_id(raw_id, accounting_by_id)
+        if (
+            not formal_id
+            or formal_id in visible_ids
+            or formal_id in terminal_formal_ids
+        ):
+            continue
+        row = dict(raw)
+        row["obligation_id"] = formal_id
+        if raw_id != formal_id:
+            row["continuation_origin"] = "variant_preview_formal_projection"
+        if not _text(row.get("coverage_unit_id")):
+            unit_id = _coverage_unit_for_identity(
+                raw_id,
+                accounting_by_id=accounting_by_id,
+                experiments=experiments,
+            )
+            if unit_id:
+                row["coverage_unit_id"] = unit_id
+        visible.append(row)
+        visible_ids.add(formal_id)
 
     retry_rows = [
         dict(row)
@@ -73,87 +179,78 @@ def _terminal_pending_rows(
     if missing_from_preview <= 0 and not retry_rows:
         return visible
 
-    accounting_by_id = {
-        _text(row.get("obligation_id")): dict(row)
-        for row in selected_rows
-        if isinstance(row, dict) and _text(row.get("obligation_id"))
-    }
-    terminal_ids = {
-        _text(oid)
-        for oid, raw in _dict(execution_results).items()
-        if _text(oid)
-        and _text(_dict(raw).get("status")).upper()
-        not in {"", "DEFERRED", "UNRECEIPTED"}
-    }
-
     result = list(visible)
     result_ids = set(visible_ids)
 
-    # Persisted retry authority may contain identities absent from the bounded
-    # fresh preview.  If this run already produced a terminal result for one,
-    # manual sealing will skip it anyway; otherwise keep it explicitly pending.
+    # Persisted retry authority may contain variant ids absent from the bounded
+    # fresh preview. Project them to the same formal attempt owner. A concrete
+    # BLOCKED/HARNESS_FAILED receipt remains the current run terminal and is not
+    # rewritten as DEFERRED merely because the identity is retryable later.
     for retry in retry_rows:
-        oid = _text(retry.get("obligation_id"))
-        if not oid or oid in result_ids or oid in terminal_ids:
+        raw_id = _text(retry.get("obligation_id"))
+        formal_id = _formal_accounting_id(raw_id, accounting_by_id)
+        if (
+            not formal_id
+            or formal_id in result_ids
+            or formal_id in terminal_formal_ids
+        ):
             continue
-        source = accounting_by_id.get(oid) or {}
+        source = accounting_by_id.get(formal_id) or {}
         result.append({
-            "obligation_id": oid,
+            "obligation_id": formal_id,
             "risk_family": _text(source.get("risk_family")),
-            "coverage_unit_id": _text(
-                source.get("coverage_unit_id")
-                or _dict(experiments.get(oid)).get("coverage_unit_id")
+            "coverage_unit_id": _coverage_unit_for_identity(
+                raw_id,
+                accounting_by_id=accounting_by_id,
+                experiments=experiments,
             ),
             "not_in_plan_reason": "CONTINUATION_RETRY_PENDING",
-            "continuation_origin": "blocked_retry_pool",
+            "continuation_origin": (
+                "blocked_retry_variant_formal_projection"
+                if raw_id != formal_id
+                else "blocked_retry_pool"
+            ),
         })
-        result_ids.add(oid)
+        result_ids.add(formal_id)
 
     if missing_from_preview <= 0:
         return result
 
     def eligible(row: dict[str, Any]) -> bool:
-        oid = _text(row.get("obligation_id"))
-        if not oid or oid in result_ids or oid in terminal_ids:
+        formal_id = _text(row.get("obligation_id"))
+        if (
+            not formal_id
+            or formal_id in result_ids
+            or formal_id in terminal_formal_ids
+            or row.get("pre_transport_executable") is False
+        ):
             return False
-        experiment = _dict(experiments.get(oid))
-        return (
-            _compile_status(experiment) == "COMPILED"
-            and row.get("pre_transport_executable") is not False
-        )
+        _, experiment = _compiled_experiment_face(experiments, formal_id)
+        return _compile_status(experiment) == "COMPILED"
 
     planning_authority = _text(plan.get("plan_authority")).lower()
     restored: list[dict[str, Any]] = []
     if planning_authority == "coverage_unit":
         completed_units = {
-            _text(
-                _dict(accounting_by_id.get(oid)).get("coverage_unit_id")
-                or _dict(experiments.get(oid)).get("coverage_unit_id")
-            )
-            for oid in terminal_ids
-            if _text(
-                _dict(accounting_by_id.get(oid)).get("coverage_unit_id")
-                or _dict(experiments.get(oid)).get("coverage_unit_id")
+            unit_id
+            for raw_id in terminal_raw_ids
+            if (
+                unit_id := _coverage_unit_for_identity(
+                    raw_id,
+                    accounting_by_id=accounting_by_id,
+                    experiments=experiments,
+                )
             )
         }
         occupied_units = {
-            _text(
-                row.get("coverage_unit_id")
-                or _dict(accounting_by_id.get(_text(row.get("obligation_id")))).get(
-                    "coverage_unit_id"
-                )
-                or _dict(experiments.get(_text(row.get("obligation_id")))).get(
-                    "coverage_unit_id"
-                )
-            )
+            unit_id
             for row in result
-            if _text(
-                row.get("coverage_unit_id")
-                or _dict(accounting_by_id.get(_text(row.get("obligation_id")))).get(
-                    "coverage_unit_id"
-                )
-                or _dict(experiments.get(_text(row.get("obligation_id")))).get(
-                    "coverage_unit_id"
+            if (
+                unit_id := _text(row.get("coverage_unit_id"))
+                or _coverage_unit_for_identity(
+                    _text(row.get("obligation_id")),
+                    accounting_by_id=accounting_by_id,
+                    experiments=experiments,
                 )
             )
         }
@@ -162,10 +259,11 @@ def _terminal_pending_rows(
         for row in accounting_by_id.values():
             if not eligible(row):
                 continue
-            oid = _text(row.get("obligation_id"))
-            unit_id = _text(
-                row.get("coverage_unit_id")
-                or _dict(experiments.get(oid)).get("coverage_unit_id")
+            formal_id = _text(row.get("obligation_id"))
+            unit_id = _coverage_unit_for_identity(
+                formal_id,
+                accounting_by_id=accounting_by_id,
+                experiments=experiments,
             )
             if not unit_id:
                 unscoped.append(row)
@@ -204,27 +302,29 @@ def _terminal_pending_rows(
             (row for row in accounting_by_id.values() if eligible(row)),
             key=lambda item: _text(item.get("obligation_id")),
         ):
-            oid = _text(row.get("obligation_id"))
+            formal_id = _text(row.get("obligation_id"))
             restored.append({
-                "obligation_id": oid,
+                "obligation_id": formal_id,
                 "risk_family": _text(row.get("risk_family")),
-                "coverage_unit_id": _text(
-                    row.get("coverage_unit_id")
-                    or _dict(experiments.get(oid)).get("coverage_unit_id")
+                "coverage_unit_id": _coverage_unit_for_identity(
+                    formal_id,
+                    accounting_by_id=accounting_by_id,
+                    experiments=experiments,
                 ),
                 "not_in_plan_reason": "CONTINUATION_VIEW_TRUNCATED",
                 "continuation_origin": "terminal_reconstructed_obligation",
             })
 
-    # ``pending_count`` is the execution authority's exact outstanding count;
-    # retry rows already recovered above consume that same count.  Reconstruct
-    # only the remaining fresh slots so mixed fresh+retry queues cannot over-seal.
+    # ``pending_count`` counts execution identities (including variants), while
+    # terminal accounting counts formal bases.  It is therefore an upper bound
+    # on how many new formal rows may be restored, never a requirement to invent
+    # one terminal row per compiler face.
     fresh_restore_budget = max(0, declared_pending - len(result))
     for row in restored[:fresh_restore_budget]:
-        oid = _text(row.get("obligation_id"))
-        if oid and oid not in result_ids:
+        formal_id = _text(row.get("obligation_id"))
+        if formal_id and formal_id not in result_ids:
             result.append(row)
-            result_ids.add(oid)
+            result_ids.add(formal_id)
     return result
 
 
@@ -246,7 +346,14 @@ def _manual_terminal_receipts(
         execution_results=execution_results,
     )
     scheduled_ids = {
-        _text(row.get("obligation_id"))
+        _formal_accounting_id(
+            _text(row.get("obligation_id")),
+            {
+                _text(item.get("obligation_id")): dict(item)
+                for item in selected_rows
+                if isinstance(item, dict) and _text(item.get("obligation_id"))
+            },
+        )
         for row in _list(obligation_plan.get("selected"))
         if isinstance(row, dict) and _text(row.get("obligation_id"))
     }
@@ -269,10 +376,12 @@ def _manual_terminal_receipts(
         obligation_id = _text(row.get("obligation_id"))
         if not obligation_id or obligation_id in execution_results:
             continue
-        # Check variant obligation_ids and map them to the original
+        # Check variant obligation_ids and map their compile receipt to the
+        # formal base. Execution remains on the concrete variant until the
+        # ledger facade binds selected=base / executed=variant.
         _variant_result = None
         for _vid, _vresult in compile_results.items():
-            if _vid.startswith(obligation_id + "__v_"):
+            if _base_obligation_id(_text(_vid)) == obligation_id and _text(_vid) != obligation_id:
                 _variant_result = _vresult
                 break
         if _variant_result is not None and obligation_id not in compile_results:
@@ -286,7 +395,7 @@ def _manual_terminal_receipts(
         # compile terminals already close the attempt.
         if existing_compile and existing_compile_status != "COMPILED":
             continue
-        experiment = _dict(experiments.get(obligation_id))
+        _, experiment = _compiled_experiment_face(experiments, obligation_id)
         compile_receipt = _dict(experiment.get("compile_receipt"))
         compile_status = existing_compile_status or _text(
             compile_receipt.get("status")
