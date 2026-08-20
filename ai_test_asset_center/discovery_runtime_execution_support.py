@@ -3,7 +3,8 @@
 The current execution-support implementation is preserved byte-for-byte in
 ``discovery_runtime_execution_support_base``. Only pending continuation is
 overridden: the public pending preview may remain bounded while in-process
-scheduling retains every eligible, not-yet-processed identity.
+scheduling and persisted resume authorities retain every eligible,
+not-yet-processed identity.
 """
 from __future__ import annotations
 
@@ -71,7 +72,12 @@ def _continuation_obligation_universe(
 
     plan_metadata: dict[str, dict[str, Any]] = {}
     unit_by_obligation_id: dict[str, str] = {}
-    for key in ("selected", "pending_next_round", "selected_units"):
+    for key in (
+        "selected",
+        "pending_next_round",
+        "selected_units",
+        "budget_deferred_pool",
+    ):
         for raw in _list(_dict(obligation_plan).get(key)):
             if not isinstance(raw, dict):
                 continue
@@ -156,17 +162,24 @@ def _consume_pending_obligation_rounds(
     An identity leaves the queue only after the executor returns a terminal
     result for it. Budget-deferred and unreceipted selected identities remain
     pending. Retry-eligible failures are kept in a separate backlog and cannot
-    monopolize planning while never-attempted candidates still exist. Initial
-    batch outcomes come from the executor receipt ledger, so caller exclusion
-    hints are honored only for identities that actually produced a non-retry
-    terminal receipt.
+    monopolize planning while never-attempted candidates still exist.
+
+    ``blocked_retry_pool`` and ``budget_deferred_pool`` are independent resume
+    authorities. The former means an execution attempt happened and may be
+    retried; the latter means execution capacity did not reach that identity.
+    Neither authority is truncated by the public pending preview.
     """
-    from .adaptive_discovery_planner import build_agent_intent_plan, plan_obligation_round
+    from .adaptive_discovery_planner import (
+        build_agent_intent_plan,
+        plan_obligation_round,
+    )
     from .experiment_executor import consume_continuation_execution_receipts
     from .pipeline_slices import _ABS_MAX_SLICE_BUDGET
 
     continuation_obligations = _continuation_obligation_universe(
-        obligations=[dict(row) for row in _list(obligations) if isinstance(row, dict)],
+        obligations=[
+            dict(row) for row in _list(obligations) if isinstance(row, dict)
+        ],
         experiments_by_obligation=dict(_dict(experiments_by_obligation)),
         obligation_plan=dict(_dict(obligation_plan)),
     )
@@ -204,6 +217,7 @@ def _consume_pending_obligation_rounds(
     captured_terminal_done_ids: set[str] = set()
     initial_requeue_ids: list[str] = []
     captured_retry_rows: list[dict[str, Any]] = []
+    captured_budget_deferred_ids: list[str] = []
     for raw in captured_initial_rows:
         oid = _text(raw.get("obligation_id"))
         status = _text(raw.get("status")).upper()
@@ -223,8 +237,9 @@ def _consume_pending_obligation_rounds(
                 "obligation_id": oid,
                 "reason_code": "UNRECEIPTED_SELECTED",
             })
-        elif receipt_kind == "BUDGET_DEFERRED" or status == "DEFERRED":
+        elif receipt_kind == "BUDGET_DEFERRED":
             initial_requeue_ids.append(oid)
+            captured_budget_deferred_ids.append(oid)
         elif receipt_kind == "TERMINAL_RESULT":
             captured_terminal_done_ids.add(oid)
 
@@ -234,6 +249,28 @@ def _consume_pending_obligation_rounds(
     excluded = {
         oid for oid in requested_excluded if oid in captured_terminal_done_ids
     }
+
+    # Budget deferral is not a retry failure. Keep a separate full resume
+    # authority so selected work omitted from the bounded public preview can
+    # survive a round-limit boundary without being widened into retry semantics.
+    persisted_budget_deferred_ids = [
+        _text(raw.get("obligation_id"))
+        for raw in _list(plan_row.get("budget_deferred_pool"))
+        if isinstance(raw, dict)
+        and _text(raw.get("obligation_id"))
+        and _text(raw.get("obligation_id")) in experiments
+        and _text(raw.get("obligation_id")) not in excluded
+        and _text(raw.get("obligation_id")) not in captured_terminal_done_ids
+    ]
+    budget_deferred_pool_ids = list(dict.fromkeys([
+        *persisted_budget_deferred_ids,
+        *[
+            oid for oid in captured_budget_deferred_ids
+            if oid in experiments
+            and oid not in excluded
+            and oid not in captured_terminal_done_ids
+        ],
+    ]))
 
     pending_rows, continuation_receipt = complete_pending_continuation_rows(
         obligation_plan=plan_row,
@@ -253,9 +290,13 @@ def _consume_pending_obligation_rounds(
     }
     requeue_ids = [
         oid
-        for oid in dict.fromkeys(initial_requeue_ids)
+        for oid in dict.fromkeys([
+            *initial_requeue_ids,
+            *budget_deferred_pool_ids,
+        ])
         if oid in experiments
         and oid not in excluded
+        and oid not in captured_terminal_done_ids
         and oid not in existing_pending_ids
     ]
     if requeue_ids:
@@ -268,6 +309,7 @@ def _consume_pending_obligation_rounds(
                     for row in [
                         *_list(plan_row.get("selected")),
                         *_list(plan_row.get("pending_next_round")),
+                        *_list(plan_row.get("budget_deferred_pool")),
                     ]
                     if isinstance(row, dict)
                 ],
@@ -277,6 +319,9 @@ def _consume_pending_obligation_rounds(
     continuation_receipt.update({
         "captured_initial_outcome_count": len(captured_initial_rows),
         "captured_initial_retry_count": len(captured_retry_rows),
+        "captured_initial_budget_deferred_count": len(
+            captured_budget_deferred_ids
+        ),
         "initial_unreceipted_or_deferred_requeued_count": len(requeue_ids),
         "requested_excluded_count": len(requested_excluded),
         "terminal_receipt_excluded_count": len(excluded),
@@ -305,25 +350,60 @@ def _consume_pending_obligation_rounds(
             retry_reason_by_id[oid] = reason
             retry_backlog_ids.append(oid)
     retry_backlog_ids = list(dict.fromkeys(retry_backlog_ids))
-    plan_row["blocked_retry_pool"] = [
-        {"obligation_id": oid, "block_reason": retry_reason_by_id[oid]}
-        for oid in retry_backlog_ids
-        if oid in retry_reason_by_id
+
+    # One identity has exactly one continuation reason at a time. If it has an
+    # execution retry receipt, retry authority supersedes an older budget
+    # deferral marker.
+    retry_backlog_set = set(retry_backlog_ids)
+    budget_deferred_pool_ids = [
+        oid for oid in budget_deferred_pool_ids
+        if oid not in retry_backlog_set
+        and oid not in captured_terminal_done_ids
     ]
-    plan_row["blocked_retry_pool_count"] = len(retry_backlog_ids)
+
+    def persist_resume_authorities() -> None:
+        plan_row["blocked_retry_pool"] = [
+            {
+                "obligation_id": oid,
+                "block_reason": retry_reason_by_id[oid],
+            }
+            for oid in retry_backlog_ids
+            if oid in retry_reason_by_id
+        ]
+        plan_row["blocked_retry_pool_count"] = len(retry_backlog_ids)
+        plan_row["budget_deferred_pool"] = [
+            {"obligation_id": oid}
+            for oid in budget_deferred_pool_ids
+        ]
+        plan_row["budget_deferred_pool_count"] = len(
+            budget_deferred_pool_ids
+        )
+
+    persist_resume_authorities()
 
     if budget <= 0:
-        if pending_rows or retry_backlog_ids:
-            plan_row["early_stop_reason"] = "PENDING_NEXT_ROUND_SKIPPED_PLAN_BUDGET_ZERO"
+        if pending_rows or retry_backlog_ids or budget_deferred_pool_ids:
+            plan_row["early_stop_reason"] = (
+                "PENDING_NEXT_ROUND_SKIPPED_PLAN_BUDGET_ZERO"
+            )
             plan_row["pending_count"] = len(pending_rows)
         return [], plan_row
-    if not pending_rows and not retry_backlog_ids:
+    if (
+        not pending_rows
+        and not retry_backlog_ids
+        and not budget_deferred_pool_ids
+    ):
         return [], plan_row
     if round_limit <= 1:
-        plan_row["early_stop_reason"] = "PENDING_NEXT_ROUND_SKIPPED_ROUND_LIMIT_ONE"
+        plan_row["early_stop_reason"] = (
+            "PENDING_NEXT_ROUND_SKIPPED_ROUND_LIMIT_ONE"
+        )
         plan_row["follow_on_round_limit"] = round_limit
         plan_row["pending_count"] = len(pending_rows)
-        plan_row["pending_next_round"] = pending_rows[:_ABS_MAX_SLICE_BUDGET]
+        plan_row["pending_next_round"] = pending_rows[
+            :_ABS_MAX_SLICE_BUDGET
+        ]
+        persist_resume_authorities()
         return [], plan_row
 
     follow_on_batches: list[dict[str, Any]] = []
@@ -344,7 +424,8 @@ def _consume_pending_obligation_rounds(
         pending_ids = [
             _text(row.get("obligation_id"))
             for row in pending_rows
-            if _text(row.get("obligation_id")) and _text(row.get("obligation_id")) not in excluded
+            if _text(row.get("obligation_id"))
+            and _text(row.get("obligation_id")) not in excluded
         ]
         queue_ids = list(dict.fromkeys([
             *pending_ids,
@@ -352,24 +433,37 @@ def _consume_pending_obligation_rounds(
                 oid for oid in retry_backlog_ids
                 if oid and oid not in excluded
             ],
+            *[
+                oid for oid in budget_deferred_pool_ids
+                if oid and oid not in excluded
+            ],
         ]))
         retry_set = set(retry_backlog_ids)
         fresh_ids = [oid for oid in queue_ids if oid not in retry_set]
-        round_ids = fresh_ids if fresh_ids else [oid for oid in queue_ids if oid in retry_set]
+        round_ids = (
+            fresh_ids
+            if fresh_ids
+            else [oid for oid in queue_ids if oid in retry_set]
+        )
         round_mode = "fresh" if fresh_ids else "retry"
         if not round_ids:
             pending_rows = []
             break
 
         remaining_obligations = [
-            obligation_by_id[oid] for oid in round_ids if oid in obligation_by_id
+            obligation_by_id[oid]
+            for oid in round_ids
+            if oid in obligation_by_id
         ]
         remaining_experiments = {
             oid: experiments[oid]
             for oid in round_ids
             if oid in experiments
             and _compile_status(experiments[oid]) in {
-                "COMPILED", "BLOCKED", "BLOCKED_MISSING_BINDING", "HARNESS_FAILED"
+                "COMPILED",
+                "BLOCKED",
+                "BLOCKED_MISSING_BINDING",
+                "HARNESS_FAILED",
             }
         }
         if not remaining_experiments:
@@ -396,7 +490,9 @@ def _consume_pending_obligation_rounds(
             behavior_ir=behavior_ir,
         )
         next_scheduled = [
-            dict(row) for row in _list(next_intents.get("intents")) if isinstance(row, dict)
+            dict(row)
+            for row in _list(next_intents.get("intents"))
+            if isinstance(row, dict)
         ]
         scheduled_ids = [
             _text(row.get("obligation_id"))
@@ -433,11 +529,18 @@ def _consume_pending_obligation_rounds(
         if batch_bindings:
             accumulated_bindings.update(batch_bindings)
 
-        deferred_ids = {
-            _text(row.get("obligation_id"))
+        deferred_rows = [
+            dict(row)
             for row in _list(_dict(next_batch).get("budget_deferred"))
-            if isinstance(row, dict) and _text(row.get("obligation_id"))
-        }
+            if isinstance(row, dict)
+            and _text(row.get("obligation_id"))
+        ]
+        deferred_id_order = [
+            _text(row.get("obligation_id"))
+            for row in deferred_rows
+        ]
+        deferred_ids = set(deferred_id_order)
+
         result_ids: set[str] = set()
         next_retry_ids: list[str] = []
         terminal_done_ids: set[str] = set()
@@ -448,9 +551,13 @@ def _consume_pending_obligation_rounds(
             oid = _text(raw.get("obligation_id"))
             if oid:
                 result_ids.add(oid)
-            status = _text(raw.get("status") or raw.get("execution_status")).upper()
+            status = _text(
+                raw.get("status") or raw.get("execution_status")
+            ).upper()
             reason = _text(
-                raw.get("reason_code") or raw.get("block_reason") or raw.get("failure_reason")
+                raw.get("reason_code")
+                or raw.get("block_reason")
+                or raw.get("failure_reason")
             )
             retry_eligible = (
                 oid
@@ -463,24 +570,29 @@ def _consume_pending_obligation_rounds(
             elif oid and oid not in deferred_ids:
                 terminal_done_ids.add(oid)
                 retry_reason_by_id.pop(oid, None)
-            if status in {"BLOCKED", "HARNESS_FAILED", "FAILED"} and reason:
+            if (
+                status in {"BLOCKED", "HARNESS_FAILED", "FAILED"}
+                and reason
+            ):
                 error_counts[reason] = error_counts.get(reason, 0) + 1
 
         # No receipt is not completion, but it is an attempted scheduling slot.
         # Demote it behind never-attempted work so one broken executor identity
         # cannot repeatedly monopolize the fresh queue and starve the tail.
         unreceipted_ids = {
-            oid for oid in scheduled_ids
-            if oid and oid not in result_ids and oid not in deferred_ids
+            oid
+            for oid in scheduled_ids
+            if oid
+            and oid not in result_ids
+            and oid not in deferred_ids
         }
         for oid in unreceipted_ids:
             retry_reason_by_id[oid] = "UNRECEIPTED_SELECTED"
             next_retry_ids.append(oid)
 
-        # A selected identity is not complete merely because it was scheduled.
-        # Only a returned terminal result may remove it. Missing receipts and
-        # executor budget deferrals stay in the queue, while retry-eligible
-        # failures move to a retry backlog that cannot outrank fresh work.
+        # Retry and budget deferral are mutually exclusive resume authorities.
+        # Terminal completion removes both. A retry receipt supersedes budget
+        # deferral; a fresh budget deferral adds/keeps the budget authority.
         retry_backlog_set = set(retry_backlog_ids)
         retry_backlog_set.difference_update(terminal_done_ids)
         retry_backlog_set.update(next_retry_ids)
@@ -491,11 +603,48 @@ def _consume_pending_obligation_rounds(
         ]
         retry_backlog_ids = list(dict.fromkeys(retry_backlog_ids))
 
+        deferred_pool_set = set(budget_deferred_pool_ids)
+        deferred_pool_set.difference_update(terminal_done_ids)
+        deferred_pool_set.difference_update(retry_backlog_ids)
+        deferred_pool_set.update(
+            oid
+            for oid in deferred_ids
+            if oid not in retry_backlog_set
+            and oid not in terminal_done_ids
+        )
+        budget_deferred_pool_ids = list(dict.fromkeys([
+            *[
+                oid for oid in budget_deferred_pool_ids
+                if oid in deferred_pool_set
+            ],
+            *[
+                oid for oid in queue_ids
+                if oid in deferred_pool_set
+            ],
+            *[
+                oid for oid in scheduled_ids
+                if oid in deferred_pool_set
+            ],
+            *[
+                oid for oid in deferred_id_order
+                if oid in deferred_pool_set
+            ],
+        ]))
+
         next_queue_ids = [
             oid for oid in queue_ids if oid not in terminal_done_ids
         ]
-        for oid in [*scheduled_ids, *deferred_ids, *retry_backlog_ids]:
-            if oid and oid not in terminal_done_ids and oid not in next_queue_ids:
+        for oid in [
+            *scheduled_ids,
+            *deferred_id_order,
+            *retry_backlog_ids,
+            *budget_deferred_pool_ids,
+        ]:
+            if (
+                oid
+                and oid not in terminal_done_ids
+                and oid not in next_queue_ids
+            ):
                 next_queue_ids.append(oid)
         pending_rows = _rows_for_ids(
             next_queue_ids,
@@ -506,38 +655,45 @@ def _consume_pending_obligation_rounds(
                     for row in _list(next_plan.get("pending_next_round"))
                     if isinstance(row, dict)
                 ],
-                *[
-                    dict(row)
-                    for row in _list(_dict(next_batch).get("budget_deferred"))
-                    if isinstance(row, dict)
-                ],
+                *deferred_rows,
             ],
             obligations_by_id=obligation_by_id,
         )
 
-        round_executed = int(_dict(next_batch).get("executed_count") or 0)
+        round_executed = int(
+            _dict(next_batch).get("executed_count") or 0
+        )
         retry_set_after = set(retry_backlog_ids)
-        fresh_remaining = [oid for oid in next_queue_ids if oid not in retry_set_after]
+        fresh_remaining = [
+            oid for oid in next_queue_ids if oid not in retry_set_after
+        ]
         follow_on_receipts.append({
             "planning_round": planning_round,
             "selected_count": int(next_plan.get("selected_count") or 0),
             "pending_count": len(pending_rows),
             "fresh_pending_count": len(fresh_remaining),
             "retry_pending_count": len(retry_backlog_ids),
+            "budget_deferred_pending_count": len(
+                budget_deferred_pool_ids
+            ),
             "unreceipted_selected_count": len(unreceipted_ids),
             "executed_count": round_executed,
             "budget": budget,
             "round_mode": round_mode,
             "accumulated_bindings_count": len(accumulated_bindings),
-            "continuation_authority": "fresh_before_retry_terminal_receipt_required",
+            "continuation_authority": (
+                "fresh_before_retry_terminal_receipt_required"
+            ),
         })
         _LOGGER.info(
-            "follow-on round %d: mode=%s selected=%s fresh_pending=%s retry_pending=%s executed=%s budget=%s",
+            "follow-on round %d: mode=%s selected=%s fresh_pending=%s "
+            "retry_pending=%s budget_deferred_pending=%s executed=%s budget=%s",
             planning_round,
             round_mode,
             next_plan.get("selected_count"),
             len(fresh_remaining),
             len(retry_backlog_ids),
+            len(budget_deferred_pool_ids),
             round_executed,
             budget,
         )
@@ -550,9 +706,15 @@ def _consume_pending_obligation_rounds(
         if round_mode == "fresh" or fresh_remaining:
             no_progress_streak = 0
         else:
-            no_progress_streak = no_progress_streak + 1 if round_processed == 0 else 0
+            no_progress_streak = (
+                no_progress_streak + 1
+                if round_processed == 0
+                else 0
+            )
             if no_progress_streak >= no_progress_limit:
-                early_stop_reason = f"NO_PROGRESS_{no_progress_limit}_CONSECUTIVE_ROUNDS"
+                early_stop_reason = (
+                    f"NO_PROGRESS_{no_progress_limit}_CONSECUTIVE_ROUNDS"
+                )
                 break
 
         # Repeat-plan/error guards are retry-loop guards, not Recall gates.
@@ -565,7 +727,11 @@ def _consume_pending_obligation_rounds(
             same_error_streak = 0
         else:
             plan_fingerprint = hashlib.sha256(
-                json.dumps(scheduled_ids, sort_keys=True, default=str).encode()
+                json.dumps(
+                    scheduled_ids,
+                    sort_keys=True,
+                    default=str,
+                ).encode()
             ).hexdigest()[:16]
             same_plan_streak = (
                 same_plan_streak + 1
@@ -574,10 +740,16 @@ def _consume_pending_obligation_rounds(
             )
             previous_plan_fingerprint = plan_fingerprint
             if same_plan_streak >= same_plan_limit:
-                early_stop_reason = f"SAME_PLAN_{same_plan_limit}_CONSECUTIVE_ROUNDS"
+                early_stop_reason = (
+                    f"SAME_PLAN_{same_plan_limit}_CONSECUTIVE_ROUNDS"
+                )
                 break
 
-            dominant_error = max(error_counts, key=error_counts.get) if error_counts else ""
+            dominant_error = (
+                max(error_counts, key=error_counts.get)
+                if error_counts
+                else ""
+            )
             still_draining_budget = bool(deferred_ids)
             same_error_streak = (
                 same_error_streak + 1
@@ -589,7 +761,8 @@ def _consume_pending_obligation_rounds(
             previous_dominant_error = dominant_error
             if same_error_streak >= same_error_limit:
                 early_stop_reason = (
-                    f"SAME_ERROR_{same_error_limit}_CONSECUTIVE:{dominant_error}"
+                    f"SAME_ERROR_{same_error_limit}_CONSECUTIVE:"
+                    f"{dominant_error}"
                 )
                 break
 
@@ -597,20 +770,19 @@ def _consume_pending_obligation_rounds(
             early_stop_reason = "PENDING_QUEUE_EMPTY"
             break
     else:
-        loop_exhausted_with_pending = bool(pending_rows)
+        loop_exhausted_with_pending = bool(
+            pending_rows
+            or retry_backlog_ids
+            or budget_deferred_pool_ids
+        )
 
     plan_row.update({
         "pending_next_round": pending_rows[:_ABS_MAX_SLICE_BUDGET],
         "pending_count": len(pending_rows),
         "follow_on_round_receipts": follow_on_receipts,
-        "blocked_retry_pool": [
-            {"obligation_id": oid, "block_reason": retry_reason_by_id[oid]}
-            for oid in retry_backlog_ids
-            if oid in retry_reason_by_id
-        ],
-        "blocked_retry_pool_count": len(retry_backlog_ids),
         "accumulated_bindings": accumulated_bindings,
     })
+    persist_resume_authorities()
     if early_stop_reason:
         plan_row["early_stop_reason"] = early_stop_reason
         plan_row["stop_condition"] = early_stop_reason
@@ -618,7 +790,7 @@ def _consume_pending_obligation_rounds(
         plan_row["stop_condition"] = "round_limit_reached"
         plan_row["round_limit_reached"] = True
         plan_row["follow_on_round_limit"] = round_limit
-    elif pending_rows:
+    elif pending_rows or retry_backlog_ids or budget_deferred_pool_ids:
         plan_row["stop_condition"] = "round_limit_reached"
         plan_row["round_limit_reached"] = True
         plan_row["follow_on_round_limit"] = round_limit
@@ -629,13 +801,17 @@ def _finalize_campaign(handle: Any, ledger: dict[str, Any]) -> dict[str, Any]:
     """Finalize through the historical authority and release retry capture."""
     campaign_id = ""
     try:
-        campaign_id = _text(getattr(_base._campaign_object(handle), "campaign_id", ""))
+        campaign_id = _text(
+            getattr(_base._campaign_object(handle), "campaign_id", "")
+        )
     except Exception:
         campaign_id = ""
     try:
         return _base._finalize_campaign(handle, ledger)
     finally:
         if campaign_id:
-            from .experiment_executor import clear_continuation_retry_receipts
+            from .experiment_executor import (
+                clear_continuation_retry_receipts,
+            )
 
             clear_continuation_retry_receipts(campaign_id)
