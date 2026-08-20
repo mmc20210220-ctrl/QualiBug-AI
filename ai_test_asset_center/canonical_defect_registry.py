@@ -10,6 +10,11 @@ remain breadth evidence, not identity, while ROLE_PERMISSION,
 OWNERSHIP_RELATION and TENANT_SCOPE are distinct causal defect dimensions and
 must never collapse into one canonical defect merely because they touch the
 same operation/assertion surface.
+
+Source-rule identity is deliberately stricter than runtime-outcome identity:
+expected values come from the sealed assertion contract and therefore retain
+exact numeric/source semantics, while actual runtime values continue to use the
+core's coarse semantic normalization so repeated manifestations aggregate.
 """
 from __future__ import annotations
 
@@ -47,6 +52,82 @@ def _list(value: Any) -> list[Any]:
 
 def _text(value: Any) -> str:
     return str(value or "").strip()
+
+
+def _source_expected_semantic_value(
+    value: Any,
+    *,
+    assertion_kind: str,
+    depth: int = 0,
+) -> Any:
+    """Canonicalize source-declared expectations without erasing rule values.
+
+    ``_core._semantic_value`` intentionally buckets non-HTTP runtime numbers as
+    positive/negative/zero. That is useful for aggregating observed runtime
+    manifestations, but it is unsafe for source contracts: business thresholds
+    such as 10 and 100 are distinct rules and must not collapse into one defect.
+
+    The assertion receipt already seals ``expected``; this projection therefore
+    preserves exact scalar semantics while still avoiding raw customer strings
+    in the canonical registry by storing digests for text and object keys.
+    """
+    if depth > 4:
+        return {"type": "truncated"}
+    if value is None or isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return {"type": "number", "value": value}
+    if isinstance(value, str):
+        normalized = _core._normalized_text(value)
+        if (
+            assertion_kind in {"http_status", "status_code", "http_status_class"}
+            and normalized.isdigit()
+            and len(normalized) == 3
+        ):
+            return {"type": "number", "value": int(normalized)}
+        return {
+            "type": "string",
+            "semantic_digest": _core._semantic_digest(normalized),
+        }
+    if isinstance(value, list):
+        return {
+            "type": "list",
+            "items": [
+                _source_expected_semantic_value(
+                    item,
+                    assertion_kind=assertion_kind,
+                    depth=depth + 1,
+                )
+                for item in value[:12]
+            ],
+        }
+    if isinstance(value, dict):
+        entries = [
+            {
+                "key_digest": _core._semantic_digest(_core._normalized_text(key)),
+                "value": _source_expected_semantic_value(
+                    item,
+                    assertion_kind=assertion_kind,
+                    depth=depth + 1,
+                ),
+            }
+            for key, item in sorted(
+                value.items(),
+                key=lambda pair: _core._normalized_text(pair[0]),
+            )[:24]
+        ]
+        return {"type": "object", "entries": entries}
+    return {"type": type(value).__name__}
+
+
+def _sealed_source_rule_dimensions(assertion: dict[str, Any]) -> dict[str, str]:
+    """Return only assertion identity fields sealed by assertion receipt ID."""
+    dimensions: dict[str, str] = {}
+    for field in ("oracle_template_ref", "assertion_requirement_ref"):
+        value = _text(assertion.get(field))
+        if value:
+            dimensions[field] = value
+    return dimensions
 
 
 def _one_violation(oracle: dict[str, Any]) -> dict[str, Any]:
@@ -149,8 +230,35 @@ def derive_canonical_identity_evidence(
         attempt=attempt,
     )
 
+    # Replace only the source-declared expected projection. The core's coarse
+    # actual/runtime projection intentionally remains unchanged for aggregation.
     bundle = _dict(_dict(attempt).get("delivery_evidence_bundle"))
     oracle = _dict(bundle.get("oracle_receipt"))
+    assertion = _one_violation(oracle)
+    assertion_kind = _core._normalized_text(assertion.get("kind"))
+    if not assertion_kind:
+        raise _core._incomplete("assertion.kind")
+    exact_expected = _source_expected_semantic_value(
+        assertion.get("expected"),
+        assertion_kind=assertion_kind,
+    )
+    rule_dimensions = _sealed_source_rule_dimensions(assertion)
+
+    governed = dict(governed)
+    property_identity = dict(_dict(governed.get("property")))
+    property_identity["expected_signature"] = exact_expected
+    property_identity.update(rule_dimensions)
+    governed["property"] = property_identity
+
+    observed_outcome = dict(_dict(governed.get("observed_outcome")))
+    observed_outcome["expected_signature"] = exact_expected
+    observed_outcome.update(rule_dimensions)
+    governed["observed_outcome"] = observed_outcome
+
+    proof = dict(_dict(governed.get("proof")))
+    proof.update(rule_dimensions)
+    governed["proof"] = proof
+
     if not bool(oracle.get("canonical_outcome_identity_required")):
         return governed
     outcome_ref = _text(oracle.get("primary_violation_outcome_ref"))
