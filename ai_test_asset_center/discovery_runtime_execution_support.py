@@ -185,6 +185,7 @@ def _consume_pending_obligation_rounds(
         "BLOCKED_MISSING_OBSERVER",
         "BLOCKED_CONTROL_ARM_NOT_PROVEN",
         "BLOCKED_OBSERVER_RECEIPT_INDETERMINATE",
+        "UNRECEIPTED_SELECTED",
     }
 
     # Exact experiment ids keep primary/expansion domains separate even when a
@@ -215,9 +216,14 @@ def _consume_pending_obligation_rounds(
             and reason in retry_eligible_reasons
         ):
             captured_retry_rows.append(dict(raw))
-        elif receipt_kind in {"BUDGET_DEFERRED", "UNRECEIPTED_SELECTED"} or status in {
-            "DEFERRED", "UNRECEIPTED"
-        }:
+        elif receipt_kind == "UNRECEIPTED_SELECTED" or status == "UNRECEIPTED":
+            initial_requeue_ids.append(oid)
+            captured_retry_rows.append({
+                **dict(raw),
+                "obligation_id": oid,
+                "reason_code": "UNRECEIPTED_SELECTED",
+            })
+        elif receipt_kind == "BUDGET_DEFERRED" or status == "DEFERRED":
             initial_requeue_ids.append(oid)
         elif receipt_kind == "TERMINAL_RESULT":
             captured_terminal_done_ids.add(oid)
