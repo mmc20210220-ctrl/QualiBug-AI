@@ -307,9 +307,10 @@ def _consume_pending_obligation_rounds(
     retry_backlog_ids = list(dict.fromkeys(retry_backlog_ids))
     plan_row["blocked_retry_pool"] = [
         {"obligation_id": oid, "block_reason": retry_reason_by_id[oid]}
-        for oid in retry_backlog_ids[:100]
+        for oid in retry_backlog_ids
         if oid in retry_reason_by_id
     ]
+    plan_row["blocked_retry_pool_count"] = len(retry_backlog_ids)
 
     if budget <= 0:
         if pending_rows or retry_backlog_ids:
@@ -604,9 +605,10 @@ def _consume_pending_obligation_rounds(
         "follow_on_round_receipts": follow_on_receipts,
         "blocked_retry_pool": [
             {"obligation_id": oid, "block_reason": retry_reason_by_id[oid]}
-            for oid in retry_backlog_ids[:100]
+            for oid in retry_backlog_ids
             if oid in retry_reason_by_id
         ],
+        "blocked_retry_pool_count": len(retry_backlog_ids),
         "accumulated_bindings": accumulated_bindings,
     })
     if early_stop_reason:
