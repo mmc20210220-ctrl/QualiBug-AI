@@ -22,6 +22,7 @@ exact, uniquely-owned topology URL match on a routing-only IR projection.
 """
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +40,25 @@ from .service_topology_execution_authority import (
 
 _original_actor_execution_plan = _core._actor_execution_plan
 _original_execute_one_experiment = _core.execute_one_experiment
+
+# Runtime retry evidence produced before continuation starts cannot be inferred
+# from the immutable planning bundle. Keep a bounded, campaign-scoped in-memory
+# receipt ledger at the public executor boundary so the continuation authority
+# can seed retry work from actual execution outcomes instead of guessing from
+# compile state. Capture closes when the first continuation consumer starts;
+# follow-on retries are then owned directly by that consumer and are not
+# double-recorded here.
+_CONTINUATION_RETRY_REASONS = {
+    "BLOCKED_MISSING_BINDING",
+    "HARNESS_FAILED",
+    "BLOCKED_MISSING_OBSERVER",
+    "BLOCKED_CONTROL_ARM_NOT_PROVEN",
+    "BLOCKED_OBSERVER_RECEIPT_INDETERMINATE",
+}
+_CONTINUATION_RETRY_RECEIPTS: dict[str, list[dict[str, str]]] = {}
+_CONTINUATION_CAPTURE_CLOSED: set[str] = set()
+_CONTINUATION_RETRY_LOCK = threading.Lock()
+_MAX_CONTINUATION_RETRY_RECEIPTS_PER_CAMPAIGN = 2000
 
 
 def __getattr__(name: str) -> Any:
@@ -170,6 +190,115 @@ def execute_one_experiment(*args: Any, **kwargs: Any) -> dict[str, Any]:
     return output
 
 
+def _capture_continuation_retry_receipts(
+    *,
+    campaign_id: str,
+    batch: dict[str, Any],
+) -> None:
+    """Capture retry-eligible pre-continuation execution outcomes."""
+    campaign = _text(campaign_id)
+    if not campaign:
+        return
+    rows: list[dict[str, str]] = []
+    for raw in _list(_dict(batch).get("results")):
+        if not isinstance(raw, dict):
+            continue
+        oid = _text(raw.get("obligation_id"))
+        status = _text(raw.get("status") or raw.get("execution_status")).upper()
+        reason = _text(
+            raw.get("reason_code")
+            or raw.get("block_reason")
+            or raw.get("failure_reason")
+        )
+        if (
+            oid
+            and status in {"BLOCKED", "HARNESS_FAILED"}
+            and reason in _CONTINUATION_RETRY_REASONS
+        ):
+            rows.append({
+                "obligation_id": oid,
+                "block_reason": reason,
+                "status": status,
+            })
+    if not rows:
+        return
+    with _CONTINUATION_RETRY_LOCK:
+        if campaign in _CONTINUATION_CAPTURE_CLOSED:
+            return
+        existing = _CONTINUATION_RETRY_RECEIPTS.setdefault(campaign, [])
+        by_id = {
+            _text(row.get("obligation_id")): dict(row)
+            for row in existing
+            if _text(row.get("obligation_id"))
+        }
+        for row in rows:
+            by_id[row["obligation_id"]] = row
+        _CONTINUATION_RETRY_RECEIPTS[campaign] = list(by_id.values())[
+            -_MAX_CONTINUATION_RETRY_RECEIPTS_PER_CAMPAIGN:
+        ]
+
+
+def consume_continuation_retry_receipts(
+    campaign_id: str,
+    *,
+    allowed_obligation_ids: set[str] | None = None,
+    close_capture: bool = True,
+) -> list[dict[str, str]]:
+    """Consume captured retry receipts belonging to one continuation domain."""
+    campaign = _text(campaign_id)
+    if not campaign:
+        return []
+    allowed = {
+        _text(value) for value in (allowed_obligation_ids or set()) if _text(value)
+    }
+    with _CONTINUATION_RETRY_LOCK:
+        if close_capture:
+            _CONTINUATION_CAPTURE_CLOSED.add(campaign)
+        existing = list(_CONTINUATION_RETRY_RECEIPTS.get(campaign, []))
+        if not existing:
+            return []
+        if not allowed:
+            selected = existing
+            remaining: list[dict[str, str]] = []
+        else:
+            selected = [
+                row
+                for row in existing
+                if _text(row.get("obligation_id")) in allowed
+            ]
+            remaining = [
+                row
+                for row in existing
+                if _text(row.get("obligation_id")) not in allowed
+            ]
+        if remaining:
+            _CONTINUATION_RETRY_RECEIPTS[campaign] = remaining
+        else:
+            _CONTINUATION_RETRY_RECEIPTS.pop(campaign, None)
+        return [dict(row) for row in selected]
+
+
+def clear_continuation_retry_receipts(campaign_id: str) -> None:
+    """Release campaign-scoped retry capture state at campaign finalization."""
+    campaign = _text(campaign_id)
+    if not campaign:
+        return
+    with _CONTINUATION_RETRY_LOCK:
+        _CONTINUATION_RETRY_RECEIPTS.pop(campaign, None)
+        _CONTINUATION_CAPTURE_CLOSED.discard(campaign)
+
+
+def execute_selected_experiments(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    """Execute a batch and expose pre-continuation retry receipts losslessly."""
+    result = _core.execute_selected_experiments(*args, **kwargs)
+    batch = dict(_dict(result))
+    _capture_continuation_retry_receipts(
+        campaign_id=_text(kwargs.get("campaign_id")),
+        batch=batch,
+    )
+    return batch
+
+
 # Mechanics functions resolve this authority from their defining-module globals.
 _core._actor_execution_plan = _actor_execution_plan
 
@@ -182,5 +311,8 @@ __all__ = sorted(
         ],
         "_actor_execution_plan",
         "execute_one_experiment",
+        "execute_selected_experiments",
+        "consume_continuation_retry_receipts",
+        "clear_continuation_retry_receipts",
     }
 )
