@@ -33,8 +33,6 @@ def test_real_variant_execution_replaces_only_mechanical_base_gap() -> None:
         variant: {"status": "COMPILED", "experiment_id": "exp-variant"},
     }
     execution_results = {
-        # This is the mechanical filler created when formal-base accounting
-        # cannot see a concrete compiler-expanded execution key.
         base: {
             "status": "BLOCKED",
             "reason_code": "BLOCKED_EXECUTION",
@@ -88,6 +86,58 @@ def test_real_variant_execution_replaces_only_mechanical_base_gap() -> None:
     assert next(
         stage for stage in attempt["stages"] if stage["stage"] == "execution"
     )["status"] == "EXECUTED"
+
+
+def test_variant_execution_selects_matching_compile_and_gate_face() -> None:
+    from ai_test_asset_center.obligation_attempt_ledger import (
+        _project_variant_stage_receipts,
+    )
+
+    base = "obl-coherent-chain"
+    variant = f"{base}__v_abcdef123456"
+    compile_out, execution_out, gate_out = _project_variant_stage_receipts(
+        selected=[{"obligation_id": base, "selection_status": "SELECTED"}],
+        compile_results={
+            base: {"status": "COMPILED", "experiment_id": "exp-stale-base"},
+            variant: {"status": "COMPILED", "experiment_id": "exp-live-variant"},
+        },
+        execution_results={
+            base: {
+                "status": "BLOCKED",
+                "reason_code": "BLOCKED_EXECUTION",
+                "detail": "compiled_obligation_has_no_execution_receipt",
+                "experiment_id": "exp-stale-base",
+            },
+            variant: {
+                "status": "EXECUTED",
+                "selected_obligation_id": variant,
+                "executed_obligation_id": variant,
+                "experiment_id": "exp-live-variant",
+                "execution_id": "execution-live-variant",
+            },
+        },
+        gate_results={
+            base: {
+                "status": "REJECTED",
+                "reason_code": "STALE_BASE_GATE",
+                "gate_receipt_id": "gate-stale-base",
+                "experiment_id": "exp-stale-base",
+            },
+            variant: {
+                "status": "REJECTED",
+                "reason_code": "ORACLE_NOT_VIOLATED",
+                "gate_receipt_id": "gate-live-variant",
+                "experiment_id": "exp-live-variant",
+            },
+        },
+    )
+
+    assert execution_out[base]["experiment_id"] == "exp-live-variant"
+    assert compile_out[base]["experiment_id"] == "exp-live-variant"
+    assert gate_out[base]["gate_receipt_id"] == "gate-live-variant"
+    assert set(compile_out) == {base}
+    assert set(execution_out) == {base}
+    assert set(gate_out) == {base}
 
 
 def test_real_base_execution_keeps_precedence_over_variant_face() -> None:
