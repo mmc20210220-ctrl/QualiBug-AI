@@ -1,12 +1,9 @@
 name: Apply recall service-aware operation dedupe fix
 
 on:
-  pull_request:
+  push:
     branches:
-      - main
-    types: [opened, synchronize, reopened]
-    paths:
-      - .github/workflows/apply-recall-service-aware-operation-dedupe.yml
+      - fix/recall-service-aware-operation-dedupe
 
 permissions:
   contents: write
@@ -17,7 +14,6 @@ concurrency:
 
 jobs:
   apply-and-verify:
-    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'fix/recall-service-aware-operation-dedupe'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
