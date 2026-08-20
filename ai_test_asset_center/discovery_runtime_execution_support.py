@@ -18,6 +18,10 @@ for _name in dir(_base):
     if not _name.startswith("__"):
         globals().setdefault(_name, getattr(_base, _name))
 
+from .continuation_legacy_retry_authority import (  # noqa: E402
+    prepare_legacy_retry_authority,
+    restore_legacy_retry_authority,
+)
 from .continuation_pool_integrity import (  # noqa: E402
     validate_continuation_pool_integrity,
 )
@@ -164,14 +168,18 @@ def _consume_pending_obligation_rounds(
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Validate exact state, reset attempt-local stop state, then continue."""
     prepared_plan = _prepare_continuation_attempt(obligation_plan)
+    legacy_plan, legacy_retry_ids = prepare_legacy_retry_authority(prepared_plan)
     integrity_plan, integrity_ok = validate_continuation_pool_integrity(
-        prepared_plan
+        legacy_plan
     )
     if not integrity_ok:
         # Counts prove that identities are missing but do not identify which
         # ones. Guessing from the current candidate universe would silently
         # corrupt Recall, so this continuation attempt stops before execution.
-        return [], integrity_plan
+        return [], restore_legacy_retry_authority(
+            integrity_plan,
+            legacy_retry_ids,
+        )
 
     seeded_plan = seed_initial_fresh_pending_authority(
         obligation_plan=integrity_plan,
@@ -209,6 +217,10 @@ def _consume_pending_obligation_rounds(
     restored_plan = restore_unrunnable_fresh(
         final_plan,
         held_unrunnable_fresh,
+    )
+    restored_plan = restore_legacy_retry_authority(
+        restored_plan,
+        legacy_retry_ids,
     )
     return batches, synchronize_continuation_preview(restored_plan)
 
