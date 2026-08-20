@@ -18,6 +18,10 @@ for _name in dir(_base):
     if not _name.startswith("__"):
         globals().setdefault(_name, getattr(_base, _name))
 
+from .continuation_legacy_fresh_uncertainty import (  # noqa: E402
+    preserve_legacy_fresh_uncertainty,
+    should_seed_initial_fresh,
+)
 from .continuation_legacy_retry_authority import (  # noqa: E402
     prepare_legacy_retry_authority,
     restore_legacy_retry_authority,
@@ -181,12 +185,20 @@ def _consume_pending_obligation_rounds(
             legacy_retry_ids,
         )
 
-    seeded_plan = seed_initial_fresh_pending_authority(
-        obligation_plan=integrity_plan,
-        obligations=obligations,
-        experiments_by_obligation=experiments_by_obligation,
-        behavior_ir=behavior_ir,
-    )
+    if should_seed_initial_fresh(integrity_plan):
+        seeded_plan = seed_initial_fresh_pending_authority(
+            obligation_plan=integrity_plan,
+            obligations=obligations,
+            experiments_by_obligation=experiments_by_obligation,
+            behavior_ir=behavior_ir,
+        )
+    else:
+        # A prior legacy fallback proved that omitted fresh membership is not
+        # recoverable exactly. Re-running source derivation later must not turn
+        # the same uncertain state into exact authority merely because some
+        # retry/deferred rows have since drained.
+        seeded_plan = dict(integrity_plan)
+
     active_plan, held_unrunnable_fresh = hold_unrunnable_fresh(
         seeded_plan,
         experiments_by_obligation,
@@ -221,6 +233,10 @@ def _consume_pending_obligation_rounds(
     restored_plan = restore_legacy_retry_authority(
         restored_plan,
         legacy_retry_ids,
+    )
+    restored_plan = preserve_legacy_fresh_uncertainty(
+        seeded_plan,
+        restored_plan,
     )
     return batches, synchronize_continuation_preview(restored_plan)
 
