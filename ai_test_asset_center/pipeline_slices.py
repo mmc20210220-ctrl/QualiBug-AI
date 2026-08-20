@@ -33,15 +33,34 @@ def _behavior_slice_settings() -> dict[str, int]:
         round_limit = get_policy_value("execution", "incremental_discovery_round_limit", 8)
     except Exception:
         budget, round_number, round_limit = 15, 1, 8
-    # These are the PRE-POOL starting values. The real per-round budget and round
-    # limit are auto-scaled to the discovered candidate-pool size just before
-    # scheduling (see _auto_scale_slice_budget / _auto_scale_round_limit), so an
-    # operator never has to hand-tune env vars for a large enterprise system.
-    # An explicit env value still wins (power-user override).
+
+    # These are the PRE-POOL starting values. The real per-round budget and
+    # round limit may be auto-scaled by callers that possess the complete pool,
+    # but the configured operator/policy value remains the default authority.
+    # Never replace it with the absolute safety ceiling merely to increase
+    # Recall: continuation must remain lossless under the configured limit.
     return {
-        "slice_budget": _as_int(os.environ.get("QUALIBUG_MAX_BEHAVIOR_SLICES_PER_ROUND", budget), 15, 1, _ABS_MAX_SLICE_BUDGET),
-        "round_number": _as_int(os.environ.get("QUALIBUG_DISCOVERY_ROUND", round_number), 1, 1, 24),
-        "round_limit": _as_int(os.environ.get("QUALIBUG_INCREMENTAL_DISCOVERY_ROUND_LIMIT", round_limit), 8, 1, _ABS_MAX_ROUND_LIMIT),
+        "slice_budget": _as_int(
+            os.environ.get("QUALIBUG_MAX_BEHAVIOR_SLICES_PER_ROUND", budget),
+            15,
+            1,
+            _ABS_MAX_SLICE_BUDGET,
+        ),
+        "round_number": _as_int(
+            os.environ.get("QUALIBUG_DISCOVERY_ROUND", round_number),
+            1,
+            1,
+            24,
+        ),
+        "round_limit": _as_int(
+            os.environ.get(
+                "QUALIBUG_INCREMENTAL_DISCOVERY_ROUND_LIMIT",
+                round_limit,
+            ),
+            8,
+            1,
+            _ABS_MAX_ROUND_LIMIT,
+        ),
     }
 
 
@@ -54,8 +73,6 @@ def _auto_scale_slice_budget(pool_size: int) -> int:
     pool is actually consumed instead of starving at 15/round — no env tuning.
     Target: drain the pool in ~2 rounds, bounded by _ABS_MAX_SLICE_BUDGET.
     """
-    import math
-
     if pool_size <= 0:
         return 15
     return max(15, min(_ABS_MAX_SLICE_BUDGET, pool_size))
@@ -63,8 +80,6 @@ def _auto_scale_slice_budget(pool_size: int) -> int:
 
 def _auto_scale_round_limit(pool_size: int, budget: int) -> int:
     """Automatic round count sized to actually drain ``pool_size`` at ``budget``/round."""
-    import math
-
     if pool_size <= 0 or budget <= 0:
         return 8
     needed = math.ceil(pool_size / budget) + 1

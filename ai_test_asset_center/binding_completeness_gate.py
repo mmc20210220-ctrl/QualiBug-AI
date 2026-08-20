@@ -1,8 +1,15 @@
 """Binding Completeness Gate — 10-dimension gate before planner queue entry.
 
-An experiment obligation may only enter the execution queue when ALL required
-binding dimensions are in EXECUTABLE state. The gate produces precise blocking
+An experiment obligation may only enter the execution queue when all required
+binding dimensions are proven executable. The gate produces precise blocking
 reasons referencing specific binding IDs.
+
+Source-declared structural identities are handled separately from runtime
+materialization. Exact request-schema fields and exact source-backed Behavior IR
+relations are already proven by customer/source material; requiring a runtime
+probe merely to prove those identities exist creates a circular planning gate.
+This does not weaken runtime-sensitive actor, fixture, scope, state, observer,
+or oracle-input requirements.
 
 Schema: qualibug.binding-completeness-gate.v1
 """
@@ -37,18 +44,7 @@ def check_binding_completeness(
     obligation: dict[str, Any],
     behavior_ir: dict[str, Any],
 ) -> dict[str, Any]:
-    """Check if all required bindings for an obligation are EXECUTABLE.
-
-    Returns:
-        {
-            "gate_passed": bool,
-            "executable_dimensions": list[str],
-            "blocked_dimensions": list[{dimension, reason, missing_bindings}],
-            "total_required": int,
-            "total_executable": int,
-            "coverage_rate": float,
-        }
-    """
+    """Check if all required bindings for an obligation are executable."""
     obl = _dict(obligation)
     ir = _dict(behavior_ir)
 
@@ -84,17 +80,13 @@ def gate_or_block(
     obligation: dict[str, Any],
     behavior_ir: dict[str, Any],
 ) -> tuple[bool, str]:
-    """Simple gate check: returns (passed, block_reason).
-
-    If passed is False, block_reason contains precise binding IDs that are missing.
-    """
+    """Simple gate check: returns (passed, block_reason)."""
     result = check_binding_completeness(
         ledger, obligation=obligation, behavior_ir=behavior_ir
     )
     if result["gate_passed"]:
         return True, ""
 
-    # Build precise block reason
     reasons = []
     for blocked in result["blocked_dimensions"]:
         dim = blocked.get("dimension", "")
@@ -115,7 +107,7 @@ def _determine_required_dimensions(
 
     Only dimensions the obligation actually names may block. Requiring a
     dimension with no obligation-local refs makes the gate fail on unrelated
-    ledger rows (for example every entity CANDIDATE when the write names none).
+    ledger rows.
     """
     obl = _dict(obligation)
     ir = _dict(behavior_ir)
@@ -171,6 +163,117 @@ def _determine_required_dimensions(
     return required
 
 
+def _active_structural_status(binding: dict[str, Any]) -> bool:
+    return _text(_dict(binding).get("status")).upper() in {
+        BindingStatus.CANDIDATE.value,
+        BindingStatus.HIGH_CONFIDENCE.value,
+        BindingStatus.RUNTIME_CONFIRMED.value,
+        BindingStatus.EXECUTABLE.value,
+    }
+
+
+def _field_binding_matches_ref(
+    binding: dict[str, Any],
+    ref: str,
+    obligation: dict[str, Any],
+) -> bool:
+    """Match a field by exact schema identity within the obligation operation."""
+    row = _dict(binding)
+    metadata = _dict(row.get("metadata"))
+    required_ops = {
+        _text(value)
+        for value in _list(_dict(obligation).get("required_operations"))
+        if _text(value)
+    }
+    operation_ref = _text(metadata.get("operation_ref"))
+    if required_ops and operation_ref not in required_ops:
+        return False
+
+    target_key = _text(row.get("target_key"))
+    target_field = target_key.rsplit(":", 1)[-1] if ":" in target_key else ""
+    exact_names = {
+        _text(metadata.get("field_name")),
+        _text(metadata.get("request_path")),
+        target_field,
+    }
+    exact_names.discard("")
+    return _text(ref) in exact_names
+
+
+def _source_declared_field_binding_is_authoritative(
+    binding: dict[str, Any],
+    ref: str,
+    obligation: dict[str, Any],
+) -> bool:
+    """Whether an exact request-schema field proves structural executability."""
+    row = _dict(binding)
+    if not _field_binding_matches_ref(row, ref, obligation):
+        return False
+    if _text(row.get("source_module")) != "binding_builder":
+        return False
+    if not _active_structural_status(row):
+        return False
+    metadata = _dict(row.get("metadata"))
+    return bool(
+        _text(metadata.get("operation_ref"))
+        and _text(metadata.get("request_path") or metadata.get("field_name"))
+    )
+
+
+def _relation_binding_matches_ref(binding: dict[str, Any], ref: str) -> bool:
+    """Relations are IR nodes: require exact source-node identity, never substring."""
+    return _text(_dict(binding).get("source_node_id")) == _text(ref)
+
+
+def _source_declared_relation_binding_is_authoritative(
+    binding: dict[str, Any],
+    ref: str,
+) -> bool:
+    """Whether an exact source-backed Behavior IR relation is structurally proven.
+
+    The builder emits ``source_consistency=0.9`` only when the relation carries
+    source refs. A relation without that provenance stays runtime/evidence gated.
+    Runtime IDs/correlation values are still resolved by fixture/runtime binding
+    machinery; this authority proves only the declared relation identity.
+    """
+    row = _dict(binding)
+    if not _relation_binding_matches_ref(row, ref):
+        return False
+    if _text(row.get("source_module")) != "binding_builder":
+        return False
+    if not _active_structural_status(row):
+        return False
+    source_evidence = [
+        _dict(item)
+        for item in _list(row.get("evidence"))
+        if _text(_dict(item).get("dimension")) == "source_consistency"
+    ]
+    if not any(float(item.get("score") or 0.0) >= 0.9 for item in source_evidence):
+        return False
+    metadata = _dict(row.get("metadata"))
+    return bool(
+        _text(metadata.get("source_entity_ref"))
+        and _text(metadata.get("target_entity_ref"))
+        and _text(metadata.get("relation_type"))
+    )
+
+
+def _binding_matches_ref(
+    binding: dict[str, Any],
+    dimension: str,
+    ref: str,
+    obligation: dict[str, Any],
+) -> bool:
+    if dimension == "field":
+        return _field_binding_matches_ref(binding, ref, obligation)
+    if dimension == "relation":
+        return _relation_binding_matches_ref(binding, ref)
+    return (
+        _text(binding.get("source_node_id")) == ref
+        or ref in _text(binding.get("target_key"))
+    )
+
+
 def _check_dimension(
     ledger: BindingLedger,
     dimension: str,
@@ -181,71 +284,79 @@ def _check_dimension(
     obl = _dict(obligation)
     ir = _dict(behavior_ir)
 
-    # Get all executable bindings for this dimension
     executable = ledger.get_executable(dimension)
     all_of_type = ledger.get_by_type(dimension)
-
-    # Determine what's needed for this obligation
     needed_refs = _get_needed_refs(dimension, obl, ir)
 
     if not needed_refs:
-        # The dimension was selected without obligation-local refs. Unrelated
-        # ledger rows for the same type must not become a gate failure.
         return {
             "dimension": dimension,
             "passed": True,
             "reason": "no_specific_refs_required",
         }
 
-    # Check if needed refs have executable bindings
     missing: list[str] = []
+    source_authoritative_count = 0
     for ref in needed_refs:
-        # Generic fixture roles (owned_resource, disposable_fixture, …) name a
-        # capability, not an IR node. Any executable fixture binding on the
-        # obligation's entity satisfies them; exact ref matching would block
-        # every isolation/authorization probe because the role string never
-        # appears in an entity-keyed ledger row.
+        # Generic fixture roles name a capability, not an IR node.
         if dimension == "fixture" and not _is_ir_node_ref(ref):
             if not executable:
                 missing.append(f"{ref}(no_binding)")
             continue
-        # Field-level scope parameters (ownership_param like ``userId``) are
-        # runtime body bindings, not ledger node identities. Any executable
-        # scope binding on the ledger satisfies the dimension; exact matching
-        # would block every isolation probe whose ownership field is a body
-        # parameter rather than a relation-scoped node.
+        # Field-level scope parameters are runtime body bindings, not ledger IDs.
         if dimension == "scope" and not _is_ir_node_ref(ref):
             if not executable:
                 missing.append(f"{ref}(no_binding)")
             continue
-        # Business state literals (``PAID``, ``SHIPPED``, …) name the target
-        # value of a state transition, not an IR node identity. Exact ref
-        # matching would block every state-family probe because the literal
-        # never appears as a ``bir_`` node id in the entity-keyed ledger. Any
-        # executable state binding satisfies the dimension; reaching the
-        # concrete state value is a runtime binding concern validated at
-        # execution by the state handler, not a compile-time identity.
+        # Business state literals name a target value, not an IR node identity.
         if dimension == "state" and not _is_ir_node_ref(ref):
             if not executable:
                 missing.append(f"{ref}(no_binding)")
             continue
+
         found = any(
-            b.get("source_node_id") == ref or ref in _text(b.get("target_key"))
+            _binding_matches_ref(b, dimension, ref, obl)
             for b in executable
         )
-        if not found:
-            # Check if binding exists but not executable
-            existing = [
-                b for b in all_of_type
-                if b.get("source_node_id") == ref or ref in _text(b.get("target_key"))
-            ]
-            if existing:
-                missing.append(f"{ref}(status={existing[0].get('status')})")
-            else:
-                missing.append(f"{ref}(no_binding)")
+        if found:
+            continue
+
+        if dimension == "field" and any(
+            _source_declared_field_binding_is_authoritative(b, ref, obl)
+            for b in all_of_type
+        ):
+            source_authoritative_count += 1
+            continue
+
+        if dimension == "relation" and any(
+            _source_declared_relation_binding_is_authoritative(b, ref)
+            for b in all_of_type
+        ):
+            source_authoritative_count += 1
+            continue
+
+        existing = [
+            b for b in all_of_type
+            if _binding_matches_ref(b, dimension, ref, obl)
+        ]
+        if existing:
+            missing.append(f"{ref}(status={existing[0].get('status')})")
+        else:
+            missing.append(f"{ref}(no_binding)")
 
     if not missing:
-        return {"dimension": dimension, "passed": True, "reason": "all_refs_executable"}
+        reason = "all_refs_executable"
+        if source_authoritative_count:
+            if dimension == "field":
+                reason = "source_declared_field_identity"
+            elif dimension == "relation":
+                reason = "source_declared_relation_identity"
+        return {
+            "dimension": dimension,
+            "passed": True,
+            "reason": reason,
+            "source_authoritative_count": source_authoritative_count,
+        }
 
     return {
         "dimension": dimension,
@@ -271,7 +382,6 @@ def _get_needed_refs(
     ir = _dict(behavior_ir)
 
     if dimension == "entity":
-        # Entities referenced by required operations
         ops_by_id = {
             _text(o.get("id")): o
             for o in _list(ir.get("operations"))
@@ -280,7 +390,6 @@ def _get_needed_refs(
         entity_refs: set[str] = set()
         for op_id in _list(obl.get("required_operations")):
             op = ops_by_id.get(_text(op_id), {})
-            # Check entity_ref on operation
             entity_ref = _text(op.get("entity_ref"))
             if entity_ref:
                 entity_refs.add(entity_ref)
@@ -307,10 +416,6 @@ def _get_needed_refs(
         )
         if not state_ref:
             return []
-        # Obligations reference states either by node id (bir_…) or by their
-        # declared value name (from_state="CANCELLED"). The binding ledger is
-        # keyed by state node identity, so resolve the value name through the
-        # Behavior IR state nodes before matching.
         for st in _list(behavior_ir.get("states")):
             if not isinstance(st, dict):
                 continue
@@ -334,7 +439,6 @@ def _get_needed_refs(
         return [rel_ref] if rel_ref else []
 
     if dimension == "oracle_input":
-        # Oracle inputs are needed for invariants referenced by obligation
         return [_text(x) for x in _list(obl.get("required_invariants")) if _text(x)]
 
     return []

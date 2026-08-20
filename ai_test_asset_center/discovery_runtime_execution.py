@@ -40,6 +40,7 @@ from .discovery_quality_projection import (
     build_formal_count_projection,
     validated_delivery_gate_finding_ids,
 )
+from .discovery_stage_result_merge import merge_discovery_stage_results
 from .discovery_runtime_execution_result import (  # noqa: F401
     RUNTIME_SCHEMA, _assemble_experiment_candidate_result)  # noqa: E501
 from .discovery_runtime_execution_support import (  # noqa: F401
@@ -591,58 +592,13 @@ def run_experiment_candidate(
     ):
         business_follow_on_batches = [*business_follow_on_batches, feedback_batch]
 
-    compile_results = {
-        _text(key): dict(value)
-        for key, value in _dict(batch.get("compile_results")).items()
-        if _text(key) and isinstance(value, dict)
-    }
-    for follow_on in business_follow_on_batches:
-        compile_results.update({
-            _text(key): dict(value)
-            for key, value in _dict(follow_on.get("compile_results")).items()
-            if _text(key) and isinstance(value, dict)
-        })
-    compile_results.update({
-        _text(key): dict(value)
-        for key, value in _dict(
-            round_two_batch.get("compile_results")
-        ).items()
-        if _text(key) and isinstance(value, dict)
-    })
-    execution_results = {
-        _text(key): dict(value)
-        for key, value in _dict(batch.get("execution_results")).items()
-        if _text(key) and isinstance(value, dict)
-    }
-    for follow_on in business_follow_on_batches:
-        execution_results.update({
-            _text(key): dict(value)
-            for key, value in _dict(follow_on.get("execution_results")).items()
-            if _text(key) and isinstance(value, dict)
-        })
-    execution_results.update({
-        _text(key): dict(value)
-        for key, value in _dict(
-            round_two_batch.get("execution_results")
-        ).items()
-        if _text(key) and isinstance(value, dict)
-    })
-    gate_results = {
-        _text(key): dict(value)
-        for key, value in _dict(batch.get("gate_results")).items()
-        if _text(key) and isinstance(value, dict)
-    }
-    for follow_on in business_follow_on_batches:
-        gate_results.update({
-            _text(key): dict(value)
-            for key, value in _dict(follow_on.get("gate_results")).items()
-            if _text(key) and isinstance(value, dict)
-        })
-    gate_results.update({
-        _text(key): dict(value)
-        for key, value in _dict(round_two_batch.get("gate_results")).items()
-        if _text(key) and isinstance(value, dict)
-    })
+    compile_results, execution_results, gate_results = merge_discovery_stage_results(
+        main_initial_batch=batch,
+        expansion_initial_batch=round_two_batch,
+        feedback_initial_batch=feedback_batch,
+        main_follow_on_batches=follow_on_batches,
+        expansion_follow_on_batches=expansion_follow_on_batches,
+    )
     gate_results = _project_gate_results_for_authority(
         gate_results=gate_results,
         contract=plan.mainline_run,
@@ -928,5 +884,3 @@ def run_experiment_candidate(
         executed_count=executed_count,
         started=started,
     )
-
-
