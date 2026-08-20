@@ -6,6 +6,7 @@ from ai_test_asset_center.service_topology_execution_authority import (
     build_service_topology,
     resolve_experiment_execution_route,
 )
+from ai_test_asset_center.target_policy import build_target_policy_decision
 
 
 def _ir() -> dict:
@@ -23,8 +24,9 @@ def _runtime_contract() -> dict:
         "approved_base_url": "http://127.0.0.1:9107",
         "requested_base_url": "http://127.0.0.1:9107",
         "environment_type": "test",
-        "execution_mode": "formal",
-        "status": "ready",
+        "environment_ref": "test-env",
+        "execution_mode": "safe_read_only",
+        "status": "approved",
     }
 
 
@@ -74,6 +76,48 @@ def test_single_service_experiment_routes_to_own_declared_target() -> None:
     assert route["status"] == "READY"
     assert route["mode"] == "single_service_routed"
     assert route["routed_service_ref"] == "beta"
+    assert route["base_url"] == "http://127.0.0.1:48763"
+    routed_contract = route["runtime_contract"]
+    assert routed_contract["requested_base_url"] == "http://127.0.0.1:48763"
+    assert routed_contract["approved_base_url"] == "http://127.0.0.1:48763"
+    decision = build_target_policy_decision(
+        requested_base_url=route["base_url"],
+        approved_base_url=routed_contract["approved_base_url"],
+        environment_type=routed_contract["environment_type"],
+        environment_ref=routed_contract["environment_ref"],
+        execution_mode=routed_contract["execution_mode"],
+        runtime_status=routed_contract["status"],
+    )
+    assert decision["status"] == "approved"
+    assert decision["read_allowed"] is True
+
+
+def test_resolver_only_required_operation_does_not_fake_cross_service_transport() -> None:
+    topology = build_service_topology(
+        {
+            "multi_service": {
+                "services": {
+                    "alpha": "http://127.0.0.1:39117",
+                    "beta": "http://127.0.0.1:48763",
+                }
+            }
+        }
+    )
+    experiment = {
+        # op-a is a resolver/fixture dependency, while only op-b is present in
+        # the formal transport plan. Routing must follow the actual plan.
+        "required_operations": ["op-a", "op-b"],
+        "treatment_plan": [{"step_id": "s1", "operation_ref": "op-b"}],
+    }
+    route = resolve_experiment_execution_route(
+        experiment=experiment,
+        behavior_ir=_ir(),
+        base_url="http://127.0.0.1:39117",
+        runtime_contract=_runtime_contract(),
+        topology=topology,
+    )
+    assert route["status"] == "READY"
+    assert route["service_refs"] == ["beta"]
     assert route["base_url"] == "http://127.0.0.1:48763"
 
 
