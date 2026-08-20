@@ -115,6 +115,13 @@ def synchronize_continuation_preview(
         # planner stop condition (commonly "budget_exhausted") beside a more
         # specific round-limit/budget-zero/no-continuation receipt.
         plan["stop_condition"] = early_stop
+    elif total == 0:
+        # An exact plan with no outstanding identity is a terminal continuation
+        # state even when the engine returned immediately before entering a
+        # follow-on round. Re-seal the stop reason after resume preparation may
+        # have cleared an earlier PENDING_QUEUE_EMPTY receipt.
+        plan["early_stop_reason"] = "PENDING_QUEUE_EMPTY"
+        plan["stop_condition"] = "PENDING_QUEUE_EMPTY"
     return plan
 
 
