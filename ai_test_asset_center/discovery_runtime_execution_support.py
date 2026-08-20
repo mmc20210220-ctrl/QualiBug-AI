@@ -2,9 +2,9 @@
 
 Historical helpers remain re-exported from
 ``discovery_runtime_execution_support_base``. Multi-round continuation lives in
-``discovery_continuation_authority``; this facade seals the first exact fresh
-identity set before execution and projects the final bounded preview only from
-exact resume authorities.
+``discovery_continuation_authority``; this facade validates persisted exact
+resume pools, seals the first exact fresh identity set before execution and
+projects the final bounded preview only from exact resume authorities.
 """
 from __future__ import annotations
 
@@ -18,6 +18,9 @@ for _name in dir(_base):
     if not _name.startswith("__"):
         globals().setdefault(_name, getattr(_base, _name))
 
+from .continuation_pool_integrity import (  # noqa: E402
+    validate_continuation_pool_integrity,
+)
 from .continuation_preview_authority import (  # noqa: E402
     synchronize_continuation_preview,
 )
@@ -145,10 +148,19 @@ def _consume_pending_obligation_rounds(
     execute_batch,
     exclude_obligation_ids: set[str] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """Reset attempt-local stop state, seal exact fresh membership, and run."""
+    """Validate exact state, reset attempt-local stop state, then continue."""
     prepared_plan = _prepare_continuation_attempt(obligation_plan)
+    integrity_plan, integrity_ok = validate_continuation_pool_integrity(
+        prepared_plan
+    )
+    if not integrity_ok:
+        # Counts prove that identities are missing but do not identify which
+        # ones. Guessing from the current candidate universe would silently
+        # corrupt Recall, so this continuation attempt stops before execution.
+        return [], integrity_plan
+
     seeded_plan = seed_initial_fresh_pending_authority(
-        obligation_plan=prepared_plan,
+        obligation_plan=integrity_plan,
         obligations=obligations,
         experiments_by_obligation=experiments_by_obligation,
         behavior_ir=behavior_ir,
