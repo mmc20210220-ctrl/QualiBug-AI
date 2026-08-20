@@ -199,3 +199,108 @@ def test_follow_on_round_keeps_ids_omitted_from_planner_pending_preview(monkeypa
     assert seen_inputs[1] == ["b", "c", "d"]
     assert final_plan["pending_count"] == 2
     assert [row["obligation_id"] for row in final_plan["pending_next_round"]] == ["c", "d"]
+
+
+def test_compiled_only_deferred_candidate_survives_into_follow_on_planner(monkeypatch) -> None:
+    import ai_test_asset_center.adaptive_discovery_planner as planner
+    import ai_test_asset_center.discovery_runtime_execution_support as support
+
+    compiled_only_id = "base__v_deadbeef"
+    compiled_only = _exp(compiled_only_id)
+    compiled_only.update({
+        "risk_family": "validation",
+        "source_refs": [{"source_id": "spec", "locator": "field-rule"}],
+        "expanded_from_obligation_id": "base",
+    })
+    seen_inputs: list[list[str]] = []
+
+    def fake_plan(obligations, **kwargs):
+        ids = [row["obligation_id"] for row in obligations]
+        seen_inputs.append(ids)
+        exp = kwargs["experiments_by_obligation"][compiled_only_id]
+        return {
+            "schema_version": "qualibug.adaptive-obligation-plan.v1",
+            "budget": 1,
+            "selected": [{
+                "obligation_id": compiled_only_id,
+                "risk_family": "validation",
+                "experiment_id": exp["experiment_id"],
+            }],
+            "selected_count": 1,
+            "pending_next_round": [],
+            "pending_count": 0,
+            "stop_condition": "in_scope_obligations_scheduled",
+        }
+
+    def fake_intents(plan, **kwargs):
+        return {"intents": [{"obligation_id": compiled_only_id}]}
+
+    monkeypatch.setattr(planner, "plan_obligation_round", fake_plan)
+    monkeypatch.setattr(planner, "build_agent_intent_plan", fake_intents)
+
+    def fake_execute(rows, **kwargs):
+        return {
+            "results": [{"obligation_id": compiled_only_id, "status": "EXECUTED"}],
+            "executed_count": 1,
+            "budget_deferred": [],
+            "runtime_bindings": {},
+        }
+
+    batches, _ = support._consume_pending_obligation_rounds(
+        obligation_plan={
+            "schema_version": "qualibug.adaptive-obligation-plan.v1",
+            "plan_authority": "obligation",
+            "budget": 1,
+            "selected": [],
+            "pending_next_round": [{"obligation_id": compiled_only_id}],
+            "pending_count": 1,
+            "pending_truncated": 0,
+        },
+        obligations=[_obl("base", confidence=0.73)],
+        experiments_by_obligation={compiled_only_id: compiled_only},
+        behavior_ir={"operations": []},
+        root=".",
+        project="p",
+        base_url="http://example.invalid",
+        runtime_contract={},
+        mainline_run={},
+        campaign_id="c",
+        automatic_round_limit=2,
+        execute_batch=fake_execute,
+    )
+
+    assert seen_inputs == [[compiled_only_id]]
+    assert len(batches) == 1
+
+
+def test_compiled_only_candidate_preserves_coverage_unit_and_parent_semantics() -> None:
+    from ai_test_asset_center.discovery_runtime_execution_support import (
+        _continuation_obligation_universe,
+    )
+
+    compiled_only_id = "base__v_cafebabe"
+    compiled_only = _exp(compiled_only_id)
+    compiled_only.update({
+        "risk_family": "validation",
+        "source_refs": [{"source_id": "spec", "locator": "constraint"}],
+        "expanded_from_obligation_id": "base",
+    })
+    merged = _continuation_obligation_universe(
+        obligations=[_obl("base", unit="unit-42", confidence=0.81)],
+        experiments_by_obligation={compiled_only_id: compiled_only},
+        obligation_plan={
+            "plan_authority": "coverage_unit",
+            "selected": [{
+                "obligation_id": compiled_only_id,
+                "coverage_unit_id": "unit-42",
+            }],
+            "pending_next_round": [{
+                "obligation_id": compiled_only_id,
+                "coverage_unit_id": "unit-42",
+            }],
+        },
+    )
+    row = next(item for item in merged if item["obligation_id"] == compiled_only_id)
+    assert row["compiled_variant_view"] is True
+    assert row["coverage_unit_id"] == "unit-42"
+    assert row["confidence"] == 0.81
