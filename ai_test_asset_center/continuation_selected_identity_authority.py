@@ -71,6 +71,74 @@ def batch_for_initial_continuation_capture(
     return projected
 
 
+def _capture_identity(row: dict[str, Any]) -> tuple[str, str]:
+    return (
+        _text(row.get("obligation_id")),
+        _text(row.get("experiment_id")),
+    )
+
+
+def _snapshot_terminal_capture(executor: Any, campaign_id: str) -> dict[tuple[str, str], dict[str, Any]]:
+    """Snapshot actual attempts so later non-attempt rows cannot downgrade them."""
+    campaign = _text(campaign_id)
+    if not campaign:
+        return {}
+    lock = getattr(executor, "_CONTINUATION_RECEIPT_LOCK", None)
+    store = getattr(executor, "_CONTINUATION_EXECUTION_RECEIPTS", None)
+    if lock is None or not isinstance(store, dict):
+        return {}
+    with lock:
+        existing = list(store.get(campaign, []))
+    return {
+        _capture_identity(row): dict(row)
+        for row in existing
+        if isinstance(row, dict)
+        and _text(row.get("receipt_kind")).upper() == "TERMINAL_RESULT"
+        and _capture_identity(row)[0]
+    }
+
+
+def _restore_terminal_capture_precedence(
+    executor: Any,
+    campaign_id: str,
+    prior_terminal: dict[tuple[str, str], dict[str, Any]],
+) -> None:
+    """Restore prior terminal only when a later capture replaced it with no attempt.
+
+    A later TERMINAL_RESULT remains chronologically authoritative. A later
+    BUDGET_DEFERRED or UNRECEIPTED_SELECTED row means that later stage did not
+    actually execute this identity and therefore cannot erase an earlier real
+    attempt for the same stable ``(obligation_id, experiment_id)``.
+    """
+    if not prior_terminal:
+        return
+    campaign = _text(campaign_id)
+    lock = getattr(executor, "_CONTINUATION_RECEIPT_LOCK", None)
+    store = getattr(executor, "_CONTINUATION_EXECUTION_RECEIPTS", None)
+    if not campaign or lock is None or not isinstance(store, dict):
+        return
+    with lock:
+        current = list(store.get(campaign, []))
+        if not current:
+            return
+        by_identity = {
+            _capture_identity(row): dict(row)
+            for row in current
+            if isinstance(row, dict) and _capture_identity(row)[0]
+        }
+        changed = False
+        for identity, terminal_row in prior_terminal.items():
+            replacement = by_identity.get(identity)
+            if not replacement:
+                continue
+            if _text(replacement.get("receipt_kind")).upper() == "TERMINAL_RESULT":
+                continue
+            by_identity[identity] = dict(terminal_row)
+            changed = True
+        if changed:
+            store[campaign] = list(by_identity.values())
+
+
 class ContinuationBatchView(dict):
     """Dict view whose continuation reader sees selected-identity results.
 
@@ -117,10 +185,16 @@ def install_initial_capture_selected_identity_bridge() -> None:
 
     @wraps(original)
     def bridged(*, campaign_id: str, selected_rows: list[dict[str, Any]], batch: dict[str, Any]) -> None:
+        prior_terminal = _snapshot_terminal_capture(executor, campaign_id)
         original(
             campaign_id=campaign_id,
             selected_rows=selected_rows,
             batch=batch_for_initial_continuation_capture(batch),
+        )
+        _restore_terminal_capture_precedence(
+            executor,
+            campaign_id,
+            prior_terminal,
         )
 
     setattr(bridged, "_qualibug_selected_identity_bridge", True)
