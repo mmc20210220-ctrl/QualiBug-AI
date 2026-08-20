@@ -156,9 +156,14 @@ def _consume_pending_obligation_rounds(
     An identity leaves the queue only after the executor returns a terminal
     result for it. Budget-deferred and unreceipted selected identities remain
     pending. Retry-eligible failures are kept in a separate backlog and cannot
-    monopolize planning while never-attempted candidates still exist.
+    monopolize planning while never-attempted candidates still exist. Runtime
+    retry receipts from the initial batch are consumed from the executor's
+    campaign-scoped in-memory ledger, so a first-attempt BLOCKED/HARNESS_FAILED
+    identity can re-enter even when it was selected (and therefore absent from
+    ``pending_next_round``).
     """
     from .adaptive_discovery_planner import build_agent_intent_plan, plan_obligation_round
+    from .experiment_executor import consume_continuation_retry_receipts
     from .pipeline_slices import _ABS_MAX_SLICE_BUDGET
 
     continuation_obligations = _continuation_obligation_universe(
@@ -169,19 +174,67 @@ def _consume_pending_obligation_rounds(
     plan_row = dict(_dict(obligation_plan))
     budget = int(plan_row.get("budget") or 0)
     round_limit = max(1, int(automatic_round_limit or 1))
+    excluded = set(exclude_obligation_ids or set())
+    experiments = {
+        _text(key): dict(value)
+        for key, value in _dict(experiments_by_obligation).items()
+        if _text(key) and isinstance(value, dict)
+    }
+    retry_eligible_reasons = {
+        "BLOCKED_MISSING_BINDING",
+        "HARNESS_FAILED",
+        "BLOCKED_MISSING_OBSERVER",
+        "BLOCKED_CONTROL_ARM_NOT_PROVEN",
+        "BLOCKED_OBSERVER_RECEIPT_INDETERMINATE",
+    }
+
     pending_rows, continuation_receipt = complete_pending_continuation_rows(
         obligation_plan=plan_row,
         obligations=continuation_obligations,
-        experiments_by_obligation=experiments_by_obligation,
-        exclude_obligation_ids=exclude_obligation_ids,
+        experiments_by_obligation=experiments,
+        exclude_obligation_ids=excluded,
     )
     plan_row["pending_continuation_authority_receipt"] = continuation_receipt
+
+    # Seed retry authority from both persisted/in-process plan rows and actual
+    # pre-continuation executor receipts. The latter closes capture for this
+    # campaign so follow-on batches are not recorded twice; expansion rows that
+    # belong to a different experiment map remain in the executor ledger until
+    # that continuation domain consumes them.
+    retry_reason_by_id: dict[str, str] = {}
+    retry_backlog_ids: list[str] = []
+    for raw in _list(plan_row.get("blocked_retry_pool")):
+        if not isinstance(raw, dict):
+            continue
+        oid = _text(raw.get("obligation_id"))
+        reason = _text(raw.get("block_reason") or raw.get("reason_code"))
+        if oid and oid not in excluded and reason in retry_eligible_reasons:
+            retry_reason_by_id[oid] = reason
+            retry_backlog_ids.append(oid)
+    captured_retry_rows = consume_continuation_retry_receipts(
+        campaign_id,
+        allowed_obligation_ids=set(experiments) - excluded,
+        close_capture=True,
+    )
+    for raw in captured_retry_rows:
+        oid = _text(raw.get("obligation_id"))
+        reason = _text(raw.get("block_reason") or raw.get("reason_code"))
+        if oid and oid not in excluded and reason in retry_eligible_reasons:
+            retry_reason_by_id[oid] = reason
+            retry_backlog_ids.append(oid)
+    retry_backlog_ids = list(dict.fromkeys(retry_backlog_ids))
+    plan_row["blocked_retry_pool"] = [
+        {"obligation_id": oid, "block_reason": retry_reason_by_id[oid]}
+        for oid in retry_backlog_ids[:100]
+        if oid in retry_reason_by_id
+    ]
+
     if budget <= 0:
-        if pending_rows:
+        if pending_rows or retry_backlog_ids:
             plan_row["early_stop_reason"] = "PENDING_NEXT_ROUND_SKIPPED_PLAN_BUDGET_ZERO"
             plan_row["pending_count"] = len(pending_rows)
         return [], plan_row
-    if not pending_rows:
+    if not pending_rows and not retry_backlog_ids:
         return [], plan_row
     if round_limit <= 1:
         plan_row["early_stop_reason"] = "PENDING_NEXT_ROUND_SKIPPED_ROUND_LIMIT_ONE"
@@ -195,27 +248,6 @@ def _consume_pending_obligation_rounds(
         for row in continuation_obligations
         if isinstance(row, dict) and _text(row.get("obligation_id"))
     }
-    experiments = {
-        _text(key): dict(value)
-        for key, value in _dict(experiments_by_obligation).items()
-        if _text(key) and isinstance(value, dict)
-    }
-    excluded = set(exclude_obligation_ids or set())
-    retry_eligible_reasons = {
-        "BLOCKED_MISSING_BINDING",
-        "HARNESS_FAILED",
-        "BLOCKED_MISSING_OBSERVER",
-        "BLOCKED_CONTROL_ARM_NOT_PROVEN",
-        "BLOCKED_OBSERVER_RECEIPT_INDETERMINATE",
-    }
-    retry_backlog_ids: list[str] = [
-        _text(row.get("obligation_id"))
-        for row in _list(plan_row.get("blocked_retry_pool"))
-        if isinstance(row, dict)
-        and _text(row.get("obligation_id"))
-        and _text(row.get("block_reason") or row.get("reason_code")) in retry_eligible_reasons
-    ]
-
     follow_on_batches: list[dict[str, Any]] = []
     follow_on_receipts: list[dict[str, Any]] = []
     accumulated_bindings: dict[str, str] = {}
@@ -348,9 +380,11 @@ def _consume_pending_obligation_rounds(
                 and reason in retry_eligible_reasons
             )
             if retry_eligible:
+                retry_reason_by_id[oid] = reason
                 next_retry_ids.append(oid)
             elif oid and oid not in deferred_ids:
                 terminal_done_ids.add(oid)
+                retry_reason_by_id.pop(oid, None)
             if status in {"BLOCKED", "HARNESS_FAILED", "FAILED"} and reason:
                 error_counts[reason] = error_counts.get(reason, 0) + 1
 
@@ -474,8 +508,9 @@ def _consume_pending_obligation_rounds(
         "pending_count": len(pending_rows),
         "follow_on_round_receipts": follow_on_receipts,
         "blocked_retry_pool": [
-            {"obligation_id": oid, "block_reason": "RETRY_ELIGIBLE"}
+            {"obligation_id": oid, "block_reason": retry_reason_by_id[oid]}
             for oid in retry_backlog_ids[:100]
+            if oid in retry_reason_by_id
         ],
         "accumulated_bindings": accumulated_bindings,
     })
@@ -491,3 +526,19 @@ def _consume_pending_obligation_rounds(
         plan_row["round_limit_reached"] = True
         plan_row["follow_on_round_limit"] = round_limit
     return follow_on_batches, plan_row
+
+
+def _finalize_campaign(handle: Any, ledger: dict[str, Any]) -> dict[str, Any]:
+    """Finalize through the historical authority and release retry capture."""
+    campaign_id = ""
+    try:
+        campaign_id = _text(getattr(_base._campaign_object(handle), "campaign_id", ""))
+    except Exception:
+        campaign_id = ""
+    try:
+        return _base._finalize_campaign(handle, ledger)
+    finally:
+        if campaign_id:
+            from .experiment_executor import clear_continuation_retry_receipts
+
+            clear_continuation_retry_receipts(campaign_id)
