@@ -1,4 +1,4 @@
-"""Continuation preview metadata must describe the current exact queue."""
+"""Production continuation preview must describe the current exact queue."""
 from __future__ import annotations
 
 
@@ -38,7 +38,7 @@ def _plan(ids: list[str], *, stale_truncated: int) -> dict:
 
 
 def test_round_limit_recomputes_preview_truncation_from_current_queue(monkeypatch) -> None:
-    import ai_test_asset_center.discovery_continuation_authority as authority
+    import ai_test_asset_center.discovery_runtime_execution_support as support
     import ai_test_asset_center.experiment_executor as executor
     import ai_test_asset_center.pipeline_slices as slices
 
@@ -47,7 +47,7 @@ def test_round_limit_recomputes_preview_truncation_from_current_queue(monkeypatc
     campaign_id = "campaign-preview-metadata-cap"
     executor.clear_continuation_retry_receipts(campaign_id)
 
-    _, final_plan = authority._consume_pending_obligation_rounds(
+    _, final_plan = support._consume_pending_obligation_rounds(
         obligation_plan=_plan(ids, stale_truncated=99),
         obligations=[_obl(oid) for oid in ids],
         experiments_by_obligation={oid: _exp(oid) for oid in ids},
@@ -69,18 +69,19 @@ def test_round_limit_recomputes_preview_truncation_from_current_queue(monkeypatc
     assert final_plan["pending_truncated"] == 1
     assert "3" in final_plan["pending_truncation_reason"]
     assert "2" in final_plan["pending_truncation_reason"]
+    assert final_plan["continuation_outstanding_count"] == 3
     executor.clear_continuation_retry_receipts(campaign_id)
 
 
 def test_round_limit_clears_stale_truncation_when_current_queue_fits() -> None:
-    import ai_test_asset_center.discovery_continuation_authority as authority
+    import ai_test_asset_center.discovery_runtime_execution_support as support
     import ai_test_asset_center.experiment_executor as executor
 
     ids = ["only"]
     campaign_id = "campaign-preview-metadata-clear"
     executor.clear_continuation_retry_receipts(campaign_id)
 
-    _, final_plan = authority._consume_pending_obligation_rounds(
+    _, final_plan = support._consume_pending_obligation_rounds(
         obligation_plan=_plan(ids, stale_truncated=99),
         obligations=[_obl("only")],
         experiments_by_obligation={"only": _exp("only")},
@@ -103,4 +104,5 @@ def test_round_limit_clears_stale_truncation_when_current_queue_fits() -> None:
     ]
     assert final_plan["pending_truncated"] == 0
     assert final_plan["pending_truncation_reason"] == ""
+    assert final_plan["continuation_outstanding_count"] == 1
     executor.clear_continuation_retry_receipts(campaign_id)
