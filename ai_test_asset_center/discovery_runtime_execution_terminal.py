@@ -40,7 +40,6 @@ def _formal_accounting_id(
     accounting_by_id: dict[str, dict[str, Any]],
 ) -> str:
     """Map a compiler variant to its formal accounting owner when present."""
-
     oid = _text(obligation_id)
     base = _base_obligation_id(oid)
     return base if base in accounting_by_id else oid
@@ -51,7 +50,6 @@ def _experiment_faces(
     formal_id: str,
 ) -> list[tuple[str, dict[str, Any]]]:
     """Return the direct experiment plus compiler-expanded faces of one base."""
-
     result: list[tuple[str, dict[str, Any]]] = []
     direct = _dict(experiments.get(formal_id))
     if direct:
@@ -71,7 +69,6 @@ def _compiled_experiment_face(
     formal_id: str,
 ) -> tuple[str, dict[str, Any]]:
     """Return the executable compiled face that can justify pending sealing."""
-
     faces = _experiment_faces(experiments, formal_id)
     for oid, experiment in faces:
         if _compile_status(experiment) == "COMPILED":
@@ -108,14 +105,14 @@ def _terminal_pending_rows(
 
     ``pending_next_round`` is a bounded public preview and may contain
     compiler-expanded ``base__v_*`` identities that do not exist as separate
-    formal accounting rows.  Terminal sealing therefore projects every pending
-    face back to its formal base, while preserving the compiled face as the
-    proof that work remains executable.  A real terminal receipt for any face
-    closes the formal base for the current run.
+    formal accounting rows. Terminal sealing projects every pending face back
+    to its formal base. Exact retry and budget-deferral pools are consumed
+    before any inference from ``pending_count`` so omitted identities cannot be
+    replaced by a different compiled row during sealing.
 
-    Coverage-unit plans retain one representative per unfinished unit.  The
-    reconstruction is transient only; no new unbounded customer-visible plan
-    field is introduced.
+    A real terminal receipt for any face closes the formal base for the current
+    run. Coverage-unit plans retain one representative per unfinished unit.
+    Reconstruction is transient only.
     """
     plan = _dict(obligation_plan)
     experiments = _dict(experiments_by_obligation)
@@ -150,11 +147,7 @@ def _terminal_pending_rows(
     for raw in raw_visible:
         raw_id = _text(raw.get("obligation_id"))
         formal_id = _formal_accounting_id(raw_id, accounting_by_id)
-        if (
-            not formal_id
-            or formal_id in visible_ids
-            or formal_id in terminal_formal_ids
-        ):
+        if not formal_id or formal_id in visible_ids or formal_id in terminal_formal_ids:
             continue
         row = dict(raw)
         row["obligation_id"] = formal_id
@@ -176,24 +169,24 @@ def _terminal_pending_rows(
         for row in _list(plan.get("blocked_retry_pool"))
         if isinstance(row, dict) and _text(row.get("obligation_id"))
     ]
-    if missing_from_preview <= 0 and not retry_rows:
+    budget_deferred_rows = [
+        dict(row)
+        for row in _list(plan.get("budget_deferred_pool"))
+        if isinstance(row, dict) and _text(row.get("obligation_id"))
+    ]
+    if missing_from_preview <= 0 and not retry_rows and not budget_deferred_rows:
         return visible
 
     result = list(visible)
     result_ids = set(visible_ids)
 
-    # Persisted retry authority may contain variant ids absent from the bounded
-    # fresh preview. Project them to the same formal attempt owner. A concrete
-    # BLOCKED/HARNESS_FAILED receipt remains the current run terminal and is not
-    # rewritten as DEFERRED merely because the identity is retryable later.
+    # Retry is a stronger current-state statement than budget deferral. Support
+    # keeps the pools mutually exclusive, but terminal sealing remains defensive
+    # if an older persisted plan contains overlap.
     for retry in retry_rows:
         raw_id = _text(retry.get("obligation_id"))
         formal_id = _formal_accounting_id(raw_id, accounting_by_id)
-        if (
-            not formal_id
-            or formal_id in result_ids
-            or formal_id in terminal_formal_ids
-        ):
+        if not formal_id or formal_id in result_ids or formal_id in terminal_formal_ids:
             continue
         source = accounting_by_id.get(formal_id) or {}
         result.append({
@@ -209,6 +202,32 @@ def _terminal_pending_rows(
                 "blocked_retry_variant_formal_projection"
                 if raw_id != formal_id
                 else "blocked_retry_pool"
+            ),
+        })
+        result_ids.add(formal_id)
+
+    # This is exact capacity-deferral authority, not inferred pending work.
+    # Selected identities are therefore allowed here even though generic
+    # continuation reconstruction intentionally does not widen selected work.
+    for deferred in budget_deferred_rows:
+        raw_id = _text(deferred.get("obligation_id"))
+        formal_id = _formal_accounting_id(raw_id, accounting_by_id)
+        if not formal_id or formal_id in result_ids or formal_id in terminal_formal_ids:
+            continue
+        source = accounting_by_id.get(formal_id) or {}
+        result.append({
+            "obligation_id": formal_id,
+            "risk_family": _text(source.get("risk_family")),
+            "coverage_unit_id": _coverage_unit_for_identity(
+                raw_id,
+                accounting_by_id=accounting_by_id,
+                experiments=experiments,
+            ),
+            "not_in_plan_reason": "BUDGET_DEFERRED",
+            "continuation_origin": (
+                "budget_deferred_variant_formal_projection"
+                if raw_id != formal_id
+                else "budget_deferred_pool"
             ),
         })
         result_ids.add(formal_id)
@@ -316,9 +335,8 @@ def _terminal_pending_rows(
             })
 
     # ``pending_count`` counts execution identities (including variants), while
-    # terminal accounting counts formal bases.  It is therefore an upper bound
-    # on how many new formal rows may be restored, never a requirement to invent
-    # one terminal row per compiler face.
+    # terminal accounting counts formal bases. Exact pools already consume that
+    # outstanding count, so inference may fill only the remainder.
     fresh_restore_budget = max(0, declared_pending - len(result))
     for row in restored[:fresh_restore_budget]:
         formal_id = _text(row.get("obligation_id"))
@@ -339,6 +357,11 @@ def _manual_terminal_receipts(
 ) -> None:
     experiments = _dict(experiments_by_obligation)
     obligation_plan = _dict(obligation_plan)
+    accounting_by_id = {
+        _text(item.get("obligation_id")): dict(item)
+        for item in selected_rows
+        if isinstance(item, dict) and _text(item.get("obligation_id"))
+    }
     pending_rows = _terminal_pending_rows(
         selected_rows=selected_rows,
         experiments_by_obligation=experiments,
@@ -346,14 +369,7 @@ def _manual_terminal_receipts(
         execution_results=execution_results,
     )
     scheduled_ids = {
-        _formal_accounting_id(
-            _text(row.get("obligation_id")),
-            {
-                _text(item.get("obligation_id")): dict(item)
-                for item in selected_rows
-                if isinstance(item, dict) and _text(item.get("obligation_id"))
-            },
-        )
+        _formal_accounting_id(_text(row.get("obligation_id")), accounting_by_id)
         for row in _list(obligation_plan.get("selected"))
         if isinstance(row, dict) and _text(row.get("obligation_id"))
     }
@@ -362,7 +378,6 @@ def _manual_terminal_receipts(
         for row in pending_rows
         if isinstance(row, dict) and _text(row.get("obligation_id"))
     }
-    # P0-5: map pending obligation_id -> specific not-in-plan reason
     pending_reasons: dict[str, str] = {
         _text(row.get("obligation_id")): _text(row.get("not_in_plan_reason")) or "BUDGET_EXHAUSTED"
         for row in pending_rows
@@ -376,9 +391,6 @@ def _manual_terminal_receipts(
         obligation_id = _text(row.get("obligation_id"))
         if not obligation_id or obligation_id in execution_results:
             continue
-        # Check variant obligation_ids and map their compile receipt to the
-        # formal base. Execution remains on the concrete variant until the
-        # ledger facade binds selected=base / executed=variant.
         _variant_result = None
         for _vid, _vresult in compile_results.items():
             if _base_obligation_id(_text(_vid)) == obligation_id and _text(_vid) != obligation_id:
@@ -390,16 +402,11 @@ def _manual_terminal_receipts(
                 continue
         existing_compile = _dict(compile_results.get(obligation_id))
         existing_compile_status = _text(existing_compile.get("status")).upper()
-        # COMPILED without an execution receipt still needs a terminal — especially
-        # budget-deferred rows that remain in pending_next_round. Non-COMPILED
-        # compile terminals already close the attempt.
         if existing_compile and existing_compile_status != "COMPILED":
             continue
         _, experiment = _compiled_experiment_face(experiments, obligation_id)
         compile_receipt = _dict(experiment.get("compile_receipt"))
-        compile_status = existing_compile_status or _text(
-            compile_receipt.get("status")
-        ).upper()
+        compile_status = existing_compile_status or _text(compile_receipt.get("status")).upper()
         experiment_id = _text(
             existing_compile.get("experiment_id")
             or experiment.get("experiment_id")
@@ -408,59 +415,28 @@ def _manual_terminal_receipts(
         if not existing_compile and compile_status in {"BLOCKED", "HARNESS_FAILED"}:
             compile_results[obligation_id] = {
                 "status": compile_status,
-                "reason_code": _text(compile_receipt.get("reason_code"))
-                or "BLOCKED_COMPILE",
-                "detail": _text(
-                    compile_receipt.get("detail")
-                    or compile_receipt.get("reason_detail")
-                ),
+                "reason_code": _text(compile_receipt.get("reason_code")) or "BLOCKED_COMPILE",
+                "detail": _text(compile_receipt.get("detail") or compile_receipt.get("reason_detail")),
                 "experiment_id": experiment_id,
                 "cost_coverage_status": "UNKNOWN",
             }
-        elif (
-            not existing_compile
-            and compile_status == "DEFERRED"
-            and _text(compile_receipt.get("reason_code"))
-        ):
-            # The compiler already said WHY it deferred -- e.g.
-            # MISSING_PRIMARY_OPERATION for an obligation with no operation to
-            # call. Falling through to the branches below discarded that reason and
-            # relabelled it OBLIGATION_NOT_IN_PLAN / BUDGET_EXHAUSTED, which reads
-            # as "we ran out of budget" when the budget was never the constraint.
-            # A wrong reason code is worse than a missing one: it sends the next
-            # reader looking for capacity they already have.
+        elif not existing_compile and compile_status == "DEFERRED" and _text(compile_receipt.get("reason_code")):
             compile_results[obligation_id] = {
                 "status": "DEFERRED",
                 "reason_code": _text(compile_receipt.get("reason_code")),
-                "detail": _text(
-                    compile_receipt.get("detail")
-                    or compile_receipt.get("reason_detail")
-                ),
+                "detail": _text(compile_receipt.get("detail") or compile_receipt.get("reason_detail")),
                 "experiment_id": experiment_id,
                 "cost_coverage_status": "UNKNOWN",
             }
-        elif (
-            not existing_compile
-            and _text(row.get("selection_status")).upper() == "COMPILE_BLOCKED"
-        ):
+        elif not existing_compile and _text(row.get("selection_status")).upper() == "COMPILE_BLOCKED":
             compile_results[obligation_id] = {
                 "status": "HARNESS_FAILED",
-                "reason_code": (
-                    "COMPILE_RECEIPT_MISSING"
-                    if not compile_status
-                    else "BLOCKED_COMPILE"
-                ),
-                "detail": (
-                    "compile_receipt_missing"
-                    if not compile_status
-                    else "compile_deferred_reason_missing"
-                ),
+                "reason_code": "COMPILE_RECEIPT_MISSING" if not compile_status else "BLOCKED_COMPILE",
+                "detail": "compile_receipt_missing" if not compile_status else "compile_deferred_reason_missing",
                 "experiment_id": experiment_id,
                 "cost_coverage_status": "UNKNOWN",
             }
         elif obligation_id in pending_ids:
-            # Preserve a real COMPILED compile receipt; defer at execution so
-            # budget exhaustion is not misread as a compile failure.
             if compile_status == "COMPILED":
                 if obligation_id not in compile_results:
                     compile_results[obligation_id] = {
@@ -471,9 +447,7 @@ def _manual_terminal_receipts(
                 execution_results[obligation_id] = {
                     "status": "DEFERRED",
                     "reason_code": "OBLIGATION_BUDGET_REACHED",
-                    "not_in_plan_reason": pending_reasons.get(
-                        obligation_id, "BUDGET_EXHAUSTED"
-                    ),
+                    "not_in_plan_reason": pending_reasons.get(obligation_id, "BUDGET_EXHAUSTED"),
                     "detail": "compiled_obligation_deferred_by_execution_budget",
                     "experiment_id": experiment_id,
                     "cost_coverage_status": "UNKNOWN",
@@ -482,9 +456,7 @@ def _manual_terminal_receipts(
                 compile_results[obligation_id] = {
                     "status": "DEFERRED",
                     "reason_code": "OBLIGATION_BUDGET_REACHED",
-                    "not_in_plan_reason": pending_reasons.get(
-                        obligation_id, "BUDGET_EXHAUSTED"
-                    ),
+                    "not_in_plan_reason": pending_reasons.get(obligation_id, "BUDGET_EXHAUSTED"),
                     "experiment_id": experiment_id,
                     "cost_coverage_status": "UNKNOWN",
                 }
@@ -502,23 +474,12 @@ def _manual_terminal_receipts(
                 "cost_coverage_status": "UNKNOWN",
             }
         elif existing_compile_status == "COMPILED":
-            # Already compiled in a batch/filler, but never executed and not
-            # pending — leave the execution gap for
-            # ``_ensure_accounting_terminal_receipts`` so status/reason stay
-            # aligned (BLOCKED / BLOCKED_EXECUTION), not HARNESS_FAILED.
             continue
         else:
-            # Fallback: obligation compiled but not selected/blocked/deferred.
-            # Treat as DEFERRED rather than failing the entire run. Do NOT default
-            # not_in_plan_reason to BUDGET_EXHAUSTED -- this branch is reached
-            # precisely when the obligation is NOT in pending_ids, so the budget is
-            # the one explanation that cannot apply. Say it is unattributed instead.
             compile_results[obligation_id] = {
                 "status": "DEFERRED",
                 "reason_code": "OBLIGATION_NOT_IN_PLAN",
-                "not_in_plan_reason": pending_reasons.get(
-                    obligation_id, "NOT_IN_PLAN_REASON_UNATTRIBUTED"
-                ),
+                "not_in_plan_reason": pending_reasons.get(obligation_id, "NOT_IN_PLAN_REASON_UNATTRIBUTED"),
                 "detail": _text(compile_receipt.get("detail") or ""),
                 "experiment_id": experiment_id,
                 "cost_coverage_status": "UNKNOWN",
