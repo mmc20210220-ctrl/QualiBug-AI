@@ -15,9 +15,17 @@ Source-rule identity is deliberately stricter than runtime-outcome identity:
 expected values come from the sealed assertion contract and therefore retain
 exact numeric/source semantics, while actual runtime values continue to use the
 core's coarse semantic normalization so repeated manifestations aggregate.
+
+For multi-step treatment protocols, canonical identity additionally consumes the
+assertion's sealed exact-step observer lineage. The sequential execution
+authority evaluates HTTP-shaped assertions from the final treatment observation;
+canonical identity therefore projects that same final treatment only when an
+assertion-referenced exact observer receipt proves its step identity. Ambiguous
+or missing causal scope fails closed instead of falling back to source order.
 """
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Any
 
 from . import _canonical_defect_registry_mechanics as _core
@@ -27,6 +35,7 @@ from .authorization_delivery_gate import (
     validate_authorization_causality_receipt,
 )
 from .obligation_attempt_ledger import delivery_occurrence_views
+from .process_step_receipt_scope import extract_receipt_step_scope
 
 _original_one_violation = _core._one_violation
 _original_derive_canonical_identity_evidence = _core.derive_canonical_identity_evidence
@@ -60,17 +69,7 @@ def _source_expected_semantic_value(
     assertion_kind: str,
     depth: int = 0,
 ) -> Any:
-    """Canonicalize source-declared expectations without erasing rule values.
-
-    ``_core._semantic_value`` intentionally buckets non-HTTP runtime numbers as
-    positive/negative/zero. That is useful for aggregating observed runtime
-    manifestations, but it is unsafe for source contracts: business thresholds
-    such as 10 and 100 are distinct rules and must not collapse into one defect.
-
-    The assertion receipt already seals ``expected``; this projection therefore
-    preserves exact scalar semantics while still avoiding raw customer strings
-    in the canonical registry by storing digests for text and object keys.
-    """
+    """Canonicalize source-declared expectations without erasing rule values."""
     if depth > 4:
         return {"type": "truncated"}
     if value is None or isinstance(value, bool):
@@ -152,13 +151,96 @@ def _one_violation(oracle: dict[str, Any]) -> dict[str, Any]:
     return matching[0]
 
 
+def _causal_identity_attempt(
+    attempt: dict[str, Any],
+) -> tuple[dict[str, Any], str]:
+    """Project multi-step treatment identity onto the step actually adjudicated.
+
+    The sequential executor's canonical HTTP input is the final treatment
+    observation. Exact-scope finalization separately seals observer receipts by
+    step. For a multi-step reproduction, require the VIOLATION assertion to
+    reference at least one exact observer receipt for that final treatment
+    step. No source-order-only fallback is allowed.
+
+    Single-treatment attempts are returned unchanged for byte-compatible
+    historical behavior.
+    """
+    row = _dict(attempt)
+    bundle = _dict(row.get("delivery_evidence_bundle"))
+    reproduction = _dict(bundle.get("reproduction_receipt"))
+    step_observations = _list(reproduction.get("step_observations"))
+    treatment_rows = [
+        _dict(raw)
+        for raw in step_observations
+        if _core._normalized_text(_dict(raw).get("phase")) == "treatment"
+    ]
+    if len(treatment_rows) <= 1:
+        return row, ""
+
+    treatment_ids = [_text(step.get("step_id")) for step in treatment_rows]
+    if any(not step_id for step_id in treatment_ids):
+        raise _core._incomplete("reproduction.treatment_step_id")
+    if len(set(treatment_ids)) != len(treatment_ids):
+        raise _core._ambiguous("reproduction.treatment_step_id")
+
+    oracle = _dict(bundle.get("oracle_receipt"))
+    assertion = _one_violation(oracle)
+    referenced_receipt_ids = [
+        _text(value)
+        for value in _list(assertion.get("observer_receipt_ids"))
+        if _text(value)
+    ]
+    if not referenced_receipt_ids:
+        raise _core._incomplete("assertion.observer_receipt_ids")
+
+    observer_by_id = {
+        _text(receipt.get("receipt_id")): receipt
+        for raw in _list(bundle.get("observer_receipts"))
+        for receipt in [_dict(raw)]
+        if _text(receipt.get("receipt_id"))
+    }
+    if any(receipt_id not in observer_by_id for receipt_id in referenced_receipt_ids):
+        raise _core._incomplete("assertion.observer_receipt_missing")
+
+    known_treatment_ids = set(treatment_ids)
+    exact_treatment_ids: set[str] = set()
+    for receipt_id in referenced_receipt_ids:
+        scope = extract_receipt_step_scope(
+            observer_by_id[receipt_id],
+            known_step_ids=treatment_ids,
+        )
+        if scope.get("status") != "EXACT":
+            continue
+        step_id = _text(scope.get("step_id"))
+        if step_id in known_treatment_ids:
+            exact_treatment_ids.add(step_id)
+
+    causal_step_id = treatment_ids[-1]
+    if causal_step_id not in exact_treatment_ids:
+        raise _core._incomplete("assertion.causal_treatment_step")
+
+    projected = deepcopy(row)
+    projected_bundle = _dict(projected.get("delivery_evidence_bundle"))
+    projected_reproduction = _dict(projected_bundle.get("reproduction_receipt"))
+    projected_reproduction["step_observations"] = [
+        raw
+        for raw in _list(projected_reproduction.get("step_observations"))
+        if (
+            _core._normalized_text(_dict(raw).get("phase")) != "treatment"
+            or _text(_dict(raw).get("step_id")) == causal_step_id
+        )
+    ]
+    projected_bundle["reproduction_receipt"] = projected_reproduction
+    projected["delivery_evidence_bundle"] = projected_bundle
+    return projected, causal_step_id
+
+
 def _with_authorization_causal_dimension(
     evidence: dict[str, Any],
     *,
     attempt: dict[str, Any],
 ) -> dict[str, Any]:
     """Add only receipted authorization causality to canonical identity."""
-
     bundle = _dict(_dict(attempt).get("delivery_evidence_bundle"))
     finding = _dict(bundle.get("finding"))
     finding_oracle = _dict(finding.get("oracle"))
@@ -169,9 +251,6 @@ def _with_authorization_causal_dimension(
     claims_proven = finding_oracle.get("authorization_causality_proven") is True
 
     if not raw_receipt:
-        # If mutable finding metadata claims causal proof, absence of the sealed
-        # receipt is an identity-integrity failure. Otherwise this is simply a
-        # non-authorization defect and the base identity stays byte-compatible.
         if referenced_receipt_id or claims_proven:
             raise _core._incomplete("authorization.causality_receipt")
         return evidence
@@ -185,17 +264,10 @@ def _with_authorization_causal_dimension(
 
     receipt_status = _text(receipt.get("status")).upper()
     if receipt_status == "NOT_APPLICABLE":
-        # No comparison contract: causal delivery is not required, so there is
-        # no causal dimension to add to canonical identity. This is a valid,
-        # sealed state (validate_authorization_causality_receipt accepts it) —
-        # not an incomplete one. A finding that simultaneously claims causal
-        # proof is self-contradictory and stays fail-closed.
         if referenced_receipt_id or claims_proven:
             raise _core._incomplete("authorization.causality_reference")
         return evidence
     if receipt_status != "PASSED":
-        # INDETERMINATE denotes genuinely incomplete causal proof; keep
-        # fail-closed.
         raise _core._incomplete("authorization.causality_status")
     dimension = _text(receipt.get("comparison_dimension")).upper()
     if dimension not in _AUTHORIZATION_COMPARISON_DIMENSIONS:
@@ -210,8 +282,6 @@ def _with_authorization_causal_dimension(
     actor_relation["comparison_dimension"] = dimension
     governed["actor_relation"] = actor_relation
 
-    # Proof fields are audit lineage only and are excluded from the stable
-    # canonical identity fingerprint by the mechanics module.
     proof = dict(_dict(governed.get("proof")))
     proof["authorization_causality_receipt_id"] = _text(
         receipt.get("receipt_id")
@@ -224,14 +294,13 @@ def _with_authorization_causal_dimension(
 def derive_canonical_identity_evidence(
     attempt: dict[str, Any],
 ) -> dict[str, Any]:
-    evidence = _original_derive_canonical_identity_evidence(attempt)
+    identity_attempt, causal_treatment_step_id = _causal_identity_attempt(attempt)
+    evidence = _original_derive_canonical_identity_evidence(identity_attempt)
     governed = _with_authorization_causal_dimension(
         evidence,
         attempt=attempt,
     )
 
-    # Replace only the source-declared expected projection. The core's coarse
-    # actual/runtime projection intentionally remains unchanged for aggregation.
     bundle = _dict(_dict(attempt).get("delivery_evidence_bundle"))
     oracle = _dict(bundle.get("oracle_receipt"))
     assertion = _one_violation(oracle)
@@ -257,6 +326,8 @@ def derive_canonical_identity_evidence(
 
     proof = dict(_dict(governed.get("proof")))
     proof.update(rule_dimensions)
+    if causal_treatment_step_id:
+        proof["causal_treatment_step_id"] = causal_treatment_step_id
     governed["proof"] = proof
 
     if not bool(oracle.get("canonical_outcome_identity_required")):
