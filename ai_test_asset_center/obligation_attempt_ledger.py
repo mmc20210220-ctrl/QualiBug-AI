@@ -16,7 +16,6 @@ from ._obligation_attempt_ledger_single_occurrence_mechanics import (
     SELECTION_STATUSES,
     TERMINAL_STATUSES,
     ObligationAttemptLedgerError,
-    bind_stage_receipt_identity,
 )
 from .customer_delivery_gate_v2 import (
     CUSTOMER_DELIVERY_GATE_RECEIPT_SCHEMA,
@@ -28,6 +27,7 @@ from ._delivery_validation_cache import (
     content_fingerprint,
 )
 
+_original_bind_stage_receipt_identity = _core.bind_stage_receipt_identity
 _original_build_obligation_attempt_ledger = _core.build_obligation_attempt_ledger
 _original_validate_obligation_attempt_ledger = _core.validate_obligation_attempt_ledger
 _original_reseal_obligation_attempt_ledger = _core.reseal_obligation_attempt_ledger
@@ -47,6 +47,208 @@ def _list(value: Any) -> list[Any]:
 
 def _text(value: Any) -> str:
     return str(value or "").strip()
+
+
+def _mechanical_execution_gap(receipt: Any) -> bool:
+    """Whether a base execution row is only a mainline-generated gap filler."""
+
+    row = _dict(receipt)
+    status = _text(row.get("status")).upper()
+    reason = _text(row.get("reason_code"))
+    detail = _text(row.get("detail"))
+    return (
+        status in {"BLOCKED", "DEFERRED"}
+        and reason in {
+            "BLOCKED_EXECUTION",
+            "OBLIGATION_NOT_IN_PLAN",
+            "OBLIGATION_BUDGET_REACHED",
+        }
+        and detail in {
+            "compiled_obligation_has_no_execution_receipt",
+            "compiled_obligation_deferred_by_execution_budget",
+        }
+    )
+
+
+def _normalize_variant_selected_identity(
+    receipt: dict[str, Any],
+    *,
+    base_id: str,
+    variant_id: str,
+    sealed: bool,
+) -> dict[str, Any]:
+    """Project compiler-local selection onto the formal selected obligation.
+
+    The raw batch remains untouched.  This copy is the mainline stage projection
+    consumed by the attempt ledger: ``base_id`` is the selected formal
+    obligation and ``variant_id`` is its actually executed compiler face.
+    Fingerprint-sealed delivery-gate receipts are never mutated here; their
+    separate stage-identity receipt is attached by the core binder.
+    """
+
+    row = dict(receipt)
+    if sealed:
+        return row
+
+    declared = _text(row.get("selected_obligation_id"))
+    if declared == variant_id:
+        row["selected_obligation_id"] = base_id
+
+    nested = row.get("identity")
+    if isinstance(nested, dict):
+        nested_row = dict(nested)
+        if _text(nested_row.get("selected_obligation_id")) == variant_id:
+            nested_row["selected_obligation_id"] = base_id
+        row["identity"] = nested_row
+    return row
+
+
+def _project_variant_stage_receipts(
+    *,
+    selected: list[dict[str, Any]],
+    compile_results: Mapping[str, Any],
+    execution_results: Mapping[str, Any],
+    gate_results: Mapping[str, Any],
+) -> tuple[
+    dict[str, Any],
+    dict[str, Any],
+    dict[str, Any],
+]:
+    """Project one concrete compiler variant onto each selected formal base.
+
+    Runtime field-constraint expansion may execute ``base__v_<digest>`` while
+    terminal accounting still owns exactly one formal ``base`` attempt.  Before
+    identity binding, preserve the concrete variant as ``executed_obligation_id``
+    and key the chosen stage chain by the formal base.  A real base execution
+    receipt always wins.  A variant may replace only the two mechanical gap
+    fillers produced after continuation/round-limit accounting; otherwise the
+    historical base-first precedence is unchanged.
+    """
+
+    selected_ids = {
+        _text(row.get("obligation_id"))
+        for row in selected
+        if isinstance(row, dict) and _text(row.get("obligation_id"))
+    }
+    compile_out = dict(compile_results) if isinstance(compile_results, Mapping) else compile_results
+    execution_out = dict(execution_results) if isinstance(execution_results, Mapping) else execution_results
+    gate_out = dict(gate_results) if isinstance(gate_results, Mapping) else gate_results
+    if not (
+        isinstance(compile_out, dict)
+        and isinstance(execution_out, dict)
+        and isinstance(gate_out, dict)
+    ):
+        # Preserve the core validator as the fail-closed type authority.
+        return compile_out, execution_out, gate_out
+
+    chosen_variant_by_base: dict[str, str] = {}
+    for raw_id, raw_receipt in list(execution_out.items()):
+        variant_id = _text(raw_id)
+        base_id = _core._base_obligation_id(variant_id)
+        if (
+            not variant_id
+            or base_id == variant_id
+            or base_id not in selected_ids
+            or base_id in chosen_variant_by_base
+            or not isinstance(raw_receipt, dict)
+        ):
+            continue
+        direct = execution_out.get(base_id)
+        if isinstance(direct, dict) and direct and not _mechanical_execution_gap(direct):
+            continue
+        chosen_variant_by_base[base_id] = variant_id
+
+    for base_id, variant_id in chosen_variant_by_base.items():
+        variant_execution = execution_out.get(variant_id)
+        if not isinstance(variant_execution, dict):
+            continue
+        execution_face = _normalize_variant_selected_identity(
+            variant_execution,
+            base_id=base_id,
+            variant_id=variant_id,
+            sealed=False,
+        )
+        declared_executed = _text(execution_face.get("executed_obligation_id"))
+        if not declared_executed:
+            declared_executed = _text(
+                _dict(execution_face.get("delivery_execution_receipt")).get(
+                    "obligation_id"
+                )
+            )
+        if not declared_executed:
+            execution_face["executed_obligation_id"] = variant_id
+        execution_out[base_id] = execution_face
+
+        # Compile may already have been copied onto the base by manual terminal
+        # accounting. Normalize that copy; otherwise project the matching
+        # variant compile receipt. This is not a sealed customer gate.
+        compile_source = compile_out.get(base_id)
+        if not isinstance(compile_source, dict) or not compile_source:
+            compile_source = compile_out.get(variant_id)
+        if isinstance(compile_source, dict) and compile_source:
+            compile_out[base_id] = _normalize_variant_selected_identity(
+                compile_source,
+                base_id=base_id,
+                variant_id=variant_id,
+                sealed=False,
+            )
+
+        # Gate-v2 is fingerprint sealed: re-key a copy for formal ownership but
+        # never rewrite its signed payload. The core binder adds a separate
+        # stage_identity_receipt carrying selected=base, executed=variant.
+        gate_source = gate_out.get(base_id)
+        if not isinstance(gate_source, dict) or not gate_source:
+            gate_source = gate_out.get(variant_id)
+        if isinstance(gate_source, dict) and gate_source:
+            is_sealed = (
+                gate_source.get("schema_version")
+                == CUSTOMER_DELIVERY_GATE_RECEIPT_SCHEMA
+            )
+            gate_out[base_id] = _normalize_variant_selected_identity(
+                gate_source,
+                base_id=base_id,
+                variant_id=variant_id,
+                sealed=is_sealed,
+            )
+
+        # Once the concrete face is projected onto the formal base, remove all
+        # sibling variant stage keys for that base from the ledger input. The
+        # executed variant identity remains explicit on the base receipt; this
+        # avoids a second unbound copy competing with the bound mainline chain.
+        for mapping in (compile_out, execution_out, gate_out):
+            for raw_key in list(mapping):
+                key = _text(raw_key)
+                if key != base_id and _core._base_obligation_id(key) == base_id:
+                    mapping.pop(raw_key, None)
+
+    return compile_out, execution_out, gate_out
+
+
+def bind_stage_receipt_identity(
+    *,
+    mainline_run: dict[str, Any],
+    selected: list[dict[str, Any]],
+    compile_results: Mapping[str, Any],
+    execution_results: Mapping[str, Any],
+    gate_results: Mapping[str, Any],
+) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+    """Bind mainline identity after losslessly projecting compiler variants."""
+
+    projected_compile, projected_execution, projected_gate = (
+        _project_variant_stage_receipts(
+            selected=selected,
+            compile_results=compile_results,
+            execution_results=execution_results,
+            gate_results=gate_results,
+        )
+    )
+    return _original_bind_stage_receipt_identity(
+        mainline_run=mainline_run,
+        selected=selected,
+        compile_results=projected_compile,
+        execution_results=projected_execution,
+        gate_results=projected_gate,
+    )
 
 
 def _occurrence_bundle(row: dict[str, Any]) -> dict[str, Any]:
@@ -310,6 +512,7 @@ def derive_campaign_terminal_status(ledger: dict[str, Any]) -> str:
 
     validated = validate_obligation_attempt_ledger(ledger)
     return _core.derive_campaign_terminal_status(validated)
+
 
 __all__ = [
     "OBLIGATION_ATTEMPT_LEDGER_SCHEMA",
