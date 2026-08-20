@@ -151,3 +151,83 @@ def test_terminal_pending_mixed_retry_and_fresh_never_exceeds_pending_count() ->
         "retry",
         "fresh-a",
     ]
+
+
+def test_variant_pending_preview_projects_to_formal_base_terminal() -> None:
+    from ai_test_asset_center.discovery_runtime_execution_terminal import (
+        _manual_terminal_receipts,
+        _terminal_pending_rows,
+    )
+
+    base = "obl-variant-pending"
+    variant = f"{base}__v_abcdef123456"
+    accounting_rows = [_accounting_row(base)]
+    experiments = {variant: _experiment(variant)}
+    plan = {
+        "plan_authority": "obligation",
+        "selected": [],
+        "pending_next_round": [{
+            "obligation_id": variant,
+            "not_in_plan_reason": "CONTINUATION_PENDING",
+        }],
+        "pending_count": 1,
+    }
+
+    pending = _terminal_pending_rows(
+        selected_rows=accounting_rows,
+        experiments_by_obligation=experiments,
+        obligation_plan=plan,
+        execution_results={},
+    )
+    assert [row["obligation_id"] for row in pending] == [base]
+    assert pending[0]["continuation_origin"] == "variant_preview_formal_projection"
+
+    compile_results = {
+        variant: {
+            "status": "COMPILED",
+            "experiment_id": f"exp_{variant}",
+        },
+    }
+    execution_results: dict[str, dict] = {}
+    _manual_terminal_receipts(
+        selected_rows=accounting_rows,
+        experiments_by_obligation=experiments,
+        obligation_plan=plan,
+        runtime_contract={
+            "status": "approved",
+            "approved_base_url": "http://example.invalid",
+        },
+        compile_results=compile_results,
+        execution_results=execution_results,
+    )
+
+    assert execution_results[base]["status"] == "DEFERRED"
+    assert execution_results[base]["reason_code"] == "OBLIGATION_BUDGET_REACHED"
+    assert execution_results[base]["not_in_plan_reason"] == "CONTINUATION_PENDING"
+
+
+def test_real_variant_terminal_execution_closes_formal_base_pending() -> None:
+    from ai_test_asset_center.discovery_runtime_execution_terminal import (
+        _terminal_pending_rows,
+    )
+
+    base = "obl-variant-complete"
+    variant = f"{base}__v_abcdef123456"
+    pending = _terminal_pending_rows(
+        selected_rows=[_accounting_row(base)],
+        experiments_by_obligation={variant: _experiment(variant)},
+        obligation_plan={
+            "plan_authority": "obligation",
+            "selected": [],
+            "pending_next_round": [{"obligation_id": variant}],
+            "pending_count": 1,
+        },
+        execution_results={
+            variant: {
+                "status": "EXECUTED",
+                "experiment_id": f"exp_{variant}",
+            },
+        },
+    )
+
+    assert pending == []
