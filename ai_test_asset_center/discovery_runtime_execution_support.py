@@ -459,6 +459,17 @@ def _consume_pending_obligation_rounds(
             if status in {"BLOCKED", "HARNESS_FAILED", "FAILED"} and reason:
                 error_counts[reason] = error_counts.get(reason, 0) + 1
 
+        # No receipt is not completion, but it is an attempted scheduling slot.
+        # Demote it behind never-attempted work so one broken executor identity
+        # cannot repeatedly monopolize the fresh queue and starve the tail.
+        unreceipted_ids = {
+            oid for oid in scheduled_ids
+            if oid and oid not in result_ids and oid not in deferred_ids
+        }
+        for oid in unreceipted_ids:
+            retry_reason_by_id[oid] = "UNRECEIPTED_SELECTED"
+            next_retry_ids.append(oid)
+
         # A selected identity is not complete merely because it was scheduled.
         # Only a returned terminal result may remove it. Missing receipts and
         # executor budget deferrals stay in the queue, while retry-eligible
@@ -506,7 +517,7 @@ def _consume_pending_obligation_rounds(
             "pending_count": len(pending_rows),
             "fresh_pending_count": len(fresh_remaining),
             "retry_pending_count": len(retry_backlog_ids),
-            "unreceipted_selected_count": len(set(scheduled_ids) - result_ids - deferred_ids),
+            "unreceipted_selected_count": len(unreceipted_ids),
             "executed_count": round_executed,
             "budget": budget,
             "round_mode": round_mode,
@@ -524,11 +535,18 @@ def _consume_pending_obligation_rounds(
             budget,
         )
 
+        # No-progress is a retry-loop guard, not a Recall gate. A fresh round
+        # earns unseen identities a scheduling opportunity even if the executor
+        # returns no terminal receipt; those identities are demoted to retry so
+        # the next fresh tail can advance.
         round_processed = len(result_ids)
-        no_progress_streak = no_progress_streak + 1 if round_processed == 0 else 0
-        if no_progress_streak >= no_progress_limit:
-            early_stop_reason = f"NO_PROGRESS_{no_progress_limit}_CONSECUTIVE_ROUNDS"
-            break
+        if round_mode == "fresh" or fresh_remaining:
+            no_progress_streak = 0
+        else:
+            no_progress_streak = no_progress_streak + 1 if round_processed == 0 else 0
+            if no_progress_streak >= no_progress_limit:
+                early_stop_reason = f"NO_PROGRESS_{no_progress_limit}_CONSECUTIVE_ROUNDS"
+                break
 
         # Repeat-plan/error guards are retry-loop guards, not Recall gates.
         # Different fresh identities may legitimately fail with the same reason;
