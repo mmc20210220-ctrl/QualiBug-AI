@@ -3,7 +3,8 @@
 Historical helpers remain re-exported from
 ``discovery_runtime_execution_support_base``. Multi-round continuation lives in
 ``discovery_continuation_authority``; this facade seals the first exact fresh
-identity set from full planning inputs before handing control to that engine.
+identity set before execution and projects the final bounded preview only from
+exact resume authorities.
 """
 from __future__ import annotations
 
@@ -17,6 +18,9 @@ for _name in dir(_base):
     if not _name.startswith("__"):
         globals().setdefault(_name, getattr(_base, _name))
 
+from .continuation_preview_authority import (  # noqa: E402
+    synchronize_continuation_preview,
+)
 from .discovery_continuation_authority import (  # noqa: E402,F401
     _consume_pending_obligation_rounds as _consume_exact_pending_obligation_rounds,
     _continuation_obligation_universe,
@@ -42,14 +46,14 @@ def _consume_pending_obligation_rounds(
     execute_batch,
     exclude_obligation_ids: set[str] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """Seal exact first fresh membership, then run continuation authority."""
+    """Seal exact first fresh membership, run continuation, then bound preview."""
     seeded_plan = seed_initial_fresh_pending_authority(
         obligation_plan=obligation_plan,
         obligations=obligations,
         experiments_by_obligation=experiments_by_obligation,
         behavior_ir=behavior_ir,
     )
-    return _consume_exact_pending_obligation_rounds(
+    batches, final_plan = _consume_exact_pending_obligation_rounds(
         obligation_plan=seeded_plan,
         obligations=obligations,
         experiments_by_obligation=experiments_by_obligation,
@@ -64,6 +68,7 @@ def _consume_pending_obligation_rounds(
         execute_batch=execute_batch,
         exclude_obligation_ids=exclude_obligation_ids,
     )
+    return batches, synchronize_continuation_preview(final_plan)
 
 
 def _text(value: Any) -> str:
