@@ -66,13 +66,13 @@ def complete_pending_continuation_rows(
     experiments_by_obligation: dict[str, dict[str, Any]],
     exclude_obligation_ids: set[str] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """Restore identities omitted only because the public pending view was capped.
+    """Restore only the planner-declared portion omitted by the public cap.
 
-    In coverage-unit mode one executable representative is restored per omitted
-    unit, preserving the unit budget semantics.  In obligation mode every
-    omitted executable obligation is restored.  Selected work is never re-added
-    unless it is already present in the pending view (for example executor
-    ``budget_deferred`` rows appended by the caller).
+    ``pending_count`` is the generic continuation authority's declared size;
+    the bounded public preview may omit some of those identities, but generic
+    reconstruction must not widen that declaration to every other executable
+    compiled candidate. Exact retry/deferred authorities are handled by their
+    own pools in the execution-support layer.
     """
     plan = _dict(obligation_plan)
     visible = [
@@ -82,17 +82,21 @@ def complete_pending_continuation_rows(
     ]
     declared_pending = int(plan.get("pending_count") or len(visible))
     declared_truncated = int(plan.get("pending_truncated") or 0)
-    needs_rebuild = declared_truncated > 0 or declared_pending > len(visible)
+    declared_restore_budget = max(0, declared_pending - len(visible))
+    needs_rebuild = declared_truncated > 0 or declared_restore_budget > 0
     receipt = {
         "schema_version": "qualibug.pending-continuation-authority.v1",
         "status": "PASS" if not needs_rebuild else "REBUILT",
         "visible_pending_count": len(visible),
         "declared_pending_count": declared_pending,
         "declared_truncated_count": declared_truncated,
+        "declared_restore_budget": declared_restore_budget,
+        "eligible_omitted_count": 0,
+        "restore_overflow_count": 0,
         "restored_count": 0,
         "authority": "compiled_unprocessed_identity",
     }
-    if not needs_rebuild:
+    if not needs_rebuild or declared_restore_budget <= 0:
         receipt["continuation_count"] = len(visible)
         return visible, receipt
 
@@ -122,7 +126,7 @@ def complete_pending_continuation_rows(
         for row in visible
         if _text(row.get("obligation_id"))
     }
-    restored: list[dict[str, Any]] = []
+    eligible_restored: list[dict[str, Any]] = []
     planning_authority = _text(plan.get("plan_authority")).lower()
 
     if planning_authority == "coverage_unit":
@@ -155,7 +159,7 @@ def complete_pending_continuation_rows(
             representative = _representative(grouped[unit_id])
             if representative is None:
                 continue
-            restored.append({
+            eligible_restored.append({
                 "obligation_id": _text(representative.get("obligation_id")),
                 "coverage_unit_id": unit_id,
                 "risk_family": _text(representative.get("risk_family")),
@@ -165,7 +169,7 @@ def complete_pending_continuation_rows(
         for obligation in sorted(
             unscoped, key=lambda row: _text(row.get("obligation_id"))
         ):
-            restored.append({
+            eligible_restored.append({
                 "obligation_id": _text(obligation.get("obligation_id")),
                 "risk_family": _text(obligation.get("risk_family")),
                 "not_in_plan_reason": "CONTINUATION_VIEW_TRUNCATED",
@@ -179,7 +183,7 @@ def complete_pending_continuation_rows(
             experiment = experiments.get(oid) or {}
             if not _continuation_eligible(obligation, experiment):
                 continue
-            restored.append({
+            eligible_restored.append({
                 "obligation_id": oid,
                 "risk_family": _text(obligation.get("risk_family")),
                 "coverage_unit_id": _text(obligation.get("coverage_unit_id")),
@@ -187,9 +191,14 @@ def complete_pending_continuation_rows(
                 "continuation_origin": "reconstructed_obligation",
             })
 
+    restored = eligible_restored[:declared_restore_budget]
     result = [*visible, *restored]
     receipt.update({
+        "eligible_omitted_count": len(eligible_restored),
         "restored_count": len(restored),
+        "restore_overflow_count": max(
+            0, len(eligible_restored) - len(restored)
+        ),
         "continuation_count": len(result),
     })
     return result, receipt
