@@ -217,8 +217,10 @@ def _terminal_pending_rows(
             })
 
     # ``pending_count`` is the execution authority's exact outstanding count;
-    # never let terminal reconstruction invent more fresh work than that count.
-    for row in restored[:missing_from_preview]:
+    # retry rows already recovered above consume that same count.  Reconstruct
+    # only the remaining fresh slots so mixed fresh+retry queues cannot over-seal.
+    fresh_restore_budget = max(0, declared_pending - len(result))
+    for row in restored[:fresh_restore_budget]:
         oid = _text(row.get("obligation_id"))
         if oid and oid not in result_ids:
             result.append(row)
