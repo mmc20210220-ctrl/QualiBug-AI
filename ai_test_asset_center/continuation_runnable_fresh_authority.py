@@ -1,9 +1,9 @@
 """Keep unavailable fresh work authoritative without starving runnable retries.
 
 Fresh continuation work has scheduling priority, but an exact fresh identity
-whose current experiment is absent/unusable cannot consume a round. Such rows
-must remain in the resume authority while being held out of the active queue so
-runnable retry work can still execute in the same continuation attempt.
+whose current experiment is absent/unusable cannot consume a round. Only when a
+retry identity is currently runnable do we hold those unavailable fresh rows out
+of the active queue; otherwise the established engine path remains unchanged.
 """
 from __future__ import annotations
 
@@ -42,7 +42,7 @@ def hold_unrunnable_fresh(
     obligation_plan: dict[str, Any],
     experiments_by_obligation: dict[str, dict[str, Any]],
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    """Return an ephemeral active plan plus exact fresh rows held for resume."""
+    """Hold unavailable fresh rows only when they would starve runnable retry."""
     plan = dict(_dict(obligation_plan))
     if "fresh_pending_pool" not in plan:
         return plan, []
@@ -52,6 +52,17 @@ def hold_unrunnable_fresh(
         for key, value in _dict(experiments_by_obligation).items()
         if _text(key) and isinstance(value, dict)
     }
+    runnable_retry_exists = any(
+        _text(row.get("obligation_id"))
+        and _compile_status(
+            experiments.get(_text(row.get("obligation_id")))
+        ) in _USABLE_CONTINUATION_STATUSES
+        for row in _list(plan.get("blocked_retry_pool"))
+        if isinstance(row, dict)
+    )
+    if not runnable_retry_exists:
+        return plan, []
+
     original_fresh = [
         dict(row)
         for row in _list(plan.get("fresh_pending_pool"))
@@ -99,9 +110,6 @@ def restore_unrunnable_fresh(
         for row in _list(plan.get("fresh_pending_pool"))
         if isinstance(row, dict) and _text(row.get("obligation_id"))
     ]
-    active_by_id = {
-        _text(row.get("obligation_id")): row for row in active_final
-    }
     held_by_id = {
         _text(row.get("obligation_id")): row for row in held
     }
