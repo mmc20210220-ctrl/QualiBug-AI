@@ -40,8 +40,9 @@ def validate_continuation_pool_integrity(
     """Return normalized plan and whether exact resume authority is usable.
 
     Missing count fields are legacy metadata gaps and can be reconstructed from
-    the list itself. A present count mismatch is not recoverable from count
-    alone and therefore fails closed.
+    a structurally valid list itself. A present count mismatch, a non-list pool,
+    or a malformed pool row is not recoverable without guessing identity and
+    therefore fails closed.
     """
     plan = dict(obligation_plan) if isinstance(obligation_plan, dict) else {}
     checks: list[dict[str, Any]] = []
@@ -52,7 +53,23 @@ def validate_continuation_pool_integrity(
         count_present = count_key in plan
         if not field_present and not count_present:
             continue
-        rows = _rows(plan.get(pool_key))
+
+        raw_pool = plan.get(pool_key)
+        structural_failure = ""
+        invalid_row_count = 0
+        if field_present and not isinstance(raw_pool, list):
+            structural_failure = "POOL_TYPE_INVALID"
+        elif isinstance(raw_pool, list):
+            invalid_row_count = sum(
+                1
+                for row in raw_pool
+                if not isinstance(row, dict)
+                or not _text(row.get("obligation_id"))
+            )
+            if invalid_row_count:
+                structural_failure = "POOL_ROW_INVALID"
+
+        rows = _rows(raw_pool)
         unique_ids = _unique_ids(rows)
         actual_count = len(unique_ids)
         declared_raw = plan.get(count_key)
@@ -62,18 +79,33 @@ def validate_continuation_pool_integrity(
             declared_count = -1
 
         status = "PASS"
-        if count_present and declared_count != actual_count:
+        failure_kind = ""
+        if structural_failure:
             status = "FAIL"
+            failure_kind = structural_failure
             failures.append({
                 "pool": pool_key,
                 "count_field": count_key,
+                "failure_kind": structural_failure,
+                "declared_count": declared_count,
+                "actual_unique_count": actual_count,
+                "invalid_row_count": invalid_row_count,
+                "actual_type": type(raw_pool).__name__,
+            })
+        elif count_present and declared_count != actual_count:
+            status = "FAIL"
+            failure_kind = "COUNT_MISMATCH"
+            failures.append({
+                "pool": pool_key,
+                "count_field": count_key,
+                "failure_kind": "COUNT_MISMATCH",
                 "declared_count": declared_count,
                 "actual_unique_count": actual_count,
             })
         elif not count_present:
-            # A complete list without a count is an older metadata shape, not
-            # evidence of truncation. Normalize it so every later persistence
-            # point has a checkable cardinality assertion.
+            # A complete, structurally valid list without a count is an older
+            # metadata shape, not evidence of truncation. Normalize it so every
+            # later persistence point has a checkable cardinality assertion.
             plan[count_key] = actual_count
             status = "NORMALIZED_LEGACY_COUNT"
 
@@ -81,8 +113,10 @@ def validate_continuation_pool_integrity(
             "pool": pool_key,
             "count_field": count_key,
             "status": status,
+            "failure_kind": failure_kind,
             "declared_count": declared_count,
             "actual_unique_count": actual_count,
+            "invalid_row_count": invalid_row_count,
         })
 
     receipt = {
@@ -91,12 +125,20 @@ def validate_continuation_pool_integrity(
         "checks": checks,
         "failure_count": len(failures),
         "failures": failures,
-        "authority": "exact_resume_pool_cardinality",
+        "authority": "exact_resume_pool_cardinality_and_structure",
     }
     plan["continuation_pool_integrity_receipt"] = receipt
     if failures:
-        failed_pools = ",".join(row["pool"] for row in failures)
-        reason = f"CONTINUATION_AUTHORITY_COUNT_MISMATCH:{failed_pools}"
+        failed_pools = ",".join(dict.fromkeys(row["pool"] for row in failures))
+        has_structural_failure = any(
+            row.get("failure_kind") in {"POOL_TYPE_INVALID", "POOL_ROW_INVALID"}
+            for row in failures
+        )
+        reason = (
+            f"CONTINUATION_AUTHORITY_POOL_INVALID:{failed_pools}"
+            if has_structural_failure
+            else f"CONTINUATION_AUTHORITY_COUNT_MISMATCH:{failed_pools}"
+        )
         plan["early_stop_reason"] = reason
         plan["stop_condition"] = reason
         plan["continuation_authority_corrupt"] = True
