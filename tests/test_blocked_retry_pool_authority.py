@@ -67,7 +67,7 @@ def test_blocked_retry_resume_preserves_more_than_100_rows_at_round_limit_one() 
         ),
     )
 
-    assert final_plan["stop_condition"] == "PENDING_NEXT_ROUND_SKIPPED_ROUND_LIMIT_ONE"
+    assert final_plan["early_stop_reason"] == "PENDING_NEXT_ROUND_SKIPPED_ROUND_LIMIT_ONE"
     assert final_plan["blocked_retry_pool_count"] == _RETRY_COUNT
     assert [row["obligation_id"] for row in final_plan["blocked_retry_pool"]] == ids
     executor.clear_continuation_retry_receipts(campaign_id)
