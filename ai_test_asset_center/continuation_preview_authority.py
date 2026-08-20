@@ -92,6 +92,12 @@ def synchronize_continuation_preview(
         "continuation_outstanding_count": total,
         "continuation_preview_authority": "exact_fresh_deferred_retry_pools",
     })
+    early_stop = _text(plan.get("early_stop_reason"))
+    if early_stop:
+        # Early continuation gates are execution facts. Never leave a stale
+        # planner stop condition (commonly "budget_exhausted") beside a more
+        # specific round-limit/budget-zero/no-continuation receipt.
+        plan["stop_condition"] = early_stop
     return plan
 
 
