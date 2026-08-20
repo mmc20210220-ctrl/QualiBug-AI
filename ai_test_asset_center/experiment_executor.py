@@ -328,11 +328,15 @@ def consume_continuation_execution_receipts(
             return False
         expected_experiment_id = allowed.get(oid, "")
         actual_experiment_id = _text(row.get("experiment_id"))
-        return (
-            not expected_experiment_id
-            or not actual_experiment_id
-            or expected_experiment_id == actual_experiment_id
-        )
+        if not expected_experiment_id:
+            return True
+        # A domain with an exact experiment id may consume only that exact
+        # receipt. Treating an empty actual id as a wildcard lets a runtime
+        # recompile/expansion steal another domain's outcome for the same
+        # obligation id. Selected/deferred/unreceipted rows already inherit the
+        # plan-row experiment id during capture, so empty here is genuinely
+        # unbound evidence and must remain for its owning/legacy consumer.
+        return bool(actual_experiment_id) and expected_experiment_id == actual_experiment_id
 
     with _CONTINUATION_RECEIPT_LOCK:
         if close_capture:
