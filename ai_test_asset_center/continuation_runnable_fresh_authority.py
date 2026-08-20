@@ -2,7 +2,7 @@
 
 Fresh continuation work has scheduling priority, but an exact fresh identity
 whose current experiment is absent/unusable cannot consume a round. Only when a
-retry identity is currently runnable do we hold those unavailable fresh rows out
+retry identity is *planner-runnable* do we hold those unavailable fresh rows out
 of the active queue; otherwise the established engine path remains unchanged.
 """
 from __future__ import annotations
@@ -12,12 +12,11 @@ from typing import Any
 from .continuation_preview_authority import synchronize_continuation_preview
 
 
-_USABLE_CONTINUATION_STATUSES = {
-    "COMPILED",
-    "BLOCKED",
-    "BLOCKED_MISSING_BINDING",
-    "HARNESS_FAILED",
-}
+# ``adaptive_discovery_planner.plan_obligation_round`` admits only COMPILED
+# experiment receipts. The exact engine may retain BLOCKED experiment rows as
+# resume authority, but those rows are not runnable until some recompile step
+# turns them back into COMPILED. Do not let them starve fresh work.
+_PLANNER_RUNNABLE_STATUS = "COMPILED"
 
 
 def _dict(value: Any) -> dict[str, Any]:
@@ -38,6 +37,10 @@ def _compile_status(experiment: Any) -> str:
     return _text(receipt.get("status") or exp.get("compile_status")).upper()
 
 
+def _planner_runnable(experiment: Any) -> bool:
+    return _compile_status(experiment) == _PLANNER_RUNNABLE_STATUS
+
+
 def hold_unrunnable_fresh(
     obligation_plan: dict[str, Any],
     experiments_by_obligation: dict[str, dict[str, Any]],
@@ -54,9 +57,9 @@ def hold_unrunnable_fresh(
     }
     runnable_retry_exists = any(
         _text(row.get("obligation_id"))
-        and _compile_status(
+        and _planner_runnable(
             experiments.get(_text(row.get("obligation_id")))
-        ) in _USABLE_CONTINUATION_STATUSES
+        )
         for row in _list(plan.get("blocked_retry_pool"))
         if isinstance(row, dict)
     )
@@ -72,7 +75,7 @@ def hold_unrunnable_fresh(
     held: list[dict[str, Any]] = []
     for row in original_fresh:
         oid = _text(row.get("obligation_id"))
-        if _compile_status(experiments.get(oid)) in _USABLE_CONTINUATION_STATUSES:
+        if _planner_runnable(experiments.get(oid)):
             runnable.append(row)
         else:
             held.append(row)
