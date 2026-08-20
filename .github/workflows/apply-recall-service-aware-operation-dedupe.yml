@@ -1,3 +1,4 @@
+# Synchronize PR snapshot with base verifier.
 name: Apply recall service-aware operation dedupe fix
 
 on:
