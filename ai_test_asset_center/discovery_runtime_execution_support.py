@@ -1,9 +1,9 @@
 """Compatibility facade for discovery runtime execution support.
 
 Historical helpers remain re-exported from
-``discovery_runtime_execution_support_base``.  Multi-round continuation lives
-in ``discovery_continuation_authority`` so preview formatting and exact resume
-authority cannot drift inside the compatibility layer.
+``discovery_runtime_execution_support_base``. Multi-round continuation lives in
+``discovery_continuation_authority``; this facade seals the first exact fresh
+identity set from full planning inputs before handing control to that engine.
 """
 from __future__ import annotations
 
@@ -17,11 +17,53 @@ for _name in dir(_base):
     if not _name.startswith("__"):
         globals().setdefault(_name, getattr(_base, _name))
 
-# Override only the continuation authority with the lossless implementation.
 from .discovery_continuation_authority import (  # noqa: E402,F401
-    _consume_pending_obligation_rounds,
+    _consume_pending_obligation_rounds as _consume_exact_pending_obligation_rounds,
     _continuation_obligation_universe,
 )
+from .initial_fresh_pending_authority import (  # noqa: E402
+    seed_initial_fresh_pending_authority,
+)
+
+
+def _consume_pending_obligation_rounds(
+    *,
+    obligation_plan: dict[str, Any],
+    obligations: list[dict[str, Any]],
+    experiments_by_obligation: dict[str, dict[str, Any]],
+    behavior_ir: dict[str, Any],
+    root: Any,
+    project: str,
+    base_url: str,
+    runtime_contract: dict[str, Any],
+    mainline_run: dict[str, Any],
+    campaign_id: str,
+    automatic_round_limit: int,
+    execute_batch,
+    exclude_obligation_ids: set[str] | None = None,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Seal exact first fresh membership, then run continuation authority."""
+    seeded_plan = seed_initial_fresh_pending_authority(
+        obligation_plan=obligation_plan,
+        obligations=obligations,
+        experiments_by_obligation=experiments_by_obligation,
+        behavior_ir=behavior_ir,
+    )
+    return _consume_exact_pending_obligation_rounds(
+        obligation_plan=seeded_plan,
+        obligations=obligations,
+        experiments_by_obligation=experiments_by_obligation,
+        behavior_ir=behavior_ir,
+        root=root,
+        project=project,
+        base_url=base_url,
+        runtime_contract=runtime_contract,
+        mainline_run=mainline_run,
+        campaign_id=campaign_id,
+        automatic_round_limit=automatic_round_limit,
+        execute_batch=execute_batch,
+        exclude_obligation_ids=exclude_obligation_ids,
+    )
 
 
 def _text(value: Any) -> str:
