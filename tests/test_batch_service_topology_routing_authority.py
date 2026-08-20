@@ -98,3 +98,47 @@ def test_invalid_declared_topology_reaches_fail_closed_router(monkeypatch) -> No
     # Invalid topology must not be silently converted into a single-service
     # skip. The public per-experiment router owns the explicit BLOCKED receipt.
     assert seen["service"] == ""
+
+
+def test_object_service_rows_feed_normalized_urls_to_binding_resolver(monkeypatch) -> None:
+    monkeypatch.setattr(
+        topology_guard,
+        "load_guarded_project_service_topology",
+        lambda project, root: (
+            {
+                "alpha": {
+                    "approved_base_url": "http://127.0.0.1:39117",
+                    "actor_token_keys": {"actor-a": "secret:alpha:a"},
+                },
+                "beta": {
+                    "approved_base_url": "http://127.0.0.1:48763/api",
+                    "actor_token_keys": {"actor-b": "secret:beta:b"},
+                },
+            },
+            {"status": "VALID"},
+        ),
+    )
+
+    urls = batch._source_truthful_service_base_urls("demo", Path("."))
+
+    assert urls == {
+        "alpha": "http://127.0.0.1:39117",
+        "beta": "http://127.0.0.1:48763/api",
+    }
+    assert all(not value.lstrip().startswith("{") for value in urls.values())
+
+
+def test_invalid_topology_never_invents_binding_resolver_urls(monkeypatch) -> None:
+    monkeypatch.setattr(
+        topology_guard,
+        "load_guarded_project_service_topology",
+        lambda project, root: (
+            {},
+            {
+                "status": "BLOCKED",
+                "reason_code": "BLOCKED_SERVICE_TOPOLOGY_INVALID",
+            },
+        ),
+    )
+
+    assert batch._source_truthful_service_base_urls("demo", Path(".")) == {}
