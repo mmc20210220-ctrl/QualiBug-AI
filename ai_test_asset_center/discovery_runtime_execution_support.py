@@ -24,6 +24,10 @@ from .continuation_pool_integrity import (  # noqa: E402
 from .continuation_preview_authority import (  # noqa: E402
     synchronize_continuation_preview,
 )
+from .continuation_selected_identity_authority import (  # noqa: E402
+    continuation_execute_batch_view,
+    install_initial_capture_selected_identity_bridge,
+)
 from .discovery_continuation_authority import (  # noqa: E402,F401
     _consume_pending_obligation_rounds as _consume_exact_pending_obligation_rounds,
     _continuation_obligation_universe,
@@ -35,6 +39,12 @@ from .initial_fresh_pending_authority import (  # noqa: E402
 
 def _text(value: Any) -> str:
     return str(value or "").strip()
+
+
+def _prepare_execution_ir(*, plan: Any, expansion: dict[str, Any]):
+    """Install selected-identity capture before the first business batch."""
+    install_initial_capture_selected_identity_bridge()
+    return _base._prepare_execution_ir(plan=plan, expansion=expansion)
 
 
 def _prepare_continuation_attempt(
@@ -182,7 +192,10 @@ def _consume_pending_obligation_rounds(
         mainline_run=mainline_run,
         campaign_id=campaign_id,
         automatic_round_limit=automatic_round_limit,
-        execute_batch=execute_batch,
+        # The execution batch remains unchanged for ledger/delivery persistence;
+        # only the continuation state machine's ``get('results')`` correlation
+        # is projected onto selected_obligation_id.
+        execute_batch=continuation_execute_batch_view(execute_batch),
         exclude_obligation_ids=exclude_obligation_ids,
     )
     return batches, synchronize_continuation_preview(final_plan)
