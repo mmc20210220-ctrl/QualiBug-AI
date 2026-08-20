@@ -17,7 +17,8 @@ transport kernel runs. Single-service experiments are routed to the exact
 ``multi_service.services`` target; graph-backed multi-service experiments reuse
 the established approved-target graph authority; non-graph cross-service plans
 and invalid declared topologies fail closed instead of being sent to one
-arbitrary base URL.
+arbitrary base URL. URL-shaped OpenAPI service refs are canonicalized only by an
+exact, uniquely-owned topology URL match on a routing-only IR projection.
 """
 from __future__ import annotations
 
@@ -25,6 +26,9 @@ from pathlib import Path
 from typing import Any
 
 from . import _experiment_executor_mainline_mechanics as _core
+from .service_ref_canonicalization import (
+    canonicalize_behavior_ir_service_refs,
+)
 from .service_topology_config_guard import (
     load_guarded_project_service_topology,
 )
@@ -133,9 +137,13 @@ def execute_one_experiment(*args: Any, **kwargs: Any) -> dict[str, Any]:
             },
         )
 
+    routing_behavior_ir = canonicalize_behavior_ir_service_refs(
+        behavior_ir,
+        topology,
+    )
     route = resolve_experiment_execution_route(
         experiment=experiment,
-        behavior_ir=behavior_ir,
+        behavior_ir=routing_behavior_ir,
         base_url=original_base_url,
         runtime_contract=runtime_contract,
         topology=topology,
