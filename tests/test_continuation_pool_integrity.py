@@ -114,3 +114,41 @@ def test_legacy_pool_without_count_is_safely_normalized() -> None:
     assert plan["budget_deferred_pool_count"] == 0
     checks = plan["continuation_pool_integrity_receipt"]["checks"]
     assert all(row["status"] == "NORMALIZED_LEGACY_COUNT" for row in checks)
+
+
+def test_non_list_exact_pool_fails_even_when_declared_count_is_zero() -> None:
+    from ai_test_asset_center.continuation_pool_integrity import (
+        validate_continuation_pool_integrity,
+    )
+
+    plan, ok = validate_continuation_pool_integrity({
+        "fresh_pending_pool": {"obligation_id": "silently-lost"},
+        "fresh_pending_pool_count": 0,
+    })
+
+    assert ok is False
+    assert plan["stop_condition"] == (
+        "CONTINUATION_AUTHORITY_POOL_INVALID:fresh_pending_pool"
+    )
+    failure = plan["continuation_pool_integrity_receipt"]["failures"][0]
+    assert failure["failure_kind"] == "POOL_TYPE_INVALID"
+    assert failure["actual_type"] == "dict"
+
+
+def test_exact_pool_row_without_obligation_id_fails_closed() -> None:
+    from ai_test_asset_center.continuation_pool_integrity import (
+        validate_continuation_pool_integrity,
+    )
+
+    plan, ok = validate_continuation_pool_integrity({
+        "fresh_pending_pool": [{"risk_family": "validation"}],
+        "fresh_pending_pool_count": 0,
+    })
+
+    assert ok is False
+    assert plan["stop_condition"] == (
+        "CONTINUATION_AUTHORITY_POOL_INVALID:fresh_pending_pool"
+    )
+    failure = plan["continuation_pool_integrity_receipt"]["failures"][0]
+    assert failure["failure_kind"] == "POOL_ROW_INVALID"
+    assert failure["invalid_row_count"] == 1
