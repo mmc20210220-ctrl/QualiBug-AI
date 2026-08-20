@@ -83,7 +83,17 @@ def complete_pending_continuation_rows(
     ]
     declared_pending = int(plan.get("pending_count") or len(visible))
     declared_truncated = int(plan.get("pending_truncated") or 0)
-    declared_restore_budget = max(0, declared_pending - len(visible))
+    # ``pending_next_round`` is a mutable preview. The executor may append
+    # selected-but-budget-deferred rows to it without changing the planner's
+    # original pending_count. In that case visible length can grow past the
+    # declared count while ``pending_truncated`` still names the exact number of
+    # planner-pending identities hidden by the original preview cap. Preserve
+    # the larger authority instead of letting preview growth erase that tail.
+    declared_restore_budget = max(
+        0,
+        declared_pending - len(visible),
+        declared_truncated,
+    )
     needs_rebuild = declared_truncated > 0 or declared_restore_budget > 0
     receipt = {
         "schema_version": "qualibug.pending-continuation-authority.v1",
