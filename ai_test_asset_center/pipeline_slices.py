@@ -34,26 +34,33 @@ def _behavior_slice_settings() -> dict[str, int]:
     except Exception:
         budget, round_number, round_limit = 15, 1, 8
 
-    # Per-round budget remains a starting value and is auto-scaled to the
-    # discovered compiled pool later in planning. Automatic continuation uses
-    # the absolute safety ceiling rather than the historical policy default of
-    # eight rounds: the runtime already exits immediately when the pending queue
-    # is empty and has independent no-progress / repeated-plan / repeated-error
-    # guards for retry-only loops, so a small default round count only creates a
-    # hidden Recall ceiling for large systems. An explicit environment value is
-    # still a hard operator override and may intentionally lower the ceiling.
-    explicit_round_limit = str(
-        os.environ.get("QUALIBUG_INCREMENTAL_DISCOVERY_ROUND_LIMIT") or ""
-    ).strip()
-    resolved_round_limit = (
-        _as_int(explicit_round_limit, 8, 1, _ABS_MAX_ROUND_LIMIT)
-        if explicit_round_limit
-        else _ABS_MAX_ROUND_LIMIT
-    )
+    # These are the PRE-POOL starting values. The real per-round budget and
+    # round limit may be auto-scaled by callers that possess the complete pool,
+    # but the configured operator/policy value remains the default authority.
+    # Never replace it with the absolute safety ceiling merely to increase
+    # Recall: continuation must remain lossless under the configured limit.
     return {
-        "slice_budget": _as_int(os.environ.get("QUALIBUG_MAX_BEHAVIOR_SLICES_PER_ROUND", budget), 15, 1, _ABS_MAX_SLICE_BUDGET),
-        "round_number": _as_int(os.environ.get("QUALIBUG_DISCOVERY_ROUND", round_number), 1, 1, 24),
-        "round_limit": resolved_round_limit,
+        "slice_budget": _as_int(
+            os.environ.get("QUALIBUG_MAX_BEHAVIOR_SLICES_PER_ROUND", budget),
+            15,
+            1,
+            _ABS_MAX_SLICE_BUDGET,
+        ),
+        "round_number": _as_int(
+            os.environ.get("QUALIBUG_DISCOVERY_ROUND", round_number),
+            1,
+            1,
+            24,
+        ),
+        "round_limit": _as_int(
+            os.environ.get(
+                "QUALIBUG_INCREMENTAL_DISCOVERY_ROUND_LIMIT",
+                round_limit,
+            ),
+            8,
+            1,
+            _ABS_MAX_ROUND_LIMIT,
+        ),
     }
 
 
@@ -66,21 +73,13 @@ def _auto_scale_slice_budget(pool_size: int) -> int:
     pool is actually consumed instead of starving at 15/round — no env tuning.
     Target: drain the pool in ~2 rounds, bounded by _ABS_MAX_SLICE_BUDGET.
     """
-    import math
-
     if pool_size <= 0:
         return 15
     return max(15, min(_ABS_MAX_SLICE_BUDGET, pool_size))
 
 
 def _auto_scale_round_limit(pool_size: int, budget: int) -> int:
-    """Automatic round count sized to actually drain ``pool_size`` at ``budget``/round.
-
-    Kept for legacy schedulers that know the complete pool size at scheduling
-    time. The mainline campaign now uses ``_ABS_MAX_ROUND_LIMIT`` as its
-    automatic ceiling and exits as soon as its lossless pending queue drains;
-    explicit environment configuration remains the only hard lower override.
-    """
+    """Automatic round count sized to actually drain ``pool_size`` at ``budget``/round."""
     if pool_size <= 0 or budget <= 0:
         return 8
     needed = math.ceil(pool_size / budget) + 1
