@@ -70,6 +70,9 @@ def test_round_limit_recomputes_preview_truncation_from_current_queue(monkeypatc
     assert "3" in final_plan["pending_truncation_reason"]
     assert "2" in final_plan["pending_truncation_reason"]
     assert final_plan["continuation_outstanding_count"] == 3
+    assert final_plan["stop_condition"] == (
+        "PENDING_NEXT_ROUND_SKIPPED_ROUND_LIMIT_ONE"
+    )
     executor.clear_continuation_retry_receipts(campaign_id)
 
 
@@ -104,5 +107,43 @@ def test_round_limit_clears_stale_truncation_when_current_queue_fits() -> None:
     ]
     assert final_plan["pending_truncated"] == 0
     assert final_plan["pending_truncation_reason"] == ""
+    assert final_plan["continuation_outstanding_count"] == 1
+    assert final_plan["stop_condition"] == (
+        "PENDING_NEXT_ROUND_SKIPPED_ROUND_LIMIT_ONE"
+    )
+    executor.clear_continuation_retry_receipts(campaign_id)
+
+
+def test_budget_zero_early_stop_replaces_stale_planner_stop_condition() -> None:
+    import ai_test_asset_center.discovery_runtime_execution_support as support
+    import ai_test_asset_center.experiment_executor as executor
+
+    campaign_id = "campaign-preview-metadata-budget-zero"
+    executor.clear_continuation_retry_receipts(campaign_id)
+    plan = _plan(["only"], stale_truncated=0)
+    plan["budget"] = 0
+    plan["stop_condition"] = "budget_exhausted"
+
+    _, final_plan = support._consume_pending_obligation_rounds(
+        obligation_plan=plan,
+        obligations=[_obl("only")],
+        experiments_by_obligation={"only": _exp("only")},
+        behavior_ir={"operations": []},
+        root=".",
+        project="p",
+        base_url="http://example.invalid",
+        runtime_contract={},
+        mainline_run={},
+        campaign_id=campaign_id,
+        automatic_round_limit=16,
+        execute_batch=lambda rows, **kwargs: (_ for _ in ()).throw(
+            AssertionError("budget-zero continuation must not execute")
+        ),
+    )
+
+    assert final_plan["stop_condition"] == (
+        "PENDING_NEXT_ROUND_SKIPPED_PLAN_BUDGET_ZERO"
+    )
+    assert final_plan["early_stop_reason"] == final_plan["stop_condition"]
     assert final_plan["continuation_outstanding_count"] == 1
     executor.clear_continuation_retry_receipts(campaign_id)
