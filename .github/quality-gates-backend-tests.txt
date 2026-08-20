@@ -6,6 +6,7 @@ tests/test_backend_main_jwt_identity_policy.py
 tests/test_core_engine_evidence_truthfulness.py
 tests/test_observer_evidence_truthfulness.py
 tests/test_customer_delivery_gate_v2_cleanup.py
+tests/test_reproduction_receipt_non_http_schema.py
 tests/test_family_experiment_protocols.py
 tests/test_typed_observer_authorization.py
 tests/test_nonproduction_write_contract.py
