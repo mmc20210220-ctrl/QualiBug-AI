@@ -6,8 +6,16 @@ from . import behavior_ir_mainline_base as _base
 from .compensation_derivation_authority import install_compensation_derivation_authority
 from .database_body_reference_projection import project_database_body_reference_relations
 from .openapi_security_authority import project_operation_security_provenance
+from .operation_service_ownership_authority import (
+    install_operation_service_ownership_authority,
+)
 
 install_compensation_derivation_authority(_base._core)
+# Service ownership is transport identity. Install the source-backed authority
+# before any public Behavior IR build so unfamiliar source filenames do not
+# silently lose their owning service merely because they do not follow a
+# benchmark-era ``*_service.json`` convention.
+install_operation_service_ownership_authority(_base._core)
 
 for _name in dir(_base):
     if not _name.startswith("__"):
