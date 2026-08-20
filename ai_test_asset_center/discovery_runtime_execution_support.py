@@ -24,6 +24,10 @@ from .continuation_pool_integrity import (  # noqa: E402
 from .continuation_preview_authority import (  # noqa: E402
     synchronize_continuation_preview,
 )
+from .continuation_runnable_fresh_authority import (  # noqa: E402
+    hold_unrunnable_fresh,
+    restore_unrunnable_fresh,
+)
 from .continuation_selected_identity_authority import (  # noqa: E402
     continuation_execute_batch_view,
     install_initial_capture_selected_identity_bridge,
@@ -175,13 +179,17 @@ def _consume_pending_obligation_rounds(
         experiments_by_obligation=experiments_by_obligation,
         behavior_ir=behavior_ir,
     )
+    active_plan, held_unrunnable_fresh = hold_unrunnable_fresh(
+        seeded_plan,
+        experiments_by_obligation,
+    )
     engine_obligations = _planner_safe_continuation_obligations(
-        obligation_plan=seeded_plan,
+        obligation_plan=active_plan,
         obligations=obligations,
         experiments_by_obligation=experiments_by_obligation,
     )
     batches, final_plan = _consume_exact_pending_obligation_rounds(
-        obligation_plan=seeded_plan,
+        obligation_plan=active_plan,
         obligations=engine_obligations,
         experiments_by_obligation=experiments_by_obligation,
         behavior_ir=behavior_ir,
@@ -198,7 +206,11 @@ def _consume_pending_obligation_rounds(
         execute_batch=continuation_execute_batch_view(execute_batch),
         exclude_obligation_ids=exclude_obligation_ids,
     )
-    return batches, synchronize_continuation_preview(final_plan)
+    restored_plan = restore_unrunnable_fresh(
+        final_plan,
+        held_unrunnable_fresh,
+    )
+    return batches, synchronize_continuation_preview(restored_plan)
 
 
 def _finalize_campaign(handle: Any, ledger: dict[str, Any]) -> dict[str, Any]:
