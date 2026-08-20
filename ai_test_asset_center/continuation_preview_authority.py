@@ -29,6 +29,10 @@ def synchronize_continuation_preview(
     Legacy plans without ``fresh_pending_pool`` are returned unchanged. The
     presence of that field marks the new exact-authority format, including an
     intentionally empty fresh pool.
+
+    Pool precedence matches terminal sealing: retry > budget-deferred > fresh.
+    Production keeps these pools mutually exclusive, but older/manual persisted
+    plans can overlap and must not expose a weaker stale category for one id.
     """
     from .pipeline_slices import _ABS_MAX_SLICE_BUDGET
 
@@ -37,43 +41,56 @@ def synchronize_continuation_preview(
         return plan
 
     exact_rows: list[dict[str, Any]] = []
-    seen: set[str] = set()
+    row_index: dict[str, int] = {}
+    authority_priority: dict[str, int] = {}
 
-    def append_rows(
+    def upsert_rows(
         rows: list[Any],
         *,
-        default_reason: str,
+        priority: int,
+        reason: str,
         origin: str,
     ) -> None:
         for raw in rows:
             if not isinstance(raw, dict):
                 continue
             oid = _text(raw.get("obligation_id"))
-            if not oid or oid in seen:
+            if not oid:
+                continue
+            if authority_priority.get(oid, -1) > priority:
                 continue
             row = dict(raw)
             row["obligation_id"] = oid
-            row.setdefault("not_in_plan_reason", default_reason)
-            row.setdefault("continuation_origin", origin)
-            exact_rows.append(row)
-            seen.add(oid)
+            # Exact category is authoritative. Never preserve a stale weaker
+            # reason/origin copied from an older preview row.
+            row["not_in_plan_reason"] = reason
+            row["continuation_origin"] = origin
+            if oid in row_index:
+                exact_rows[row_index[oid]] = row
+            else:
+                row_index[oid] = len(exact_rows)
+                exact_rows.append(row)
+            authority_priority[oid] = priority
 
-    # Execution scheduling gives never-attempted/capacity-deferred work a fresh
-    # opportunity before retry-only loops. Preview follows the same category
-    # order; it is descriptive only and does not become scheduling authority.
-    append_rows(
+    # Preserve fresh-first display position for distinct identities while using
+    # stronger category semantics for overlap. This preview remains descriptive;
+    # scheduling reads the exact pools directly.
+    upsert_rows(
         _list(plan.get("fresh_pending_pool")),
-        default_reason="CONTINUATION_PENDING",
+        priority=1,
+        reason="CONTINUATION_PENDING",
         origin="fresh_pending_pool",
     )
-    append_rows(
+    upsert_rows(
         _list(plan.get("budget_deferred_pool")),
-        default_reason="BUDGET_DEFERRED",
+        priority=2,
+        reason="BUDGET_DEFERRED",
         origin="budget_deferred_pool",
     )
-    append_rows(
+    upsert_rows(
         _list(plan.get("blocked_retry_pool")),
-        default_reason="CONTINUATION_RETRY_PENDING",
+        priority=3,
+        reason="CONTINUATION_RETRY_PENDING",
         origin="blocked_retry_pool",
     )
 
