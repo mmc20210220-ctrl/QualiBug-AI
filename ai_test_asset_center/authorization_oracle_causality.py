@@ -21,6 +21,7 @@ from . import _authorization_oracle_causality_mechanics as _core
 from ._authorization_oracle_causality_mechanics import *  # noqa: F401,F403
 from .binding_materialization_identity_receipt import (
     BindingMaterializationIdentityError,
+    seal_binding_materialization_receipts,
     validate_binding_materialization_identity_receipt,
 )
 
@@ -188,13 +189,149 @@ def _binding_proof(
     return fingerprint, sorted(set(receipt_ids)), []
 
 
+def _recover_same_actor_list_read_materialization(
+    result: dict[str, Any],
+    experiment: dict[str, Any],
+) -> None:
+    """Recover a materialization receipt only from an already-proven identity GET.
+
+    The core materializer's pre-resolved ``same_actor_list_read`` branch records
+    the selected value in ``runtime_bindings`` and a fixture receipt, then exits
+    before appending the binding-materialization receipt consumed by the strict
+    authorization causality gate.  Recovery is evidence projection only: no raw
+    value is reconstructed and no network fact is invented.  The exact target
+    must be source-declared, the fixture receipt must carry the same proof path,
+    and one real 2xx identity-proof step must name the resolver operation.
+    """
+
+    output = _dict(result)
+    exp = _dict(experiment)
+    existing = [
+        dict(row)
+        for row in _list(output.get("binding_materialization_receipts"))
+        if isinstance(row, dict)
+    ]
+    existing_bound_targets = {
+        _text(row.get("target") or row.get("binding_target"))
+        for row in existing
+        if _text(row.get("status")).upper() == "BOUND"
+    }
+
+    binding_rows = [
+        _dict(row)
+        for row in _list(exp.get("binding_plan"))
+        if isinstance(row, dict)
+        and _text(_dict(row).get("source_priority")) == "same_actor_list_read"
+        and _text(_dict(row).get("status")).lower() == "bound"
+        and _dict(row).get("materialized_value") not in (None, "")
+        and _text(_dict(row).get("target"))
+    ]
+    if not binding_rows:
+        return
+
+    fixtures = [
+        _dict(row)
+        for row in _list(output.get("fixture_receipts"))
+        if isinstance(row, dict)
+    ]
+    steps = [
+        _dict(row)
+        for row in _list(output.get("steps"))
+        if isinstance(row, dict)
+    ]
+
+    recovered = list(existing)
+    for binding in binding_rows:
+        target = _text(binding.get("target"))
+        if target in existing_bound_targets:
+            continue
+
+        fixture_matches = [
+            row
+            for row in fixtures
+            if _text(row.get("target")) == target
+            and _text(row.get("status")).lower() == "resolved"
+            and _text(row.get("source")) == "pre_resolved_binding"
+            and _text(row.get("value_fingerprint"))
+            and _text(row.get("proof_source")).startswith("/")
+        ]
+        if len(fixture_matches) != 1:
+            continue
+        fixture = fixture_matches[0]
+        proof_source = _text(fixture.get("proof_source"))
+
+        proof_steps = []
+        for step in steps:
+            try:
+                status_code = int(step.get("status_code") or 0)
+            except (TypeError, ValueError):
+                status_code = 0
+            if (
+                _text(step.get("phase")) == "binding_identity_proof"
+                and _text(step.get("step_id")).startswith(f"bind-proof:{target}")
+                and _text(step.get("path")) == proof_source
+                and _text(step.get("operation_ref"))
+                and _text(step.get("method")).upper() in {"GET", "HEAD"}
+                and 200 <= status_code < 300
+            ):
+                proof_steps.append((step, status_code))
+        if len(proof_steps) != 1:
+            continue
+        proof_step, status_code = proof_steps[0]
+
+        recovered.append({
+            "target": target,
+            "source_priority": "same_actor_list_read",
+            "status": "bound",
+            "value_fingerprint": _text(fixture.get("value_fingerprint")),
+            "resolver_path": proof_source,
+            "resolver_operation_ref": _text(proof_step.get("operation_ref")),
+            "status_code": status_code,
+            "resolver_actor_ref": _text(proof_step.get("actor_ref")),
+        })
+        existing_bound_targets.add(target)
+
+    if len(recovered) == len(existing):
+        return
+    sealed = seal_binding_materialization_receipts({
+        "binding_materialization_receipts": recovered,
+    })
+    output["binding_materialization_receipts"] = _list(
+        sealed.get("binding_materialization_receipts")
+    )
+
+
 # The mechanics builder resolves this helper from its defining-module globals.
 # Point that exact call site at the strict public proof authority.
 _core._binding_proof = _binding_proof
 
-# Preserve the established public callables while ensuring their mechanics use
-# the governed binding proof above.
-build_authorization_causality_receipt = _core.build_authorization_causality_receipt
+_original_build_authorization_causality_receipt = (
+    _core.build_authorization_causality_receipt
+)
+
+
+def build_authorization_causality_receipt(
+    *,
+    result: dict[str, Any],
+    experiment: dict[str, Any],
+    behavior_ir: dict[str, Any],
+    account_rows: Iterable[Any],
+) -> dict[str, Any]:
+    """Project proven missing materialization evidence before causal adjudication."""
+
+    _recover_same_actor_list_read_materialization(result, experiment)
+    return _original_build_authorization_causality_receipt(
+        result=result,
+        experiment=experiment,
+        behavior_ir=behavior_ir,
+        account_rows=account_rows,
+    )
+
+
+# ``enforce_authorization_oracle_causality`` lives in the mechanics module and
+# resolves the builder from that module's globals. Install the governed wrapper
+# at the actual call site so public and internal entry points behave identically.
+_core.build_authorization_causality_receipt = build_authorization_causality_receipt
 
 __all__ = sorted(
     {
@@ -204,6 +341,7 @@ __all__ = sorted(
             if not name.startswith("__")
         ],
         "_binding_proof",
+        "_recover_same_actor_list_read_materialization",
         "build_authorization_causality_receipt",
     }
 )
