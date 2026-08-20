@@ -41,13 +41,14 @@ from .service_topology_execution_authority import (
 _original_actor_execution_plan = _core._actor_execution_plan
 _original_execute_one_experiment = _core.execute_one_experiment
 
-# Runtime retry evidence produced before continuation starts cannot be inferred
-# from the immutable planning bundle. Keep a bounded, campaign-scoped in-memory
-# receipt ledger at the public executor boundary so the continuation authority
-# can seed retry work from actual execution outcomes instead of guessing from
-# compile state. Capture closes when the first continuation consumer starts;
-# follow-on retries are then owned directly by that consumer and are not
-# double-recorded here.
+# Runtime outcomes produced before continuation starts cannot be inferred from
+# the immutable planning bundle. Keep a bounded, campaign-scoped in-memory
+# receipt ledger at the public executor boundary. Every initially selected
+# identity is recorded as a real terminal result, explicit budget deferral, or
+# UNRECEIPTED. Continuation can therefore seed retry work and sanitize caller
+# exclusion sets from evidence instead of equating "scheduled" with "executed".
+# Capture closes when the first continuation consumer starts; follow-on rounds
+# are then owned directly by that consumer and are not double-recorded here.
 _CONTINUATION_RETRY_REASONS = {
     "BLOCKED_MISSING_BINDING",
     "HARNESS_FAILED",
@@ -55,10 +56,10 @@ _CONTINUATION_RETRY_REASONS = {
     "BLOCKED_CONTROL_ARM_NOT_PROVEN",
     "BLOCKED_OBSERVER_RECEIPT_INDETERMINATE",
 }
-_CONTINUATION_RETRY_RECEIPTS: dict[str, list[dict[str, str]]] = {}
+_CONTINUATION_EXECUTION_RECEIPTS: dict[str, list[dict[str, str]]] = {}
 _CONTINUATION_CAPTURE_CLOSED: set[str] = set()
-_CONTINUATION_RETRY_LOCK = threading.Lock()
-_MAX_CONTINUATION_RETRY_RECEIPTS_PER_CAMPAIGN = 2000
+_CONTINUATION_RECEIPT_LOCK = threading.Lock()
+_MAX_CONTINUATION_RECEIPTS_PER_CAMPAIGN = 4000
 
 
 def __getattr__(name: str) -> Any:
@@ -190,52 +191,163 @@ def execute_one_experiment(*args: Any, **kwargs: Any) -> dict[str, Any]:
     return output
 
 
-def _capture_continuation_retry_receipts(
+def _capture_continuation_execution_receipts(
     *,
     campaign_id: str,
+    selected_rows: list[dict[str, Any]],
     batch: dict[str, Any],
 ) -> None:
-    """Capture retry-eligible pre-continuation execution outcomes."""
+    """Capture terminal/deferred/unreceipted outcomes before continuation."""
     campaign = _text(campaign_id)
     if not campaign:
         return
-    rows: list[dict[str, str]] = []
+
+    result_by_id: dict[str, dict[str, Any]] = {}
     for raw in _list(_dict(batch).get("results")):
         if not isinstance(raw, dict):
             continue
         oid = _text(raw.get("obligation_id"))
-        status = _text(raw.get("status") or raw.get("execution_status")).upper()
-        reason = _text(
-            raw.get("reason_code")
-            or raw.get("block_reason")
-            or raw.get("failure_reason")
-        )
-        if (
-            oid
-            and status in {"BLOCKED", "HARNESS_FAILED"}
-            and reason in _CONTINUATION_RETRY_REASONS
-        ):
-            rows.append({
+        if oid:
+            result_by_id[oid] = dict(raw)
+    deferred_by_id = {
+        _text(raw.get("obligation_id")): dict(raw)
+        for raw in _list(_dict(batch).get("budget_deferred"))
+        if isinstance(raw, dict) and _text(raw.get("obligation_id"))
+    }
+
+    captured: list[dict[str, str]] = []
+    selected_ids: set[str] = set()
+    for raw in selected_rows:
+        if not isinstance(raw, dict):
+            continue
+        oid = _text(raw.get("obligation_id"))
+        if not oid:
+            continue
+        selected_ids.add(oid)
+        result = result_by_id.get(oid)
+        if result is not None:
+            captured.append({
                 "obligation_id": oid,
-                "block_reason": reason,
-                "status": status,
+                "experiment_id": _text(
+                    result.get("experiment_id") or raw.get("experiment_id")
+                ),
+                "status": _text(
+                    result.get("status") or result.get("execution_status")
+                ).upper(),
+                "reason_code": _text(
+                    result.get("reason_code")
+                    or result.get("block_reason")
+                    or result.get("failure_reason")
+                ),
+                "receipt_kind": "TERMINAL_RESULT",
             })
-    if not rows:
+        elif oid in deferred_by_id:
+            deferred = deferred_by_id[oid]
+            captured.append({
+                "obligation_id": oid,
+                "experiment_id": _text(
+                    deferred.get("experiment_id") or raw.get("experiment_id")
+                ),
+                "status": "DEFERRED",
+                "reason_code": _text(
+                    deferred.get("reason_code")
+                    or deferred.get("block_reason")
+                    or "BUDGET_DEFERRED"
+                ),
+                "receipt_kind": "BUDGET_DEFERRED",
+            })
+        else:
+            captured.append({
+                "obligation_id": oid,
+                "experiment_id": _text(raw.get("experiment_id")),
+                "status": "UNRECEIPTED",
+                "reason_code": "EXECUTION_RECEIPT_MISSING",
+                "receipt_kind": "UNRECEIPTED_SELECTED",
+            })
+
+    # Preserve any executor result that was not present in selected_rows; it is
+    # still a real outcome and may belong to a compiler-expanded identity.
+    for oid, result in result_by_id.items():
+        if oid in selected_ids:
+            continue
+        captured.append({
+            "obligation_id": oid,
+            "experiment_id": _text(result.get("experiment_id")),
+            "status": _text(
+                result.get("status") or result.get("execution_status")
+            ).upper(),
+            "reason_code": _text(
+                result.get("reason_code")
+                or result.get("block_reason")
+                or result.get("failure_reason")
+            ),
+            "receipt_kind": "TERMINAL_RESULT",
+        })
+
+    if not captured:
         return
-    with _CONTINUATION_RETRY_LOCK:
+    with _CONTINUATION_RECEIPT_LOCK:
         if campaign in _CONTINUATION_CAPTURE_CLOSED:
             return
-        existing = _CONTINUATION_RETRY_RECEIPTS.setdefault(campaign, [])
-        by_id = {
-            _text(row.get("obligation_id")): dict(row)
+        existing = _CONTINUATION_EXECUTION_RECEIPTS.setdefault(campaign, [])
+        by_identity = {
+            (
+                _text(row.get("obligation_id")),
+                _text(row.get("experiment_id")),
+            ): dict(row)
             for row in existing
             if _text(row.get("obligation_id"))
         }
-        for row in rows:
-            by_id[row["obligation_id"]] = row
-        _CONTINUATION_RETRY_RECEIPTS[campaign] = list(by_id.values())[
-            -_MAX_CONTINUATION_RETRY_RECEIPTS_PER_CAMPAIGN:
+        for row in captured:
+            by_identity[(row["obligation_id"], row["experiment_id"])] = row
+        _CONTINUATION_EXECUTION_RECEIPTS[campaign] = list(by_identity.values())[
+            -_MAX_CONTINUATION_RECEIPTS_PER_CAMPAIGN:
         ]
+
+
+def consume_continuation_execution_receipts(
+    campaign_id: str,
+    *,
+    allowed_experiment_ids_by_obligation: dict[str, str] | None = None,
+    close_capture: bool = True,
+) -> list[dict[str, str]]:
+    """Consume captured initial outcomes belonging to one experiment domain."""
+    campaign = _text(campaign_id)
+    if not campaign:
+        return []
+    allowed = {
+        _text(oid): _text(experiment_id)
+        for oid, experiment_id in _dict(allowed_experiment_ids_by_obligation).items()
+        if _text(oid)
+    }
+
+    def _matches(row: dict[str, str]) -> bool:
+        oid = _text(row.get("obligation_id"))
+        if not allowed:
+            return True
+        if oid not in allowed:
+            return False
+        expected_experiment_id = allowed.get(oid, "")
+        actual_experiment_id = _text(row.get("experiment_id"))
+        return (
+            not expected_experiment_id
+            or not actual_experiment_id
+            or expected_experiment_id == actual_experiment_id
+        )
+
+    with _CONTINUATION_RECEIPT_LOCK:
+        if close_capture:
+            _CONTINUATION_CAPTURE_CLOSED.add(campaign)
+        existing = list(_CONTINUATION_EXECUTION_RECEIPTS.get(campaign, []))
+        if not existing:
+            return []
+        selected = [row for row in existing if _matches(row)]
+        remaining = [row for row in existing if not _matches(row)]
+        if remaining:
+            _CONTINUATION_EXECUTION_RECEIPTS[campaign] = remaining
+        else:
+            _CONTINUATION_EXECUTION_RECEIPTS.pop(campaign, None)
+        return [dict(row) for row in selected]
 
 
 def consume_continuation_retry_receipts(
@@ -244,56 +356,52 @@ def consume_continuation_retry_receipts(
     allowed_obligation_ids: set[str] | None = None,
     close_capture: bool = True,
 ) -> list[dict[str, str]]:
-    """Consume captured retry receipts belonging to one continuation domain."""
-    campaign = _text(campaign_id)
-    if not campaign:
-        return []
+    """Compatibility view returning only retry-eligible captured outcomes."""
     allowed = {
-        _text(value) for value in (allowed_obligation_ids or set()) if _text(value)
+        _text(value): ""
+        for value in (allowed_obligation_ids or set())
+        if _text(value)
     }
-    with _CONTINUATION_RETRY_LOCK:
-        if close_capture:
-            _CONTINUATION_CAPTURE_CLOSED.add(campaign)
-        existing = list(_CONTINUATION_RETRY_RECEIPTS.get(campaign, []))
-        if not existing:
-            return []
-        if not allowed:
-            selected = existing
-            remaining: list[dict[str, str]] = []
-        else:
-            selected = [
-                row
-                for row in existing
-                if _text(row.get("obligation_id")) in allowed
-            ]
-            remaining = [
-                row
-                for row in existing
-                if _text(row.get("obligation_id")) not in allowed
-            ]
-        if remaining:
-            _CONTINUATION_RETRY_RECEIPTS[campaign] = remaining
-        else:
-            _CONTINUATION_RETRY_RECEIPTS.pop(campaign, None)
-        return [dict(row) for row in selected]
+    rows = consume_continuation_execution_receipts(
+        campaign_id,
+        allowed_experiment_ids_by_obligation=allowed,
+        close_capture=close_capture,
+    )
+    return [
+        {
+            "obligation_id": _text(row.get("obligation_id")),
+            "block_reason": _text(row.get("reason_code")),
+            "status": _text(row.get("status")),
+            "experiment_id": _text(row.get("experiment_id")),
+        }
+        for row in rows
+        if _text(row.get("status")) in {"BLOCKED", "HARNESS_FAILED"}
+        and _text(row.get("reason_code")) in _CONTINUATION_RETRY_REASONS
+    ]
 
 
 def clear_continuation_retry_receipts(campaign_id: str) -> None:
-    """Release campaign-scoped retry capture state at campaign finalization."""
+    """Release campaign-scoped continuation capture state at finalization."""
     campaign = _text(campaign_id)
     if not campaign:
         return
-    with _CONTINUATION_RETRY_LOCK:
-        _CONTINUATION_RETRY_RECEIPTS.pop(campaign, None)
+    with _CONTINUATION_RECEIPT_LOCK:
+        _CONTINUATION_EXECUTION_RECEIPTS.pop(campaign, None)
         _CONTINUATION_CAPTURE_CLOSED.discard(campaign)
 
 
 def execute_selected_experiments(*args: Any, **kwargs: Any) -> dict[str, Any]:
-    """Execute a batch and expose pre-continuation retry receipts losslessly."""
+    """Execute a batch and expose pre-continuation outcome receipts losslessly."""
+    selected_rows = [
+        dict(row)
+        for row in _list(args[0] if args else kwargs.get("selected"))
+        if isinstance(row, dict)
+    ]
     result = _core.execute_selected_experiments(*args, **kwargs)
     batch = dict(_dict(result))
-    _capture_continuation_retry_receipts(
+    _capture_continuation_execution_receipts(
         campaign_id=_text(kwargs.get("campaign_id")),
+        selected_rows=selected_rows,
         batch=batch,
     )
     return batch
@@ -312,6 +420,7 @@ __all__ = sorted(
         "_actor_execution_plan",
         "execute_one_experiment",
         "execute_selected_experiments",
+        "consume_continuation_execution_receipts",
         "consume_continuation_retry_receipts",
         "clear_continuation_retry_receipts",
     }
