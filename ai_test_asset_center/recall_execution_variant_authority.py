@@ -32,6 +32,9 @@ from typing import Any, Mapping
 
 
 _INSTALL_MARKER = "_qualibug_exact_execution_variant_authority_installed"
+_LEDGER_PROJECTION_MARKER = (
+    "_qualibug_exact_execution_variant_stage_projection_installed"
+)
 
 
 def _dict(value: Any) -> dict[str, Any]:
@@ -329,26 +332,137 @@ def collapse_variant_receipts_preserving_selected(
     return collapsed
 
 
+def _install_public_ledger_variant_projection_guard() -> None:
+    """Keep exact selected faces intact before the public ledger binds stages.
+
+    The multi-occurrence ledger facade has a compatibility projection that maps a
+    legacy compiler-local variant receipt onto its selected base.  Exact execution
+    authority now also selects sibling variant ids independently.  Those exact
+    selected ids must be removed from the compatibility projection and restored
+    byte-for-byte afterward, otherwise the facade can choose one variant by dict
+    order and pop the other independently selected faces before core validation.
+    """
+
+    from . import _obligation_attempt_ledger_single_occurrence_mechanics as _core
+    from . import obligation_attempt_ledger as _ledger
+
+    if getattr(_ledger, _LEDGER_PROJECTION_MARKER, False):
+        return
+
+    original_projection = _ledger._project_variant_stage_receipts
+
+    def _project_preserving_exact_selected(
+        *,
+        selected: list[dict[str, Any]],
+        compile_results: Mapping[str, Any],
+        execution_results: Mapping[str, Any],
+        gate_results: Mapping[str, Any],
+    ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+        selected_ids = {
+            _text(row.get("obligation_id"))
+            for row in selected
+            if isinstance(row, dict) and _text(row.get("obligation_id"))
+        }
+        selected_variant_ids = {
+            oid for oid in selected_ids
+            if _core._base_obligation_id(oid) != oid
+        }
+
+        original_maps = (
+            dict(compile_results) if isinstance(compile_results, Mapping) else compile_results,
+            dict(execution_results) if isinstance(execution_results, Mapping) else execution_results,
+            dict(gate_results) if isinstance(gate_results, Mapping) else gate_results,
+        )
+        if not all(isinstance(mapping, dict) for mapping in original_maps):
+            return original_projection(
+                selected=selected,
+                compile_results=compile_results,
+                execution_results=execution_results,
+                gate_results=gate_results,
+            )
+
+        compile_in, execution_in, gate_in = (
+            dict(original_maps[0]),
+            dict(original_maps[1]),
+            dict(original_maps[2]),
+        )
+
+        exact_stage_rows: tuple[dict[str, Any], dict[str, Any], dict[str, Any]] = (
+            {oid: compile_in.pop(oid) for oid in selected_variant_ids if oid in compile_in},
+            {oid: execution_in.pop(oid) for oid in selected_variant_ids if oid in execution_in},
+            {oid: gate_in.pop(oid) for oid in selected_variant_ids if oid in gate_in},
+        )
+
+        # With exact selected variants removed, only legacy compatibility faces
+        # remain eligible to project onto a selected base.  More than one such
+        # execution face is ambiguous: fail closed rather than reintroducing
+        # insertion-order first-wins semantics.
+        legacy_execution_variants: dict[str, list[str]] = {}
+        for raw_oid, raw_receipt in execution_in.items():
+            oid = _text(raw_oid)
+            base = _core._base_obligation_id(oid)
+            if (
+                not oid
+                or base == oid
+                or base not in selected_ids
+                or not isinstance(raw_receipt, dict)
+            ):
+                continue
+            direct = execution_in.get(base)
+            if (
+                isinstance(direct, dict)
+                and direct
+                and not _ledger._mechanical_execution_gap(direct)
+            ):
+                continue
+            legacy_execution_variants.setdefault(base, []).append(oid)
+
+        for base, variant_ids in legacy_execution_variants.items():
+            if len(variant_ids) > 1:
+                ids = ",".join(sorted(variant_ids))
+                raise _core.ObligationAttemptLedgerError(
+                    f"multiple_unselected_variant_receipts:{base}:{ids}"
+                )
+
+        projected = original_projection(
+            selected=selected,
+            compile_results=compile_in,
+            execution_results=execution_in,
+            gate_results=gate_in,
+        )
+        output = [dict(mapping) for mapping in projected]
+        for index, exact_rows in enumerate(exact_stage_rows):
+            output[index].update(exact_rows)
+        return output[0], output[1], output[2]
+
+    _ledger._project_variant_stage_receipts = _project_preserving_exact_selected
+    setattr(_ledger, _LEDGER_PROJECTION_MARKER, True)
+
+
 def install_exact_execution_variant_authority() -> None:
     """Install planning and ledger guards on the single product mainline."""
 
     from . import discovery_runtime_planning as _planning
     from . import _obligation_attempt_ledger_single_occurrence_mechanics as _ledger_core
 
-    if getattr(_planning, _INSTALL_MARKER, False):
-        return
-    original_derive = _planning.derive_unit_execution_arms
+    if not getattr(_planning, _INSTALL_MARKER, False):
+        original_derive = _planning.derive_unit_execution_arms
 
-    def _derive_with_exact_execution_faces(*args: Any, **kwargs: Any) -> dict[str, Any]:
-        receipt = original_derive(*args, **kwargs)
-        return repair_selected_execution_variant_identities(
-            obligation_plan=kwargs["obligation_plan"],
-            units=kwargs["units"],
-            experiment_pack=kwargs["experiment_pack"],
-            by_obligation=kwargs["by_obligation"],
-            receipt=receipt,
-        )
+        def _derive_with_exact_execution_faces(*args: Any, **kwargs: Any) -> dict[str, Any]:
+            receipt = original_derive(*args, **kwargs)
+            return repair_selected_execution_variant_identities(
+                obligation_plan=kwargs["obligation_plan"],
+                units=kwargs["units"],
+                experiment_pack=kwargs["experiment_pack"],
+                by_obligation=kwargs["by_obligation"],
+                receipt=receipt,
+            )
 
-    _planning.derive_unit_execution_arms = _derive_with_exact_execution_faces
-    _ledger_core._collapse_variant_receipts = collapse_variant_receipts_preserving_selected
-    setattr(_planning, _INSTALL_MARKER, True)
+        _planning.derive_unit_execution_arms = _derive_with_exact_execution_faces
+        _ledger_core._collapse_variant_receipts = collapse_variant_receipts_preserving_selected
+        setattr(_planning, _INSTALL_MARKER, True)
+
+    # The public multi-occurrence ledger owns an additional compatibility
+    # projection outside the patched core.  Guard it independently so a later
+    # facade import cannot erase exact selected variant identities.
+    _install_public_ledger_variant_projection_guard()
