@@ -1,22 +1,23 @@
 """Public experiment executor with compiler-sealed actor-plan authority.
 
 The established execution, exploration, Oracle and delivery mechanics live in
-``_experiment_executor_mainline_mechanics``.  Current compilation already
+``_experiment_executor_mainline_mechanics``. Current compilation already
 promotes assertion-local actor exploration metadata into one top-level
 ``qualibug.actor-execution-plan.v1`` contract and seals it with ``plan_hash``.
 Runtime therefore has no reason to trust the historical unsealed assertion
 fallback.
 
-Formal execution accepts the compiler-sealed plan or no exploration plan.  A
+Formal execution accepts the compiler-sealed plan or no exploration plan. A
 legacy ``_actor_exploration_plan`` found without the sealed top-level contract is
 visible drift and blocks execution; ``candidate_ids[0]`` is never promoted to a
 source actor merely because it appears first.
 
 The public boundary also resolves source-declared service ownership before the
-transport kernel runs.  Single-service experiments are routed to the exact
+transport kernel runs. Single-service experiments are routed to the exact
 ``multi_service.services`` target; graph-backed multi-service experiments reuse
 the established approved-target graph authority; non-graph cross-service plans
-fail closed instead of being sent to one arbitrary base URL.
+and invalid declared topologies fail closed instead of being sent to one
+arbitrary base URL.
 """
 from __future__ import annotations
 
@@ -24,9 +25,11 @@ from pathlib import Path
 from typing import Any
 
 from . import _experiment_executor_mainline_mechanics as _core
+from .service_topology_config_guard import (
+    load_guarded_project_service_topology,
+)
 from .service_topology_execution_authority import (
     blocked_routing_result,
-    load_project_service_topology,
     resolve_experiment_execution_route,
 )
 
@@ -110,7 +113,26 @@ def execute_one_experiment(*args: Any, **kwargs: Any) -> dict[str, Any]:
     original_base_url = _text(kwargs.get("base_url"))
     runtime_contract = _dict(kwargs.get("runtime_contract"))
 
-    topology = load_project_service_topology(project, root) if project else {}
+    topology, topology_receipt = (
+        load_guarded_project_service_topology(project, root)
+        if project
+        else ({}, {"status": "NOT_APPLICABLE", "reason_code": "", "detail": "project_missing"})
+    )
+    if _text(topology_receipt.get("status")) == "BLOCKED":
+        return blocked_routing_result(
+            experiment,
+            {
+                "schema_version": "qualibug.service-topology-execution-routing.v1",
+                "status": "BLOCKED",
+                "mode": "topology_invalid",
+                "service_refs": [],
+                "base_url": original_base_url,
+                "reason_code": _text(topology_receipt.get("reason_code")),
+                "detail": _text(topology_receipt.get("detail")),
+                "service_topology_config_receipt": topology_receipt,
+            },
+        )
+
     route = resolve_experiment_execution_route(
         experiment=experiment,
         behavior_ir=behavior_ir,
@@ -118,6 +140,7 @@ def execute_one_experiment(*args: Any, **kwargs: Any) -> dict[str, Any]:
         runtime_contract=runtime_contract,
         topology=topology,
     )
+    route["service_topology_config_receipt"] = topology_receipt
     if _text(route.get("status")) != "READY":
         return blocked_routing_result(experiment, route)
 
@@ -125,7 +148,7 @@ def execute_one_experiment(*args: Any, **kwargs: Any) -> dict[str, Any]:
     routed_base_url = _text(route.get("base_url")) or original_base_url
     routed_kwargs["base_url"] = routed_base_url
     routed_kwargs["runtime_contract"] = _dict(route.get("runtime_contract"))
-    # The batch may have loaded tokens against a different service URL.  Let
+    # The batch may have loaded tokens against a different service URL. Let
     # the governed core reload its identity-safe token view for the exact
     # routed target rather than reusing credentials from another service.
     if routed_base_url and routed_base_url != original_base_url:
