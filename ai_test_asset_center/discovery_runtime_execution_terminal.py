@@ -1,10 +1,9 @@
 """Manual terminal receipt accounting for discovery execution.
 
 Extracted from ``discovery_runtime_execution_support`` to keep that module
-under the architecture extraction budget
-(tests/test_architecture_extraction_contracts.py). The symbol is re-exported
-from ``discovery_runtime_execution_support``, ``discovery_runtime_execution``
-and ``discovery_runtime`` so identity assertions stay valid.
+under the architecture extraction budget. Terminal sealing consumes the exact
+fresh/retry/deferred continuation authorities when present; bounded previews
+are never treated as the complete execution identity set.
 """
 from __future__ import annotations
 
@@ -101,18 +100,12 @@ def _terminal_pending_rows(
     obligation_plan: dict[str, Any],
     execution_results: dict[str, dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Rebuild the full formal pending set used only for terminal sealing.
+    """Return the exact formal pending set used only for terminal sealing.
 
-    ``pending_next_round`` is a bounded public preview and may contain
-    compiler-expanded ``base__v_*`` identities that do not exist as separate
-    formal accounting rows. Terminal sealing projects every pending face back
-    to its formal base. Exact retry and budget-deferral pools are consumed
-    before any inference from ``pending_count`` so omitted identities cannot be
-    replaced by a different compiled row during sealing.
-
-    A real terminal receipt for any face closes the formal base for the current
-    run. Coverage-unit plans retain one representative per unfinished unit.
-    Reconstruction is transient only.
+    New plans persist ``fresh_pending_pool`` explicitly. When that field is
+    present, terminal sealing consumes it together with retry/deferred pools and
+    performs no candidate inference. Legacy plans without the field retain the
+    bounded-preview reconstruction fallback.
     """
     plan = _dict(obligation_plan)
     experiments = _dict(experiments_by_obligation)
@@ -142,12 +135,17 @@ def _terminal_pending_rows(
     declared_pending = int(plan.get("pending_count") or len(raw_visible))
     missing_from_preview = max(0, declared_pending - len(raw_visible))
 
-    visible: list[dict[str, Any]] = []
-    visible_ids: set[str] = set()
+    result: list[dict[str, Any]] = []
+    result_by_id: dict[str, dict[str, Any]] = {}
+    authority_priority: dict[str, int] = {}
     for raw in raw_visible:
         raw_id = _text(raw.get("obligation_id"))
         formal_id = _formal_accounting_id(raw_id, accounting_by_id)
-        if not formal_id or formal_id in visible_ids or formal_id in terminal_formal_ids:
+        if (
+            not formal_id
+            or formal_id in result_by_id
+            or formal_id in terminal_formal_ids
+        ):
             continue
         row = dict(raw)
         row["obligation_id"] = formal_id
@@ -161,9 +159,15 @@ def _terminal_pending_rows(
             )
             if unit_id:
                 row["coverage_unit_id"] = unit_id
-        visible.append(row)
-        visible_ids.add(formal_id)
+        result.append(row)
+        result_by_id[formal_id] = row
+        authority_priority[formal_id] = 0
 
+    fresh_rows = [
+        dict(row)
+        for row in _list(plan.get("fresh_pending_pool"))
+        if isinstance(row, dict) and _text(row.get("obligation_id"))
+    ]
     retry_rows = [
         dict(row)
         for row in _list(plan.get("blocked_retry_pool"))
@@ -174,63 +178,91 @@ def _terminal_pending_rows(
         for row in _list(plan.get("budget_deferred_pool"))
         if isinstance(row, dict) and _text(row.get("obligation_id"))
     ]
-    if missing_from_preview <= 0 and not retry_rows and not budget_deferred_rows:
-        return visible
+    exact_fresh_authority = "fresh_pending_pool" in plan
 
-    result = list(visible)
-    result_ids = set(visible_ids)
+    if (
+        missing_from_preview <= 0
+        and not fresh_rows
+        and not retry_rows
+        and not budget_deferred_rows
+    ):
+        return result
 
-    # Retry is a stronger current-state statement than budget deferral. Support
-    # keeps the pools mutually exclusive, but terminal sealing remains defensive
-    # if an older persisted plan contains overlap.
-    for retry in retry_rows:
-        raw_id = _text(retry.get("obligation_id"))
+    def upsert_exact(
+        raw: dict[str, Any],
+        *,
+        priority: int,
+        reason: str,
+        origin: str,
+        variant_origin: str,
+    ) -> None:
+        raw_id = _text(raw.get("obligation_id"))
         formal_id = _formal_accounting_id(raw_id, accounting_by_id)
-        if not formal_id or formal_id in result_ids or formal_id in terminal_formal_ids:
-            continue
+        if not formal_id or formal_id in terminal_formal_ids:
+            return
+        if authority_priority.get(formal_id, -1) > priority:
+            return
         source = accounting_by_id.get(formal_id) or {}
-        result.append({
+        payload = {
             "obligation_id": formal_id,
-            "risk_family": _text(source.get("risk_family")),
-            "coverage_unit_id": _coverage_unit_for_identity(
-                raw_id,
-                accounting_by_id=accounting_by_id,
-                experiments=experiments,
+            "risk_family": _text(
+                raw.get("risk_family") or source.get("risk_family")
             ),
-            "not_in_plan_reason": "CONTINUATION_RETRY_PENDING",
+            "coverage_unit_id": _text(
+                raw.get("coverage_unit_id")
+                or _coverage_unit_for_identity(
+                    raw_id,
+                    accounting_by_id=accounting_by_id,
+                    experiments=experiments,
+                )
+            ),
+            "not_in_plan_reason": reason,
             "continuation_origin": (
-                "blocked_retry_variant_formal_projection"
-                if raw_id != formal_id
-                else "blocked_retry_pool"
+                variant_origin if raw_id != formal_id else origin
             ),
-        })
-        result_ids.add(formal_id)
+        }
+        existing = result_by_id.get(formal_id)
+        if existing is None:
+            existing = payload
+            result.append(existing)
+            result_by_id[formal_id] = existing
+        else:
+            existing.update(payload)
+        authority_priority[formal_id] = priority
 
-    # This is exact capacity-deferral authority, not inferred pending work.
-    # Selected identities are therefore allowed here even though generic
-    # continuation reconstruction intentionally does not widen selected work.
+    # Fresh < budget-deferred < retry. The pools are mutually exclusive in the
+    # producer, but priority keeps terminal sealing deterministic for older or
+    # manually persisted plans that overlap.
+    for fresh in fresh_rows:
+        upsert_exact(
+            fresh,
+            priority=1,
+            reason="CONTINUATION_PENDING",
+            origin="fresh_pending_pool",
+            variant_origin="fresh_pending_variant_formal_projection",
+        )
     for deferred in budget_deferred_rows:
-        raw_id = _text(deferred.get("obligation_id"))
-        formal_id = _formal_accounting_id(raw_id, accounting_by_id)
-        if not formal_id or formal_id in result_ids or formal_id in terminal_formal_ids:
-            continue
-        source = accounting_by_id.get(formal_id) or {}
-        result.append({
-            "obligation_id": formal_id,
-            "risk_family": _text(source.get("risk_family")),
-            "coverage_unit_id": _coverage_unit_for_identity(
-                raw_id,
-                accounting_by_id=accounting_by_id,
-                experiments=experiments,
-            ),
-            "not_in_plan_reason": "BUDGET_DEFERRED",
-            "continuation_origin": (
-                "budget_deferred_variant_formal_projection"
-                if raw_id != formal_id
-                else "budget_deferred_pool"
-            ),
-        })
-        result_ids.add(formal_id)
+        upsert_exact(
+            deferred,
+            priority=2,
+            reason="BUDGET_DEFERRED",
+            origin="budget_deferred_pool",
+            variant_origin="budget_deferred_variant_formal_projection",
+        )
+    for retry in retry_rows:
+        upsert_exact(
+            retry,
+            priority=3,
+            reason="CONTINUATION_RETRY_PENDING",
+            origin="blocked_retry_pool",
+            variant_origin="blocked_retry_variant_formal_projection",
+        )
+
+    if exact_fresh_authority:
+        # New-format plans provide every outstanding category explicitly. Do not
+        # invent a replacement identity merely to make result length equal a
+        # count that may include multiple compiler faces of one formal base.
+        return result
 
     if missing_from_preview <= 0:
         return result
@@ -239,7 +271,7 @@ def _terminal_pending_rows(
         formal_id = _text(row.get("obligation_id"))
         if (
             not formal_id
-            or formal_id in result_ids
+            or formal_id in result_by_id
             or formal_id in terminal_formal_ids
             or row.get("pre_transport_executable") is False
         ):
@@ -309,7 +341,10 @@ def _terminal_pending_rows(
                 "not_in_plan_reason": "CONTINUATION_VIEW_TRUNCATED",
                 "continuation_origin": "terminal_reconstructed_coverage_unit",
             })
-        for row in sorted(unscoped, key=lambda item: _text(item.get("obligation_id"))):
+        for row in sorted(
+            unscoped,
+            key=lambda item: _text(item.get("obligation_id")),
+        ):
             restored.append({
                 "obligation_id": _text(row.get("obligation_id")),
                 "risk_family": _text(row.get("risk_family")),
@@ -334,15 +369,12 @@ def _terminal_pending_rows(
                 "continuation_origin": "terminal_reconstructed_obligation",
             })
 
-    # ``pending_count`` counts execution identities (including variants), while
-    # terminal accounting counts formal bases. Exact pools already consume that
-    # outstanding count, so inference may fill only the remainder.
     fresh_restore_budget = max(0, declared_pending - len(result))
     for row in restored[:fresh_restore_budget]:
         formal_id = _text(row.get("obligation_id"))
-        if formal_id and formal_id not in result_ids:
+        if formal_id and formal_id not in result_by_id:
             result.append(row)
-            result_ids.add(formal_id)
+            result_by_id[formal_id] = row
     return result
 
 
@@ -369,7 +401,10 @@ def _manual_terminal_receipts(
         execution_results=execution_results,
     )
     scheduled_ids = {
-        _formal_accounting_id(_text(row.get("obligation_id")), accounting_by_id)
+        _formal_accounting_id(
+            _text(row.get("obligation_id")),
+            accounting_by_id,
+        )
         for row in _list(obligation_plan.get("selected"))
         if isinstance(row, dict) and _text(row.get("obligation_id"))
     }
@@ -379,7 +414,14 @@ def _manual_terminal_receipts(
         if isinstance(row, dict) and _text(row.get("obligation_id"))
     }
     pending_reasons: dict[str, str] = {
-        _text(row.get("obligation_id")): _text(row.get("not_in_plan_reason")) or "BUDGET_EXHAUSTED"
+        _text(row.get("obligation_id")): (
+            _text(row.get("not_in_plan_reason")) or "BUDGET_EXHAUSTED"
+        )
+        for row in pending_rows
+        if isinstance(row, dict) and _text(row.get("obligation_id"))
+    }
+    pending_origins: dict[str, str] = {
+        _text(row.get("obligation_id")): _text(row.get("continuation_origin"))
         for row in pending_rows
         if isinstance(row, dict) and _text(row.get("obligation_id"))
     }
@@ -387,13 +429,34 @@ def _manual_terminal_receipts(
         _text(runtime_contract.get("status")) == "approved"
         and bool(_text(runtime_contract.get("approved_base_url")))
     )
+
+    def pending_terminal_reason(obligation_id: str) -> tuple[str, str]:
+        origin = pending_origins.get(obligation_id, "")
+        if origin.startswith("fresh_pending"):
+            return (
+                "OBLIGATION_CONTINUATION_PENDING",
+                "compiled_obligation_pending_continuation",
+            )
+        if origin.startswith("blocked_retry"):
+            return (
+                "OBLIGATION_RETRY_PENDING",
+                "compiled_obligation_pending_retry",
+            )
+        return (
+            "OBLIGATION_BUDGET_REACHED",
+            "compiled_obligation_deferred_by_execution_budget",
+        )
+
     for row in selected_rows:
         obligation_id = _text(row.get("obligation_id"))
         if not obligation_id or obligation_id in execution_results:
             continue
         _variant_result = None
         for _vid, _vresult in compile_results.items():
-            if _base_obligation_id(_text(_vid)) == obligation_id and _text(_vid) != obligation_id:
+            if (
+                _base_obligation_id(_text(_vid)) == obligation_id
+                and _text(_vid) != obligation_id
+            ):
                 _variant_result = _vresult
                 break
         if _variant_result is not None and obligation_id not in compile_results:
@@ -406,7 +469,9 @@ def _manual_terminal_receipts(
             continue
         _, experiment = _compiled_experiment_face(experiments, obligation_id)
         compile_receipt = _dict(experiment.get("compile_receipt"))
-        compile_status = existing_compile_status or _text(compile_receipt.get("status")).upper()
+        compile_status = existing_compile_status or _text(
+            compile_receipt.get("status")
+        ).upper()
         experiment_id = _text(
             existing_compile.get("experiment_id")
             or experiment.get("experiment_id")
@@ -415,28 +480,51 @@ def _manual_terminal_receipts(
         if not existing_compile and compile_status in {"BLOCKED", "HARNESS_FAILED"}:
             compile_results[obligation_id] = {
                 "status": compile_status,
-                "reason_code": _text(compile_receipt.get("reason_code")) or "BLOCKED_COMPILE",
-                "detail": _text(compile_receipt.get("detail") or compile_receipt.get("reason_detail")),
+                "reason_code": _text(compile_receipt.get("reason_code"))
+                or "BLOCKED_COMPILE",
+                "detail": _text(
+                    compile_receipt.get("detail")
+                    or compile_receipt.get("reason_detail")
+                ),
                 "experiment_id": experiment_id,
                 "cost_coverage_status": "UNKNOWN",
             }
-        elif not existing_compile and compile_status == "DEFERRED" and _text(compile_receipt.get("reason_code")):
+        elif (
+            not existing_compile
+            and compile_status == "DEFERRED"
+            and _text(compile_receipt.get("reason_code"))
+        ):
             compile_results[obligation_id] = {
                 "status": "DEFERRED",
                 "reason_code": _text(compile_receipt.get("reason_code")),
-                "detail": _text(compile_receipt.get("detail") or compile_receipt.get("reason_detail")),
+                "detail": _text(
+                    compile_receipt.get("detail")
+                    or compile_receipt.get("reason_detail")
+                ),
                 "experiment_id": experiment_id,
                 "cost_coverage_status": "UNKNOWN",
             }
-        elif not existing_compile and _text(row.get("selection_status")).upper() == "COMPILE_BLOCKED":
+        elif (
+            not existing_compile
+            and _text(row.get("selection_status")).upper() == "COMPILE_BLOCKED"
+        ):
             compile_results[obligation_id] = {
                 "status": "HARNESS_FAILED",
-                "reason_code": "COMPILE_RECEIPT_MISSING" if not compile_status else "BLOCKED_COMPILE",
-                "detail": "compile_receipt_missing" if not compile_status else "compile_deferred_reason_missing",
+                "reason_code": (
+                    "COMPILE_RECEIPT_MISSING"
+                    if not compile_status
+                    else "BLOCKED_COMPILE"
+                ),
+                "detail": (
+                    "compile_receipt_missing"
+                    if not compile_status
+                    else "compile_deferred_reason_missing"
+                ),
                 "experiment_id": experiment_id,
                 "cost_coverage_status": "UNKNOWN",
             }
         elif obligation_id in pending_ids:
+            terminal_reason, terminal_detail = pending_terminal_reason(obligation_id)
             if compile_status == "COMPILED":
                 if obligation_id not in compile_results:
                     compile_results[obligation_id] = {
@@ -446,24 +534,34 @@ def _manual_terminal_receipts(
                     }
                 execution_results[obligation_id] = {
                     "status": "DEFERRED",
-                    "reason_code": "OBLIGATION_BUDGET_REACHED",
-                    "not_in_plan_reason": pending_reasons.get(obligation_id, "BUDGET_EXHAUSTED"),
-                    "detail": "compiled_obligation_deferred_by_execution_budget",
+                    "reason_code": terminal_reason,
+                    "not_in_plan_reason": pending_reasons.get(
+                        obligation_id,
+                        "BUDGET_EXHAUSTED",
+                    ),
+                    "detail": terminal_detail,
                     "experiment_id": experiment_id,
                     "cost_coverage_status": "UNKNOWN",
                 }
             else:
                 compile_results[obligation_id] = {
                     "status": "DEFERRED",
-                    "reason_code": "OBLIGATION_BUDGET_REACHED",
-                    "not_in_plan_reason": pending_reasons.get(obligation_id, "BUDGET_EXHAUSTED"),
+                    "reason_code": terminal_reason,
+                    "not_in_plan_reason": pending_reasons.get(
+                        obligation_id,
+                        "BUDGET_EXHAUSTED",
+                    ),
                     "experiment_id": experiment_id,
                     "cost_coverage_status": "UNKNOWN",
                 }
         elif obligation_id in scheduled_ids and not runtime_approved:
             if obligation_id not in compile_results:
                 compile_results[obligation_id] = {
-                    "status": "COMPILED" if compile_status == "COMPILED" else compile_status or "COMPILED",
+                    "status": (
+                        "COMPILED"
+                        if compile_status == "COMPILED"
+                        else compile_status or "COMPILED"
+                    ),
                     "experiment_id": experiment_id,
                     "cost_coverage_status": "UNKNOWN",
                 }
@@ -479,7 +577,10 @@ def _manual_terminal_receipts(
             compile_results[obligation_id] = {
                 "status": "DEFERRED",
                 "reason_code": "OBLIGATION_NOT_IN_PLAN",
-                "not_in_plan_reason": pending_reasons.get(obligation_id, "NOT_IN_PLAN_REASON_UNATTRIBUTED"),
+                "not_in_plan_reason": pending_reasons.get(
+                    obligation_id,
+                    "NOT_IN_PLAN_REASON_UNATTRIBUTED",
+                ),
                 "detail": _text(compile_receipt.get("detail") or ""),
                 "experiment_id": experiment_id,
                 "cost_coverage_status": "UNKNOWN",
