@@ -193,8 +193,9 @@ def seed_initial_fresh_pending_authority(
 
     Existing ``fresh_pending_pool`` is immutable resume authority and wins
     immediately. Legacy/first-round plans derive it from the same source inputs
-    used by planning. If coverage-unit reconstruction itself fails, leave the
-    plan in legacy mode rather than widening it to obligation variants.
+    used by planning. If source derivation cannot prove the planner-declared
+    fresh cardinality, the plan stays in legacy reconstruction mode rather than
+    sealing an incomplete or widened set as exact.
     """
     plan = dict(_dict(obligation_plan))
     if "fresh_pending_pool" in plan:
@@ -228,6 +229,26 @@ def seed_initial_fresh_pending_authority(
             obligations=source_obligations,
             experiments_by_obligation=experiments,
         )
+
+    # On a first planning handoff there is no historical retry/deferred pool,
+    # so planner.pending_count is the fresh-tail cardinality authority. Later
+    # legacy resumes may already mix categories and cannot use this equality
+    # check; the execution authority will separate those categories itself.
+    has_legacy_resume_pools = bool(
+        _list(plan.get("blocked_retry_pool"))
+        or _list(plan.get("budget_deferred_pool"))
+    )
+    planner_pending_count = int(plan.get("pending_count") or 0)
+    if not has_legacy_resume_pools and len(fresh_rows) != planner_pending_count:
+        plan["fresh_pending_authority_receipt"] = {
+            "schema_version": "qualibug.fresh-pending-authority.v1",
+            "status": "LEGACY_FALLBACK",
+            "reason": "fresh_membership_count_mismatch",
+            "derived_fresh_count": len(fresh_rows),
+            "planner_pending_count": planner_pending_count,
+        }
+        return plan
+
     plan["fresh_pending_pool"] = fresh_rows
     plan["fresh_pending_pool_count"] = len(fresh_rows)
     plan["fresh_pending_authority_receipt"] = {
@@ -235,7 +256,7 @@ def seed_initial_fresh_pending_authority(
         "status": "SEALED",
         "authority": "source_planning_universe_before_preview_reconstruction",
         "fresh_pending_pool_count": len(fresh_rows),
-        "planner_pending_count": int(plan.get("pending_count") or 0),
+        "planner_pending_count": planner_pending_count,
     }
     return plan
 
