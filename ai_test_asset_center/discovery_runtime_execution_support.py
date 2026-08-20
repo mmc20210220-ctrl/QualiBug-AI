@@ -66,6 +66,69 @@ def _prepare_continuation_attempt(
     return plan
 
 
+def _experiment_compile_status(experiment: Any) -> str:
+    if not isinstance(experiment, dict):
+        return ""
+    receipt = experiment.get("compile_receipt")
+    receipt = receipt if isinstance(receipt, dict) else {}
+    return _text(receipt.get("status") or experiment.get("compile_status")).upper()
+
+
+def _planner_safe_continuation_obligations(
+    *,
+    obligation_plan: dict[str, Any],
+    obligations: list[dict[str, Any]],
+    experiments_by_obligation: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Prevent stale obligation compile markers from selecting missing deps.
+
+    ``plan_obligation_round`` intentionally supports an obligation-level
+    ``compile_status`` fallback for compatibility when no experiment map is
+    supplied. During exact continuation we *do* have a current experiment map;
+    if an exact outstanding identity has no currently usable experiment, that
+    fallback would let it consume a planner slot with an empty experiment_id and
+    then fail the intent gate. Keep the identity in its exact pool, but suppress
+    only that stale fallback in the ephemeral planner view so other fresh work
+    can proceed. Persisted/source obligations are never mutated.
+    """
+    if "fresh_pending_pool" not in obligation_plan:
+        return [dict(row) for row in obligations if isinstance(row, dict)]
+
+    exact_ids: set[str] = set()
+    for key in (
+        "fresh_pending_pool",
+        "budget_deferred_pool",
+        "blocked_retry_pool",
+    ):
+        for raw in obligation_plan.get(key) or []:
+            if not isinstance(raw, dict):
+                continue
+            oid = _text(raw.get("obligation_id"))
+            if oid:
+                exact_ids.add(oid)
+
+    usable_statuses = {
+        "COMPILED",
+        "BLOCKED",
+        "BLOCKED_MISSING_BINDING",
+        "HARNESS_FAILED",
+    }
+    result: list[dict[str, Any]] = []
+    for raw in obligations:
+        if not isinstance(raw, dict):
+            continue
+        row = dict(raw)
+        oid = _text(row.get("obligation_id"))
+        if oid in exact_ids:
+            status = _experiment_compile_status(
+                experiments_by_obligation.get(oid)
+            )
+            if status not in usable_statuses:
+                row.pop("compile_status", None)
+        result.append(row)
+    return result
+
+
 def _consume_pending_obligation_rounds(
     *,
     obligation_plan: dict[str, Any],
@@ -90,9 +153,14 @@ def _consume_pending_obligation_rounds(
         experiments_by_obligation=experiments_by_obligation,
         behavior_ir=behavior_ir,
     )
-    batches, final_plan = _consume_exact_pending_obligation_rounds(
+    engine_obligations = _planner_safe_continuation_obligations(
         obligation_plan=seeded_plan,
         obligations=obligations,
+        experiments_by_obligation=experiments_by_obligation,
+    )
+    batches, final_plan = _consume_exact_pending_obligation_rounds(
+        obligation_plan=seeded_plan,
+        obligations=engine_obligations,
         experiments_by_obligation=experiments_by_obligation,
         behavior_ir=behavior_ir,
         root=root,
