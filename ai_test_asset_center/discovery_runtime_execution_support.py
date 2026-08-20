@@ -30,6 +30,42 @@ from .initial_fresh_pending_authority import (  # noqa: E402
 )
 
 
+def _text(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _prepare_continuation_attempt(
+    obligation_plan: dict[str, Any],
+) -> dict[str, Any]:
+    """Clear prior-attempt stop receipts without touching resume authority."""
+    plan = dict(obligation_plan) if isinstance(obligation_plan, dict) else {}
+    previous_stop = _text(plan.get("stop_condition"))
+    continuation_stop = (
+        previous_stop == "round_limit_reached"
+        or previous_stop == "PENDING_QUEUE_EMPTY"
+        or previous_stop.startswith("PENDING_NEXT_ROUND_SKIPPED_")
+        or previous_stop.startswith("NO_PROGRESS_")
+        or previous_stop.startswith("SAME_PLAN_")
+        or previous_stop.startswith("SAME_ERROR_")
+        or previous_stop in {
+            "NO_CONTINUATION_EXPERIMENTS",
+            "NO_SCHEDULED_EXPERIMENTS",
+        }
+    )
+    for key in (
+        "early_stop_reason",
+        "round_limit_reached",
+        "follow_on_round_limit",
+    ):
+        plan.pop(key, None)
+    if continuation_stop:
+        plan.pop("stop_condition", None)
+    # Receipts describe this continuation attempt, not the lifetime history.
+    # Exact pools remain the cross-attempt state authority.
+    plan["follow_on_round_receipts"] = []
+    return plan
+
+
 def _consume_pending_obligation_rounds(
     *,
     obligation_plan: dict[str, Any],
@@ -46,9 +82,10 @@ def _consume_pending_obligation_rounds(
     execute_batch,
     exclude_obligation_ids: set[str] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """Seal exact first fresh membership, run continuation, then bound preview."""
+    """Reset attempt-local stop state, seal exact fresh membership, and run."""
+    prepared_plan = _prepare_continuation_attempt(obligation_plan)
     seeded_plan = seed_initial_fresh_pending_authority(
-        obligation_plan=obligation_plan,
+        obligation_plan=prepared_plan,
         obligations=obligations,
         experiments_by_obligation=experiments_by_obligation,
         behavior_ir=behavior_ir,
@@ -69,10 +106,6 @@ def _consume_pending_obligation_rounds(
         exclude_obligation_ids=exclude_obligation_ids,
     )
     return batches, synchronize_continuation_preview(final_plan)
-
-
-def _text(value: Any) -> str:
-    return str(value or "").strip()
 
 
 def _finalize_campaign(handle: Any, ledger: dict[str, Any]) -> dict[str, Any]:
