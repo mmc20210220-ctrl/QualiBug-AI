@@ -1,14 +1,15 @@
 """Generic service-topology execution routing authority.
 
 A Behavior IR may contain operations from several enterprise services while one
-scan entrypoint carries only one ``base_url``.  Executing every compiled
+scan entrypoint carries only one ``base_url``. Executing every compiled
 experiment against that one URL fabricates cross-service 404s; dropping every
-foreign-service obligation destroys Recall.  The source of truth is the
+foreign-service obligation destroys Recall. The source of truth is the
 project-declared ``multi_service.services`` topology.
 
 This authority therefore:
 
-* routes a single-service experiment to that service's declared base URL;
+* routes a single-service experiment to that service's declared base URL and
+  binds the primary runtime contract to the same exact approved target;
 * enriches graph-backed multi-service experiments with approved targets so the
   existing process-graph runtime can route every node through its governed
   target context;
@@ -73,7 +74,10 @@ def build_service_topology(config: dict[str, Any]) -> dict[str, dict[str, Any]]:
         url, metadata = _service_url_row(raw_value)
         if not name or not url:
             continue
-        normalized = normalize_base_url(url)
+        try:
+            normalized = normalize_base_url(url)
+        except ValueError:
+            normalized = ""
         if not normalized:
             continue
         topology[name] = {
@@ -108,14 +112,17 @@ def _operation_service_map(behavior_ir: dict[str, Any]) -> dict[str, str]:
 
 
 def experiment_operation_refs(experiment: dict[str, Any]) -> list[str]:
-    """Return exact operation identities that may reach transport/cleanup."""
+    """Return operation identities that the formal experiment itself transports.
+
+    Binding/resolver operations may be present in ``required_operations`` but
+    execute through their own resolver authority. They must not make an otherwise
+    single-service business experiment look cross-service. Plan-carried operations
+    are therefore authoritative; required/declared operations are only a fallback
+    for old artifacts with no explicit plan operation identity.
+    """
 
     exp = _dict(experiment)
     refs: list[str] = []
-    for value in _list(exp.get("operation_refs")) + _list(exp.get("required_operations")):
-        ref = _text(value)
-        if ref and ref not in refs:
-            refs.append(ref)
     for plan_name in (
         "precondition_plan",
         "control_plan",
@@ -128,6 +135,12 @@ def experiment_operation_refs(experiment: dict[str, Any]) -> list[str]:
             ref = _text(step.get("operation_ref") or step.get("operation_id"))
             if ref and ref not in refs:
                 refs.append(ref)
+    if refs:
+        return refs
+    for value in _list(exp.get("operation_refs")) + _list(exp.get("required_operations")):
+        ref = _text(value)
+        if ref and ref not in refs:
+            refs.append(ref)
     return refs
 
 
@@ -177,7 +190,10 @@ def _approved_target_row(
             or runtime_contract.get("target_environment")
         ),
         "execution_mode": _text(row.get("execution_mode") or runtime_contract.get("execution_mode")),
-        "status": _text(row.get("status") or runtime_contract.get("status")) or "ready",
+        # A service URL is a declared route, not an implicit approval grant.
+        # Inherit the campaign's governed runtime status when the service row
+        # does not supply one; an absent status remains blocked by target_policy.
+        "status": _text(row.get("status") or runtime_contract.get("status")) or "blocked",
     })
     return row
 
@@ -210,6 +226,22 @@ def enrich_runtime_contract_with_topology(
     return contract
 
 
+def _primary_runtime_contract_for_service(
+    runtime_contract: dict[str, Any],
+    topology: dict[str, dict[str, Any]],
+    service_name: str,
+) -> dict[str, Any]:
+    enriched = enrich_runtime_contract_with_topology(runtime_contract, topology)
+    service = _dict(topology.get(service_name))
+    target = _approved_target_row(service_name, service, enriched)
+    approved_targets = deepcopy(_dict(enriched.get("approved_targets")))
+    return {
+        **enriched,
+        **target,
+        "approved_targets": approved_targets,
+    }
+
+
 def resolve_experiment_execution_route(
     *,
     experiment: dict[str, Any],
@@ -220,7 +252,10 @@ def resolve_experiment_execution_route(
 ) -> dict[str, Any]:
     """Resolve the one governed execution route for a compiled experiment."""
 
-    original_base = normalize_base_url(base_url) or _text(base_url)
+    try:
+        original_base = normalize_base_url(base_url) or _text(base_url)
+    except ValueError:
+        original_base = _text(base_url)
     services = experiment_service_refs(experiment, behavior_ir)
     enriched = enrich_runtime_contract_with_topology(runtime_contract, topology)
 
@@ -270,7 +305,11 @@ def resolve_experiment_execution_route(
             "service_refs": services,
             "routed_service_ref": service_name,
             "base_url": routed,
-            "runtime_contract": enriched,
+            "runtime_contract": _primary_runtime_contract_for_service(
+                runtime_contract,
+                topology,
+                service_name,
+            ),
             "reason_code": "",
         }
 
