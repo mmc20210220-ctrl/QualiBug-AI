@@ -189,17 +189,39 @@ def seed_initial_fresh_pending_authority(
     experiments_by_obligation: dict[str, dict[str, Any]],
     behavior_ir: dict[str, Any],
 ) -> dict[str, Any]:
-    """Attach exact first-round fresh identity without changing selection.
+    """Attach exact first-round fresh identity only when membership is provable.
 
     Existing ``fresh_pending_pool`` is immutable resume authority and wins
-    immediately. Legacy/first-round plans derive it from the same source inputs
-    used by planning. If source derivation cannot prove the planner-declared
-    fresh cardinality, the plan stays in legacy reconstruction mode rather than
-    sealing an incomplete or widened set as exact.
+    immediately. A true first planning handoff has no retry/deferred resume pool,
+    so source inputs plus ``pending_count`` can prove exact fresh membership.
+    Legacy mixed resumes do not contain enough information to distinguish
+    already-completed unselected source obligations from omitted fresh work; they
+    stay in legacy reconstruction mode rather than being falsely sealed exact.
     """
     plan = dict(_dict(obligation_plan))
     if "fresh_pending_pool" in plan:
         return plan
+
+    has_legacy_resume_pools = bool(
+        _list(plan.get("blocked_retry_pool"))
+        or _list(plan.get("budget_deferred_pool"))
+    )
+    planner_pending_count = int(plan.get("pending_count") or 0)
+    if has_legacy_resume_pools:
+        plan["fresh_pending_authority_receipt"] = {
+            "schema_version": "qualibug.fresh-pending-authority.v1",
+            "status": "LEGACY_FALLBACK",
+            "reason": "mixed_legacy_resume_pools_without_exact_fresh_membership",
+            "planner_pending_count": planner_pending_count,
+            "blocked_retry_pool_count": len(
+                _list(plan.get("blocked_retry_pool"))
+            ),
+            "budget_deferred_pool_count": len(
+                _list(plan.get("budget_deferred_pool"))
+            ),
+        }
+        return plan
+
     source_obligations = [
         dict(row) for row in obligations if isinstance(row, dict)
     ]
@@ -230,16 +252,7 @@ def seed_initial_fresh_pending_authority(
             experiments_by_obligation=experiments,
         )
 
-    # On a first planning handoff there is no historical retry/deferred pool,
-    # so planner.pending_count is the fresh-tail cardinality authority. Later
-    # legacy resumes may already mix categories and cannot use this equality
-    # check; the execution authority will separate those categories itself.
-    has_legacy_resume_pools = bool(
-        _list(plan.get("blocked_retry_pool"))
-        or _list(plan.get("budget_deferred_pool"))
-    )
-    planner_pending_count = int(plan.get("pending_count") or 0)
-    if not has_legacy_resume_pools and len(fresh_rows) != planner_pending_count:
+    if len(fresh_rows) != planner_pending_count:
         plan["fresh_pending_authority_receipt"] = {
             "schema_version": "qualibug.fresh-pending-authority.v1",
             "status": "LEGACY_FALLBACK",
