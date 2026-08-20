@@ -30,7 +30,7 @@ def selected_continuation_identity(row: dict[str, Any]) -> str:
 
 
 def _continuation_result_rows(batch: dict[str, Any]) -> list[dict[str, Any]]:
-    """Project result rows onto selected identity without mutating evidence."""
+    """Project result rows onto continuation semantics without mutating evidence."""
     projected: list[dict[str, Any]] = []
     for raw in _list(_dict(batch).get("results")):
         if not isinstance(raw, dict):
@@ -44,6 +44,20 @@ def _continuation_result_rows(batch: dict[str, Any]) -> list[dict[str, Any]]:
             row["obligation_id"] = selected_id
         if executed_id and executed_id != selected_id:
             row["executed_obligation_id"] = executed_id
+
+        # Batch mechanics historically emit HARNESS_FAILURE while continuation
+        # retry policy uses HARNESS_FAILED. Normalize only this compatibility
+        # alias in the continuation view; the persisted batch remains untouched.
+        status = _text(row.get("status") or row.get("execution_status")).upper()
+        reason = _text(
+            row.get("reason_code")
+            or row.get("block_reason")
+            or row.get("failure_reason")
+        ).upper()
+        if status == "HARNESS_FAILURE":
+            row["status"] = "HARNESS_FAILED"
+        if reason == "HARNESS_FAILURE":
+            row["reason_code"] = "HARNESS_FAILED"
         projected.append(row)
     return projected
 
