@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 from ai_test_asset_center import agent_semantic_linker as impl
+from ai_test_asset_center import agent_semantic_linker_authority as authority
 from ai_test_asset_center.agent_semantic_linker_authority import (
     enrich_knowledge_asset_with_agent_relationships,
 )
@@ -148,7 +149,7 @@ def test_zero_score_interface_is_filled_into_a_bounded_candidate_window() -> Non
     )
 
 
-def test_original_candidate_recall_can_score_only_three_interfaces_in_this_fixture() -> None:
+def test_original_candidate_recall_dropped_the_zero_score_target_in_this_fixture() -> None:
     asset = _asset()
     lexicon = impl._semantic_lexicon()
     signals = impl._build_asset_signals(asset, lexicon)
@@ -159,11 +160,11 @@ def test_original_candidate_recall_can_score_only_three_interfaces_in_this_fixtu
     interface_signals = impl._interface_signal_map(interfaces, lexicon)
     ctx = impl._rule_context(asset["rule_library"][0], signals, lexicon)
 
-    ranked, _stats = impl._recall_candidate_interfaces(
+    ranked, _stats = authority._original_recall_candidate_interfaces(
         ctx,
         interface_signals,
         asset,
     )
 
-    assert len(ranked) == 12
-    assert "api:POST:/opaque-target" in ranked
+    assert len(ranked) == 3
+    assert "api:POST:/opaque-target" not in ranked
