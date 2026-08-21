@@ -5,6 +5,7 @@ pipeline invocation and post-run projection.
 """
 from __future__ import annotations
 
+import os
 import time
 import logging
 from pathlib import Path
@@ -234,6 +235,51 @@ def prepare_scan_before_pipeline(
     approved_base_url, runtime_gaps, initial_runtime_contract = _runtime_contract(
         context, base_url, manifest
     )
+    # ── Runtime API document probing (unfamiliar-target surface expansion) ──
+    # A genuinely unfamiliar target's strongest documented-surface source is
+    # its own standard document endpoint (/openapi.json, /swagger.json,
+    # /v2/api-docs ...). When the declared input is not a machine-parseable
+    # OpenAPI/Swagger contract (markdown spec, empty, or unknown format), probe
+    # the approved non-production base URL read-only. A validated hit becomes
+    # the machine contract while the original submitted text stays the
+    # source-verification text. All outcomes are receipted; probing never
+    # blocks a scan. Operator controls: context runtime_api_doc_probe_enabled
+    # (bool/string) and QUALIBUG_RUNTIME_API_DOC_PROBE_DISABLED.
+    runtime_api_doc_probe_receipt: dict[str, Any] = {
+        "schema_version": "qualibug.runtime-api-doc-probe.v1",
+        "status": "skipped",
+        "reason": "not_triggered",
+    }
+    _probe_control = str(
+        context.get("runtime_api_doc_probe_enabled") or "auto"
+    ).strip().lower()
+    _probe_env_disabled = (
+        str(os.environ.get("QUALIBUG_RUNTIME_API_DOC_PROBE_DISABLED") or "")
+        .strip()
+        .lower()
+        in {"1", "true", "yes"}
+    )
+    if approved_base_url and not _probe_env_disabled and _probe_control not in {
+        "false",
+        "0",
+        "no",
+        "off",
+    }:
+        from .universal_api_parser import detect_format
+
+        _current_format = detect_format(api_doc_text)
+        if _current_format not in {"openapi3", "swagger2", "postman", "graphql", "grpc"}:
+            from .runtime_api_doc_probe import probe_runtime_api_document
+
+            runtime_api_doc_probe_receipt = probe_runtime_api_document(
+                approved_base_url
+            )
+            if runtime_api_doc_probe_receipt.get("status") == "found":
+                api_doc_text = str(
+                    runtime_api_doc_probe_receipt.get("document_text") or ""
+                )
+                runtime_api_doc_probe_receipt["replaced_operation_surface"] = True
+    context["runtime_api_doc_probe_receipt"] = runtime_api_doc_probe_receipt
     if base_url and context.get("runtime_scenario_contract"):
         from .runtime_scenario_contract_gate import runtime_scenario_contract_gaps
 
