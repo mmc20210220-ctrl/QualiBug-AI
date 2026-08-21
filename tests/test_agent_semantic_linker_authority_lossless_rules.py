@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import re
 
 from ai_test_asset_center.agent_semantic_linker_authority import (
     enrich_knowledge_asset_with_agent_relationships,
