@@ -96,9 +96,11 @@ class ReasonerPolicy:
         self.max_workers = max(1, min(int(self.max_workers or 1), 4))
         self.retry_count = max(0, min(int(self.retry_count or 0), 1))
         # Persisted policies created under the legacy default of 15 must not
-        # silently keep production below the package guardrail of 40. A lower
-        # per-run operator budget remains available through the explicit,
-        # receipted environment override in policy_wiring.
+        # silently keep production below the package guardrail (currently 64,
+        # raised from 40 on 2026-08-21 to widen per-engine hypothesis coverage
+        # on unfamiliar targets). A lower per-run operator budget remains
+        # available through the explicit, receipted environment override in
+        # policy_wiring.
         self.max_hypotheses_per_engine = max(
             _REASONER_MAX_HYPOTHESES_PER_ENGINE,
             min(

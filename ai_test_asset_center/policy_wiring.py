@@ -16,7 +16,7 @@ from typing import Any
 # module and ``_clamp_reasoner_hypothesis_cap`` clamps every policy/env request
 # to it.  Keep it equal to ``stage_reason_all_v2.MAX_HYPOTHESES``; the two are
 # cross-checked by tests/test_reasoner_static_guardrails.py.
-_REASONER_MAX_HYPOTHESES_PER_ENGINE = 40
+_REASONER_MAX_HYPOTHESES_PER_ENGINE = 64
 _REASONER_HYPOTHESIS_CAP_ENV = "QUALIBUG_REASONER_MAX_HYPOTHESES_PER_ENGINE"
 _BEHAVIOR_SLICE_MAX_PER_ROUND = 15
 _INCREMENTAL_DISCOVERY_ROUND_MAX = 12
