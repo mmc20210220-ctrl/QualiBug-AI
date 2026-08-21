@@ -41,6 +41,11 @@ _original_all_fact_rows = getattr(
     "_qualibug_authority_original",
     _impl._all_fact_rows,
 )
+_original_recall_supporting_facts = getattr(
+    _impl._recall_supporting_facts,
+    "_qualibug_authority_original",
+    _impl._recall_supporting_facts,
+)
 
 
 def _authority_asset_transition_rows(asset: dict[str, Any]) -> list[dict[str, Any]]:
@@ -57,14 +62,59 @@ def _authority_all_fact_rows(asset: dict[str, Any]) -> list[dict[str, Any]]:
     return _original_all_fact_rows(asset)
 
 
+def _authority_recall_supporting_facts(
+    ctx: dict[str, Any],
+    fact_pool: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Keep zero-overlap facts inside the bounded recall window.
+
+    The core scorer is intentionally precision-biased inside the window: facts
+    with lexical/structured overlap are ranked first. That is safe only if the
+    remaining window slots are still populated. Otherwise a decisive fact with
+    no shared vocabulary is discarded before the model sees it, and the later
+    contract validator cannot recover it because its fact_id is absent from
+    the allowed evidence refs.
+
+    Paging turns MAX_SUPPORTING_FACTS_PER_RULE into a window size. Filling the
+    unused slots with the otherwise-unselected facts makes that window lossless;
+    the authority layer can then move to the next source window when the rule
+    remains unresolved.
+    """
+    selected = _original_recall_supporting_facts(ctx, fact_pool)
+    budget = max(1, int(_impl.MAX_SUPPORTING_FACTS_PER_RULE))
+    target_size = min(budget, len(fact_pool))
+    if len(selected) >= target_size:
+        return selected[:budget]
+
+    selected_ids = {
+        str(fact.get("fact_id") or "").strip()
+        for fact in selected
+        if str(fact.get("fact_id") or "").strip()
+    }
+    for fact in fact_pool:
+        fact_id = str(fact.get("fact_id") or "").strip()
+        if fact_id and fact_id in selected_ids:
+            continue
+        selected.append(dict(fact))
+        if fact_id:
+            selected_ids.add(fact_id)
+        if len(selected) >= target_size:
+            break
+    return selected[:budget]
+
+
 _authority_asset_transition_rows._qualibug_authority_original = _original_asset_transition_rows
 _authority_all_fact_rows._qualibug_authority_original = _original_all_fact_rows
+_authority_recall_supporting_facts._qualibug_authority_original = _original_recall_supporting_facts
 if not getattr(_impl._asset_transition_rows, "_qualibug_authority_wrapper", False):
     _authority_asset_transition_rows._qualibug_authority_wrapper = True
     _impl._asset_transition_rows = _authority_asset_transition_rows
 if not getattr(_impl._all_fact_rows, "_qualibug_authority_wrapper", False):
     _authority_all_fact_rows._qualibug_authority_wrapper = True
     _impl._all_fact_rows = _authority_all_fact_rows
+if not getattr(_impl._recall_supporting_facts, "_qualibug_authority_wrapper", False):
+    _authority_recall_supporting_facts._qualibug_authority_wrapper = True
+    _impl._recall_supporting_facts = _authority_recall_supporting_facts
 
 
 def _dicts(value: Any) -> list[dict[str, Any]]:
@@ -400,6 +450,7 @@ def _fact_paged_enrichment(governed_asset: dict[str, Any], *, client: Any | None
         ),
         "fact_budget_skipped_count": 0,
         "unresolved_rule_counts_after_window": unresolved_rule_counts,
+        "zero_score_fact_fill_enabled": True,
         "reason_code": "SOURCE_SUPPORTING_FACTS_PAGED_UNTIL_RULE_CLOSURE",
     }
     merged_receipt["receipt_fingerprint"] = _impl._fingerprint(merged_receipt)
