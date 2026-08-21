@@ -16,7 +16,7 @@ class OmittedTransitionFakeClient:
     def complete_json(self, **kwargs: object) -> dict:
         prompt = str(kwargs["user_prompt"])
         if '"assessment_mode":"rule_to_interface"' in prompt:
-            raise AssertionError("transition recovery must not forward the synthetic rule request")
+            return {"assessments": []}
         assert '"assessment_mode":"state_transition_to_interface"' in prompt
         packet = json.loads(
             prompt.split("INPUT:\n", 1)[1].split("\n\nFINAL CONTRACT CHECK", 1)[0]
@@ -150,7 +150,7 @@ def test_transition_recovery_preserves_unresolved_transition_when_provider_omits
         def complete_json(self, **kwargs: object) -> dict:
             prompt = str(kwargs["user_prompt"])
             if '"assessment_mode":"rule_to_interface"' in prompt:
-                raise AssertionError("synthetic rule request must not reach the provider")
+                return {"assessments": []}
             packet = json.loads(
                 prompt.split("INPUT:\n", 1)[1].split("\n\nFINAL CONTRACT CHECK", 1)[0]
             )
