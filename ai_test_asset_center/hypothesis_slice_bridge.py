@@ -171,21 +171,67 @@ def _method_hint_from_hypothesis(hypothesis: dict[str, Any]) -> str:
 
 
 def _hypothesis_family(hypothesis: dict[str, Any]) -> str:
-    for key in ("family", "category", "risk_type", "_reasoner_engine"):
+    """Return the risk family declared on a hypothesis, WITHOUT collapsing
+    unknown / open bug families to "invariant".
+
+    An explicitly declared ``family`` / ``category`` / ``risk_type`` is preserved
+    verbatim. The downstream lossless registry (``test_obligation.resolve_risk_family``
+    and the obligation adapter) re-resolves it: registered families compile,
+    open / unregistered families (performance_latency, stability_reliability,
+    event_delivery_consistency, ui_state_consistency, message_chain, …) are
+    marked ``BLOCKED`` and counted instead of being silently rewritten into a
+    generic invariant/validation obligation. The ``_ORACLE_BY_FAMILY`` substring
+    heuristic is retained only as a last-resort hint for hypotheses that declare
+    no family at all and can only be inferred from free text; its final
+    "invariant" fallback is kept for that genuine no-signal case, because
+    "invariant" resolves to the canonical "validation" family (a real,
+    compilable obligation) — collapsing it would only lose findings.
+    """
+    # Explicitly declared family takes precedence and is preserved as-is.
+    for key in ("family", "category", "risk_type"):
         raw = _text(hypothesis.get(key)).lower()
-        if not raw:
-            continue
-        for token, mapping in _ORACLE_BY_FAMILY.items():
-            if token in raw:
-                return token
-        # engine names like business_rules / multi_tenant
-        if raw in _ORACLE_BY_FAMILY:
+        if raw:
             return raw
+    # Engine name as a family hint (e.g. multi_tenant / business_rules engines).
+    raw_engine = _text(hypothesis.get("_reasoner_engine")).lower()
+    if raw_engine:
+        for token, _mapping in _ORACLE_BY_FAMILY.items():
+            if token in raw_engine:
+                return token
+        if raw_engine in _ORACLE_BY_FAMILY:
+            return raw_engine
+    # No declared family: infer from free text via the known vocabulary.
+    blob = " ".join(
+        _text(hypothesis.get(k))
+        for k in ("title", "description", "trigger", "expected_behavior")
+    ).lower()
+    for token in _ORACLE_BY_FAMILY:
+        if token in blob:
+            return token
     return "invariant"
 
 
-def _oracle_binding(family: str) -> tuple[str, str, str]:
-    return _ORACLE_BY_FAMILY.get(family, ("invariant", "_consistency_oracle", "ConsistencyOracle"))
+def _oracle_binding(family: str) -> tuple[str, str, str, str]:
+    """Resolve a family to its legacy slice oracle binding, routed through the
+    single registry authority (``test_obligation.resolve_risk_family``).
+
+    Unknown / open bug families (performance_latency, stability_reliability,
+    event_delivery_consistency, ui_state_consistency, message_chain, …) no longer
+    silently fall back to the invariant consistency oracle. They return kind
+    ``"unregistered"`` with the registry reason code, so the legacy champion slice
+    records them as visibly blocked rather than as a bogus invariant check.
+    """
+    from .test_obligation import resolve_risk_family
+
+    resolution = resolve_risk_family(family)
+    reason_code = resolution.get("reason_code") or ""
+    if resolution.get("registered"):
+        kind, oracle_field, oracle_class = _ORACLE_BY_FAMILY.get(
+            resolution["canonical"],
+            ("invariant", "_consistency_oracle", "ConsistencyOracle"),
+        )
+        return (kind, oracle_field, oracle_class, reason_code)
+    return ("unregistered", "_unregistered_oracle", "UnregisteredOracle", reason_code)
 
 
 def _endpoint_paths_from_hypothesis(hypothesis: dict[str, Any]) -> list[str]:
@@ -888,7 +934,7 @@ def _candidate_to_legacy_slice(candidate: dict[str, Any]) -> dict[str, Any]:
     """Compatibility projection for the temporary legacy champion only."""
 
     family = _text(candidate.get("risk_family")) or "invariant"
-    kind, oracle_field, oracle_name = _oracle_binding(family)
+    kind, oracle_field, oracle_name, reason_code = _oracle_binding(family)
     entity = _text(candidate.get("entity")) or "resource"
     method = _text(candidate.get("method")).upper() or "GET"
     path = _text(candidate.get("path"))
@@ -919,7 +965,15 @@ def _candidate_to_legacy_slice(candidate: dict[str, Any]) -> dict[str, Any]:
         "_bound_path": path,
         "_selection_family": f"unified:{origin}:{family}",
         "_source_candidate_id": candidate_id,
+        "_family_reason_code": reason_code,
     }
+    if kind == "unregistered":
+        # Open / unknown bug family: recorded as visibly unregistered, never
+        # compiled as a bogus invariant check. Breadth loss stays observable
+        # and countable in the legacy champion slice.
+        slice_row["_oracle_binding_status"] = "UNREGISTERED"
+        slice_row["_unregistered_oracle"] = oracle_name
+        return slice_row
     if kind == "permission":
         slice_row.update({
             "_permission_method": method,
