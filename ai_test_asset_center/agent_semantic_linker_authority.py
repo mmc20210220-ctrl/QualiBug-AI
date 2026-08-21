@@ -21,8 +21,13 @@ AgentSemanticLinkerError = _impl.AgentSemanticLinkerError
 _RULE_BATCH_WINDOW = max(1, int(_impl.MAX_RULES_PER_REQUEST) * int(_impl.MAX_PROVIDER_REQUESTS))
 _TRANSITION_BATCH_WINDOW = max(1, int(_impl.MAX_TRANSITIONS_PER_REQUEST))
 _CANDIDATE_BATCH_WINDOW = max(1, int(_impl.MAX_CANDIDATES_PER_RULE))
+_FACT_BATCH_WINDOW = max(1, int(_impl.MAX_SUPPORTING_FACTS_PER_RULE))
 _TRANSITION_ROWS_OVERRIDE: ContextVar[tuple[dict[str, Any], ...] | None] = ContextVar(
     "qualibug_transition_rows_override",
+    default=None,
+)
+_FACT_ROWS_OVERRIDE: ContextVar[tuple[dict[str, Any], ...] | None] = ContextVar(
+    "qualibug_fact_rows_override",
     default=None,
 )
 
@@ -30,6 +35,11 @@ _original_asset_transition_rows = getattr(
     _impl._asset_transition_rows,
     "_qualibug_authority_original",
     _impl._asset_transition_rows,
+)
+_original_all_fact_rows = getattr(
+    _impl._all_fact_rows,
+    "_qualibug_authority_original",
+    _impl._all_fact_rows,
 )
 
 
@@ -40,10 +50,21 @@ def _authority_asset_transition_rows(asset: dict[str, Any]) -> list[dict[str, An
     return _original_asset_transition_rows(asset)
 
 
+def _authority_all_fact_rows(asset: dict[str, Any]) -> list[dict[str, Any]]:
+    override = _FACT_ROWS_OVERRIDE.get()
+    if override is not None:
+        return [dict(row) for row in override]
+    return _original_all_fact_rows(asset)
+
+
 _authority_asset_transition_rows._qualibug_authority_original = _original_asset_transition_rows
+_authority_all_fact_rows._qualibug_authority_original = _original_all_fact_rows
 if not getattr(_impl._asset_transition_rows, "_qualibug_authority_wrapper", False):
     _authority_asset_transition_rows._qualibug_authority_wrapper = True
     _impl._asset_transition_rows = _authority_asset_transition_rows
+if not getattr(_impl._all_fact_rows, "_qualibug_authority_wrapper", False):
+    _authority_all_fact_rows._qualibug_authority_wrapper = True
+    _impl._all_fact_rows = _authority_all_fact_rows
 
 
 def _dicts(value: Any) -> list[dict[str, Any]]:
@@ -297,10 +318,99 @@ def _candidate_paged_enrichment(governed_asset: dict[str, Any], *, client: Any |
     return merged_asset, merged_receipt
 
 
+def _fact_paged_enrichment(governed_asset: dict[str, Any], *, client: Any | None) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Page supporting facts only for rules that remain unresolved.
+
+    The core linker keeps a bounded per-rule evidence slice. When that slice
+    is exhausted without a LINKED assessment, this authority layer exposes the
+    next source-backed fact window and re-runs only the unresolved rules.
+    Already-linked rules are not repeated, which keeps the Recall repair from
+    multiplying provider work for the common resolved path. State transitions
+    remain first-window-only, matching the existing candidate/transition
+    paging contract.
+    """
+    fact_pool = _original_all_fact_rows(governed_asset)
+    if len(fact_pool) <= _FACT_BATCH_WINDOW:
+        return _candidate_paged_enrichment(governed_asset, client=client)
+
+    base_client = client or _impl._default_client()
+    chunks = [
+        fact_pool[index:index + _FACT_BATCH_WINDOW]
+        for index in range(0, len(fact_pool), _FACT_BATCH_WINDOW)
+    ]
+    remaining_rules = _dicts(governed_asset.get("rule_library"))
+    receipts: list[dict[str, Any]] = []
+    enriched_assets: list[dict[str, Any]] = []
+    consumed_chunks: list[list[dict[str, Any]]] = []
+    unresolved_rule_counts: list[int] = []
+
+    for index, chunk in enumerate(chunks):
+        if not remaining_rules:
+            break
+        chunk_asset = deepcopy(governed_asset)
+        chunk_asset["rule_library"] = remaining_rules
+        if index > 0:
+            chunk_asset["state_machines"] = []
+        token = _FACT_ROWS_OVERRIDE.set(tuple(dict(row) for row in chunk))
+        try:
+            enriched, receipt = _candidate_paged_enrichment(chunk_asset, client=base_client)
+        finally:
+            _FACT_ROWS_OVERRIDE.reset(token)
+        receipts.append(receipt)
+        enriched_assets.append(enriched)
+        consumed_chunks.append([dict(row) for row in chunk])
+
+        assessments = {
+            _text(row.get("rule_id")): row
+            for row in receipt.get("rule_assessments", []) or []
+            if isinstance(row, dict) and _text(row.get("rule_id"))
+        }
+        next_rules: list[dict[str, Any]] = []
+        for rule in remaining_rules:
+            rule_id = _text(rule.get("rule_id"))
+            assessment = assessments.get(rule_id)
+            if (
+                assessment is None
+                or _text(assessment.get("disposition")).upper() != "LINKED"
+                or int(assessment.get("accepted_relationship_count") or 0) <= 0
+            ):
+                next_rules.append(dict(rule))
+        remaining_rules = next_rules
+        unresolved_rule_counts.append(len(remaining_rules))
+
+    merged_asset = deepcopy(governed_asset)
+    merged_asset["relationships"] = _merge_generated_relationships(governed_asset, enriched_assets, receipts)
+    merged_receipt = _merge_receipts(
+        receipts,
+        rule_count=len(_dicts(governed_asset.get("rule_library"))),
+        duplicate_rule_windows=True,
+    )
+    merged_receipt["accepted_relationship_count"] = len(merged_receipt["accepted_edge_ids"])
+    merged_receipt["supporting_fact_pool_count"] = len(fact_pool)
+    merged_receipt["context_fact_omitted_count"] = 0
+    merged_receipt["supporting_fact_paging"] = {
+        "enabled": True,
+        "window_size": _FACT_BATCH_WINDOW,
+        "window_count": len(consumed_chunks),
+        "source_fact_count": len(fact_pool),
+        "window_fact_counts": [len(chunk) for chunk in consumed_chunks],
+        "unconsumed_tail_fact_count": max(
+            0,
+            len(fact_pool) - sum(len(chunk) for chunk in consumed_chunks),
+        ),
+        "fact_budget_skipped_count": 0,
+        "unresolved_rule_counts_after_window": unresolved_rule_counts,
+        "reason_code": "SOURCE_SUPPORTING_FACTS_PAGED_UNTIL_RULE_CLOSURE",
+    }
+    merged_receipt["receipt_fingerprint"] = _impl._fingerprint(merged_receipt)
+    merged_asset["agent_semantic_link_receipt"] = merged_receipt
+    return merged_asset, merged_receipt
+
+
 def _lossless_rule_enrichment(governed_asset: dict[str, Any], *, client: Any | None) -> tuple[dict[str, Any], dict[str, Any]]:
     rules = _dicts(governed_asset.get("rule_library"))
     if len(rules) <= _RULE_BATCH_WINDOW:
-        return _candidate_paged_enrichment(governed_asset, client=client)
+        return _fact_paged_enrichment(governed_asset, client=client)
     chunks = [rules[i:i + _RULE_BATCH_WINDOW] for i in range(0, len(rules), _RULE_BATCH_WINDOW)]
     receipts: list[dict[str, Any]] = []
     generated_relationships: list[dict[str, Any]] = []
@@ -309,7 +419,7 @@ def _lossless_rule_enrichment(governed_asset: dict[str, Any], *, client: Any | N
         chunk_asset["rule_library"] = chunk
         if index > 0:
             chunk_asset["state_machines"] = []
-        enriched, receipt = _candidate_paged_enrichment(chunk_asset, client=client)
+        enriched, receipt = _fact_paged_enrichment(chunk_asset, client=client)
         receipts.append(receipt)
         accepted_edge_ids = {str(x).strip() for x in receipt.get("accepted_edge_ids", []) if str(x).strip()}
         generated_relationships.extend(dict(row) for row in _dicts(enriched.get("relationships")) if str(row.get("edge_id") or "").strip() in accepted_edge_ids)
