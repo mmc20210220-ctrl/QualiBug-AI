@@ -1,7 +1,13 @@
-"""Govern existing relationship dedupe for the mature agent semantic linker."""
+"""Authority facade for lossless semantic-link scheduling.
+
+The mature semantic linker keeps bounded provider units. This facade turns those
+unit budgets into paging boundaries so a source asset is never silently
+truncated before semantic linking.
+"""
 from __future__ import annotations
 
 from copy import deepcopy
+import threading
 from typing import Any
 
 from . import agent_semantic_linker as _impl
@@ -11,16 +17,8 @@ RECEIPT_SCHEMA = _impl.RECEIPT_SCHEMA
 PROMPT_PROTOCOL = _impl.PROMPT_PROTOCOL
 AgentSemanticLinkerError = _impl.AgentSemanticLinkerError
 
-# The mature linker has an explicit provider window of
-# MAX_RULES_PER_REQUEST * MAX_PROVIDER_REQUESTS rules.  That was originally
-# treated as a global scan ceiling, which meant rule 321+ was only receipted as
-# budget-skipped and was never sent to the semantic linker.  Keep the provider
-# window as the bounded unit size, but schedule every source rule through
-# lossless windows at this authority boundary.
-_RULE_BATCH_WINDOW = max(
-    1,
-    int(_impl.MAX_RULES_PER_REQUEST) * int(_impl.MAX_PROVIDER_REQUESTS),
-)
+_RULE_BATCH_WINDOW = max(1, int(_impl.MAX_RULES_PER_REQUEST) * int(_impl.MAX_PROVIDER_REQUESTS))
+_TRANSITION_BATCH_WINDOW = max(1, int(_impl.MAX_TRANSITIONS_PER_REQUEST))
 
 
 def _dicts(value: Any) -> list[dict[str, Any]]:
@@ -31,257 +29,248 @@ def _is_rule_interface(row: dict[str, Any]) -> bool:
     return str(row.get("relation") or row.get("relation_type") or "").strip() == "rule_to_interface"
 
 
-def _merge_status(receipts: list[dict[str, Any]]) -> str:
-    rejections = any(receipt.get("rejections") for receipt in receipts)
-    failed = any(receipt.get("failed_units") for receipt in receipts)
-    gaps = any(
-        receipt.get("unassessed_rule_count")
-        or receipt.get("budget_skipped_rule_count")
-        or receipt.get("unassessed_transition_count")
-        or receipt.get("failed_units")
-        or any(
-            row.get("disposition") != "LINKED"
-            or row.get("accepted_relationship_count") == 0
-            for row in [
-                *receipt.get("rule_assessments", []),
-                *receipt.get("transition_assessments", []),
-            ]
-            if isinstance(row, dict)
-        )
-        for receipt in receipts
-    )
-    if rejections:
-        return "VERIFIED_WITH_REJECTIONS"
-    if failed:
-        return "VERIFIED_WITH_FAILED_UNITS"
-    if gaps:
-        return "VERIFIED_WITH_GAPS"
-    return "VERIFIED"
+def _is_rule_prompt(prompt: str) -> bool:
+    return '"assessment_mode":"rule_to_interface"' in prompt or '"assessment_mode": "rule_to_interface"' in prompt
+
+
+class _PagingClient:
+    """Reuse identical rule responses across transition paging windows."""
+
+    def __init__(self, client: Any) -> None:
+        self._client = client
+        self._rule_responses: dict[str, dict[str, Any]] = {}
+        self._lock = threading.Lock()
+        self.forwarded_calls = 0
+        self.cached_rule_calls = 0
+
+    def complete_json(self, **kwargs: Any) -> dict[str, Any]:
+        prompt = str(kwargs.get("user_prompt") or "")
+        if _is_rule_prompt(prompt):
+            with self._lock:
+                cached = self._rule_responses.get(prompt)
+            if cached is not None:
+                with self._lock:
+                    self.cached_rule_calls += 1
+                return deepcopy(cached)
+        response = self._client.complete_json(**kwargs)
+        with self._lock:
+            self.forwarded_calls += 1
+            if _is_rule_prompt(prompt) and isinstance(response, dict):
+                self._rule_responses[prompt] = deepcopy(response)
+        return response
+
+    def usage_snapshot(self) -> dict[str, float]:
+        snapshot = self._client.usage_snapshot()
+        return dict(snapshot) if isinstance(snapshot, dict) else {}
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._client, name)
+
+
+def _run_core_with_transition_window(
+    asset: dict[str, Any],
+    *,
+    client: Any,
+    transition_rows: list[dict[str, Any]],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Run the mature linker against one transition window.
+
+    The original asset remains intact for rule recall and supporting-fact recall;
+    only transition enumeration is scoped for this invocation.
+    """
+    original = _impl._asset_transition_rows
+    _impl._asset_transition_rows = lambda _asset: [dict(row) for row in transition_rows]
+    try:
+        return _impl.enrich_knowledge_asset_with_agent_relationships(asset, client=client)
+    finally:
+        _impl._asset_transition_rows = original
+
+
+def _unique_assessments(receipts: list[dict[str, Any]], key: str) -> list[dict[str, Any]]:
+    result: dict[str, dict[str, Any]] = {}
+    for receipt in receipts:
+        for row in receipt.get(key, []) or []:
+            if not isinstance(row, dict):
+                continue
+            identity = str(row.get("rule_id") if key == "rule_assessments" else row.get("transition_id") or "")
+            if identity and identity not in result:
+                result[identity] = dict(row)
+    return list(result.values())
 
 
 def _merge_candidate_recall(receipts: list[dict[str, Any]]) -> dict[str, Any]:
-    rows = [
-        receipt.get("candidate_recall")
-        for receipt in receipts
-        if isinstance(receipt.get("candidate_recall"), dict)
-    ]
-    bases = {
-        str(row.get("recall_basis") or "")
-        for row in rows
-        if str(row.get("recall_basis") or "")
-    }
-    mins = [row.get("candidate_min") for row in rows if row.get("candidate_min") is not None]
+    rows = [r.get("candidate_recall") for r in receipts if isinstance(r.get("candidate_recall"), dict)]
+    if not rows:
+        return {"rule_count": 0, "candidate_total": 0, "candidate_min": None, "candidate_max": 0, "fallback_rule_count": 0, "empty_candidate_rule_count": 0, "recall_basis": "mixed"}
+    bases = {str(r.get("recall_basis") or "") for r in rows if str(r.get("recall_basis") or "")}
+    rule_counts = [int(r.get("rule_count") or 0) for r in rows]
+    if len(rule_counts) > 1 and len(set(rule_counts)) == 1:
+        first = rows[0]
+        return {
+            "rule_count": rule_counts[0],
+            "candidate_total": int(first.get("candidate_total") or 0),
+            "candidate_min": first.get("candidate_min"),
+            "candidate_max": int(first.get("candidate_max") or 0),
+            "fallback_rule_count": int(first.get("fallback_rule_count") or 0),
+            "empty_candidate_rule_count": int(first.get("empty_candidate_rule_count") or 0),
+            "recall_basis": next(iter(bases)) if len(bases) == 1 else "mixed",
+        }
+    mins = [r.get("candidate_min") for r in rows if r.get("candidate_min") is not None]
     return {
-        "rule_count": sum(int(row.get("rule_count") or 0) for row in rows),
-        "candidate_total": sum(int(row.get("candidate_total") or 0) for row in rows),
+        "rule_count": sum(rule_counts),
+        "candidate_total": sum(int(r.get("candidate_total") or 0) for r in rows),
         "candidate_min": min(mins) if mins else None,
-        "candidate_max": max(
-            [int(row.get("candidate_max") or 0) for row in rows],
-            default=0,
-        ),
-        "fallback_rule_count": sum(int(row.get("fallback_rule_count") or 0) for row in rows),
-        "empty_candidate_rule_count": sum(
-            int(row.get("empty_candidate_rule_count") or 0) for row in rows
-        ),
+        "candidate_max": max([int(r.get("candidate_max") or 0) for r in rows], default=0),
+        "fallback_rule_count": sum(int(r.get("fallback_rule_count") or 0) for r in rows),
+        "empty_candidate_rule_count": sum(int(r.get("empty_candidate_rule_count") or 0) for r in rows),
         "recall_basis": next(iter(bases)) if len(bases) == 1 else "mixed",
     }
 
 
-def _merge_receipts(
-    receipts: list[dict[str, Any]],
-    *,
-    rule_count: int,
-) -> dict[str, Any]:
+def _merge_status(receipts: list[dict[str, Any]]) -> str:
+    if any(r.get("rejections") for r in receipts):
+        return "VERIFIED_WITH_REJECTIONS"
+    if any(r.get("failed_units") for r in receipts):
+        return "VERIFIED_WITH_FAILED_UNITS"
+    if any(r.get("unassessed_rule_count") or r.get("budget_skipped_rule_count") or r.get("unassessed_transition_count") for r in receipts):
+        return "VERIFIED_WITH_GAPS"
+    if any(
+        row.get("disposition") != "LINKED" or row.get("accepted_relationship_count") == 0
+        for r in receipts
+        for row in [*r.get("rule_assessments", []), *r.get("transition_assessments", [])]
+        if isinstance(row, dict)
+    ):
+        return "VERIFIED_WITH_GAPS"
+    return "VERIFIED"
+
+
+def _merge_receipts(receipts: list[dict[str, Any]], *, rule_count: int) -> dict[str, Any]:
     first = receipts[0]
     merged = dict(first)
+    rule_assessments = _unique_assessments(receipts, "rule_assessments")
+    transition_assessments = _unique_assessments(receipts, "transition_assessments")
     merged["rule_count"] = rule_count
-    merged["assessed_rule_count"] = sum(
-        int(receipt.get("assessed_rule_count") or 0) for receipt in receipts
-    )
-    merged["unassessed_rule_count"] = sum(
-        int(receipt.get("unassessed_rule_count") or 0) for receipt in receipts
-    )
-    merged["unassessed_rule_ids"] = [
-        rule_id
-        for receipt in receipts
-        for rule_id in receipt.get("unassessed_rule_ids", [])
-    ]
-    merged["budget_skipped_rule_count"] = sum(
-        int(receipt.get("budget_skipped_rule_count") or 0) for receipt in receipts
-    )
-    merged["budget_skipped_rule_ids"] = [
-        rule_id
-        for receipt in receipts
-        for rule_id in receipt.get("budget_skipped_rule_ids", [])
-    ]
-    merged["batch_count"] = sum(int(receipt.get("batch_count") or 0) for receipt in receipts)
-    merged["request_count"] = sum(int(receipt.get("request_count") or 0) for receipt in receipts)
-    merged["transition_request_count"] = sum(
-        int(receipt.get("transition_request_count") or 0) for receipt in receipts
-    )
-    merged["context_fact_count"] = max(
-        [int(receipt.get("context_fact_count") or 0) for receipt in receipts],
-        default=0,
-    )
-    merged["context_fact_omitted_count"] = sum(
-        int(receipt.get("context_fact_omitted_count") or 0) for receipt in receipts
-    )
-    merged["supporting_fact_pool_count"] = max(
-        [int(receipt.get("supporting_fact_pool_count") or 0) for receipt in receipts],
-        default=0,
-    )
+    merged["assessed_rule_count"] = len(rule_assessments)
+    merged["unassessed_rule_ids"] = list(dict.fromkeys(x for r in receipts for x in r.get("unassessed_rule_ids", [])))
+    merged["unassessed_rule_count"] = len(merged["unassessed_rule_ids"])
+    merged["budget_skipped_rule_ids"] = list(dict.fromkeys(x for r in receipts for x in r.get("budget_skipped_rule_ids", [])))
+    merged["budget_skipped_rule_count"] = len(merged["budget_skipped_rule_ids"])
+    merged["batch_count"] = sum(int(r.get("batch_count") or 0) for r in receipts)
+    merged["request_count"] = sum(int(r.get("request_count") or 0) for r in receipts)
+    merged["transition_request_count"] = sum(int(r.get("transition_request_count") or 0) for r in receipts)
+    merged["context_fact_count"] = max([int(r.get("context_fact_count") or 0) for r in receipts], default=0)
+    merged["context_fact_omitted_count"] = sum(int(r.get("context_fact_omitted_count") or 0) for r in receipts)
+    merged["supporting_fact_pool_count"] = max([int(r.get("supporting_fact_pool_count") or 0) for r in receipts], default=0)
     merged["candidate_recall"] = _merge_candidate_recall(receipts)
-
-    merged_cache = {
-        "hit_count": sum(
-            int((receipt.get("cache") or {}).get("hit_count") or 0)
-            for receipt in receipts
-        ),
-        "miss_count": sum(
-            int((receipt.get("cache") or {}).get("miss_count") or 0)
-            for receipt in receipts
-        ),
-        "transition_cache_hit": any(
-            bool((receipt.get("cache") or {}).get("transition_cache_hit"))
-            for receipt in receipts
-        ),
-        "persistence_failures": sum(
-            int((receipt.get("cache") or {}).get("persistence_failures") or 0)
-            for receipt in receipts
-        ),
-        "cache_key_components": list(
-            (first.get("cache") or {}).get("cache_key_components") or []
-        ),
-    }
-    merged["cache"] = merged_cache
-    merged["failed_unit_count"] = sum(
-        int(receipt.get("failed_unit_count") or 0) for receipt in receipts
-    )
-    merged["failed_units"] = [
-        unit
-        for receipt in receipts
-        for unit in receipt.get("failed_units", [])
-    ]
     for key in (
-        "proposal_count",
-        "accepted_relationship_count",
-        "rejected_proposal_count",
-        "rejected_low_confidence_count",
-        "rejected_invalid_identity_count",
-        "rejected_non_candidate_count",
-        "rejected_invalid_evidence_count",
-        "rejected_duplicate_count",
-        "rejected_rule_limit_count",
-        "rejected_inconsistent_disposition_count",
-        "existing_relationship_count",
-        "no_executable_interface_count",
-        "ambiguous_rule_count",
-        "provider_attempt_count",
-        "provider_retry_count",
+        "proposal_count", "accepted_relationship_count", "rejected_proposal_count",
+        "rejected_low_confidence_count", "rejected_invalid_identity_count", "rejected_non_candidate_count",
+        "rejected_invalid_evidence_count", "rejected_duplicate_count", "rejected_rule_limit_count",
+        "rejected_inconsistent_disposition_count", "existing_relationship_count", "no_executable_interface_count",
+        "ambiguous_rule_count", "provider_attempt_count", "provider_retry_count",
     ):
-        merged[key] = sum(int(receipt.get(key) or 0) for receipt in receipts)
-    merged["transition_count"] = int(first.get("transition_count") or 0)
-    merged["transition_budget_skipped_count"] = int(
-        first.get("transition_budget_skipped_count") or 0
-    )
-    merged["assessed_transition_count"] = int(first.get("assessed_transition_count") or 0)
-    merged["unassessed_transition_count"] = int(first.get("unassessed_transition_count") or 0)
-    merged["unassessed_transition_ids"] = list(first.get("unassessed_transition_ids") or [])
-    merged["no_executable_transition_count"] = int(
-        first.get("no_executable_transition_count") or 0
-    )
-    merged["ambiguous_transition_count"] = int(first.get("ambiguous_transition_count") or 0)
-    merged["transition_assessments"] = list(first.get("transition_assessments") or [])
-    merged["rule_assessments"] = [
-        row
-        for receipt in receipts
-        for row in receipt.get("rule_assessments", [])
-    ]
-    merged["rejections"] = [
-        row
-        for receipt in receipts
-        for row in receipt.get("rejections", [])
-    ]
-    merged["accepted_edge_ids"] = list(
-        dict.fromkeys(
-            edge_id
-            for receipt in receipts
-            for edge_id in receipt.get("accepted_edge_ids", [])
-            if edge_id
-        )
-    )
+        merged[key] = sum(int(r.get(key) or 0) for r in receipts)
+    merged["transition_count"] = sum(int(r.get("transition_count") or 0) for r in receipts)
+    merged["transition_budget_skipped_count"] = sum(int(r.get("transition_budget_skipped_count") or 0) for r in receipts)
+    merged["assessed_transition_count"] = len(transition_assessments)
+    merged["unassessed_transition_ids"] = list(dict.fromkeys(x for r in receipts for x in r.get("unassessed_transition_ids", [])))
+    merged["unassessed_transition_count"] = len(merged["unassessed_transition_ids"])
+    merged["no_executable_transition_count"] = sum(x.get("disposition") == "NO_EXECUTABLE_INTERFACE" for x in transition_assessments)
+    merged["ambiguous_transition_count"] = sum(x.get("disposition") == "AMBIGUOUS" for x in transition_assessments)
+    merged["transition_assessments"] = transition_assessments
+    merged["rule_assessments"] = rule_assessments
+    merged["rejections"] = [row for r in receipts for row in r.get("rejections", [])]
+    merged["failed_units"] = [row for r in receipts for row in r.get("failed_units", [])]
+    merged["failed_unit_count"] = len(merged["failed_units"])
+    merged["accepted_edge_ids"] = list(dict.fromkeys(x for r in receipts for x in r.get("accepted_edge_ids", []) if x))
     usage: dict[str, float] = {}
-    for receipt in receipts:
-        raw_usage = receipt.get("usage")
-        if not isinstance(raw_usage, dict):
-            continue
-        for key, value in raw_usage.items():
+    for r in receipts:
+        for key, value in (r.get("usage") or {}).items():
             try:
                 usage[key] = usage.get(key, 0.0) + float(value)
             except (TypeError, ValueError):
-                continue
+                pass
     merged["usage"] = usage
     merged["status"] = _merge_status(receipts)
     merged["receipt_fingerprint"] = _impl._fingerprint(merged)
     return merged
 
 
-def _lossless_rule_enrichment(
-    governed_asset: dict[str, Any],
-    *,
-    client: Any | None,
-) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Run the mature linker in bounded windows without dropping later rules.
+def _transition_paged_enrichment(governed_asset: dict[str, Any], *, client: Any | None) -> tuple[dict[str, Any], dict[str, Any]]:
+    transitions = _dicts(_impl._asset_transition_rows(governed_asset))
+    if len(transitions) <= _TRANSITION_BATCH_WINDOW:
+        return _impl.enrich_knowledge_asset_with_agent_relationships(governed_asset, client=client)
 
-    The underlying linker remains unchanged and keeps its 320-rule provider
-    window. This authority layer turns that window into a paging unit instead
-    of a global ceiling. The first window owns the state-transition request;
-    later windows are rule-only so transition evidence is not duplicated.
-    """
-    rules = _dicts(governed_asset.get("rule_library"))
-    if len(rules) <= _RULE_BATCH_WINDOW:
-        return _impl.enrich_knowledge_asset_with_agent_relationships(
-            governed_asset,
-            client=client,
-        )
-
-    chunks = [
-        rules[index:index + _RULE_BATCH_WINDOW]
-        for index in range(0, len(rules), _RULE_BATCH_WINDOW)
-    ]
-    chunk_receipts: list[dict[str, Any]] = []
+    base_client = client or _impl._default_client()
+    paging_client = _PagingClient(base_client)
+    chunks = [transitions[i:i + _TRANSITION_BATCH_WINDOW] for i in range(0, len(transitions), _TRANSITION_BATCH_WINDOW)]
+    receipts: list[dict[str, Any]] = []
     generated_relationships: list[dict[str, Any]] = []
 
+    for chunk in chunks:
+        enriched, receipt = _run_core_with_transition_window(
+            governed_asset,
+            client=paging_client,
+            transition_rows=chunk,
+        )
+        receipts.append(receipt)
+        accepted_edge_ids = {str(x).strip() for x in receipt.get("accepted_edge_ids", []) if str(x).strip()}
+        generated_relationships.extend(
+            dict(row) for row in _dicts(enriched.get("relationships"))
+            if str(row.get("edge_id") or "").strip() in accepted_edge_ids
+        )
+
+    merged_asset = deepcopy(governed_asset)
+    merged_asset["relationships"] = [dict(row) for row in _dicts(governed_asset.get("relationships"))]
+    seen_edges = {str(row.get("edge_id")) for row in merged_asset["relationships"] if row.get("edge_id")}
+    for row in generated_relationships:
+        edge_id = str(row.get("edge_id") or "")
+        if edge_id and edge_id not in seen_edges:
+            seen_edges.add(edge_id)
+            merged_asset["relationships"].append(row)
+
+    merged_receipt = _merge_receipts(receipts, rule_count=len(_dicts(governed_asset.get("rule_library"))))
+    merged_receipt["provider_attempt_count"] = max(0, int(merged_receipt.get("provider_attempt_count") or 0) - paging_client.cached_rule_calls)
+    merged_receipt["request_count"] = max(0, int(merged_receipt.get("request_count") or 0) - paging_client.cached_rule_calls)
+    merged_receipt["transition_paging"] = {
+        "enabled": True,
+        "window_size": _TRANSITION_BATCH_WINDOW,
+        "window_count": len(chunks),
+        "transition_count": len(transitions),
+        "budget_skipped_transition_count": 0,
+        "rule_response_reuse_count": paging_client.cached_rule_calls,
+        "reason_code": "SOURCE_TRANSITIONS_PAGED_INSTEAD_OF_TRUNCATED",
+    }
+    merged_receipt["transition_budget_skipped_count"] = 0
+    merged_receipt["receipt_fingerprint"] = _impl._fingerprint(merged_receipt)
+    merged_asset["agent_semantic_link_receipt"] = merged_receipt
+    return merged_asset, merged_receipt
+
+
+def _lossless_rule_enrichment(governed_asset: dict[str, Any], *, client: Any | None) -> tuple[dict[str, Any], dict[str, Any]]:
+    rules = _dicts(governed_asset.get("rule_library"))
+    if len(rules) <= _RULE_BATCH_WINDOW:
+        return _transition_paged_enrichment(governed_asset, client=client)
+
+    chunks = [rules[i:i + _RULE_BATCH_WINDOW] for i in range(0, len(rules), _RULE_BATCH_WINDOW)]
+    receipts: list[dict[str, Any]] = []
+    generated_relationships: list[dict[str, Any]] = []
     for index, chunk in enumerate(chunks):
         chunk_asset = deepcopy(governed_asset)
         chunk_asset["rule_library"] = chunk
         if index > 0:
             chunk_asset["state_machines"] = []
-        enriched, receipt = _impl.enrich_knowledge_asset_with_agent_relationships(
-            chunk_asset,
-            client=client,
-        )
-        chunk_receipts.append(receipt)
-        accepted_edge_ids = {
-            str(value).strip()
-            for value in receipt.get("accepted_edge_ids") or []
-            if str(value).strip()
-        }
+        enriched, receipt = _transition_paged_enrichment(chunk_asset, client=client)
+        receipts.append(receipt)
+        accepted_edge_ids = {str(x).strip() for x in receipt.get("accepted_edge_ids", []) if str(x).strip()}
         generated_relationships.extend(
-            dict(row)
-            for row in _dicts(enriched.get("relationships"))
+            dict(row) for row in _dicts(enriched.get("relationships"))
             if str(row.get("edge_id") or "").strip() in accepted_edge_ids
         )
 
     merged_asset = deepcopy(governed_asset)
-    merged_asset["relationships"] = [
-        *[dict(row) for row in _dicts(governed_asset.get("relationships"))],
-        *generated_relationships,
-    ]
-    merged_receipt = _merge_receipts(
-        chunk_receipts,
-        rule_count=len(rules),
-    )
+    merged_asset["relationships"] = [*(_dicts(governed_asset.get("relationships"))), *generated_relationships]
+    merged_receipt = _merge_receipts(receipts, rule_count=len(rules))
     merged_receipt["lossless_rule_scheduling"] = {
         "enabled": True,
         "window_size": _RULE_BATCH_WINDOW,
@@ -294,12 +283,7 @@ def _lossless_rule_enrichment(
     return merged_asset, merged_receipt
 
 
-def enrich_knowledge_asset_with_agent_relationships(
-    knowledge_asset: dict[str, Any],
-    *,
-    client: Any | None = None,
-) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Keep existing-edge governance and make source-rule scheduling lossless."""
+def enrich_knowledge_asset_with_agent_relationships(knowledge_asset: dict[str, Any], *, client: Any | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
     if not isinstance(knowledge_asset, dict):
         raise AgentSemanticLinkerError("knowledge_asset_not_object")
 
@@ -314,38 +298,23 @@ def enrich_knowledge_asset_with_agent_relationships(
 
     governed_asset = deepcopy(knowledge_asset)
     governed_asset["relationships"] = governed_existing
-    enriched, raw_receipt = _lossless_rule_enrichment(
-        governed_asset,
-        client=client,
-    )
-    receipt = dict(raw_receipt)
-    accepted_edge_ids = {
-        str(value).strip()
-        for value in receipt.get("accepted_edge_ids") or []
-        if str(value).strip()
-    }
+    enriched, receipt = _lossless_rule_enrichment(governed_asset, client=client)
+    accepted_edge_ids = {str(x).strip() for x in receipt.get("accepted_edge_ids", []) if str(x).strip()}
     generated = [
-        dict(row)
-        for row in _dicts(enriched.get("relationships"))
+        dict(row) for row in _dicts(enriched.get("relationships"))
         if str(row.get("edge_id") or "").strip() in accepted_edge_ids
     ]
     preserved = [
-        dict(row)
-        for row in original_relationships
-        if not (
-            str(row.get("edge_id") or "").strip()
-            and str(row.get("edge_id") or "").strip() in accepted_edge_ids
-        )
+        dict(row) for row in original_relationships
+        if not (str(row.get("edge_id") or "").strip() in accepted_edge_ids)
     ]
     enriched["relationships"] = [*preserved, *generated]
-    receipt.update(
-        {
-            "ungoverned_existing_relationship_count": len(ungoverned_existing),
-            "ungoverned_existing_relationships_suppressed_from_dedupe": True,
-            "existing_relationship_authority_reused": True,
-            "parallel_semantic_linker_created": False,
-        }
-    )
+    receipt.update({
+        "ungoverned_existing_relationship_count": len(ungoverned_existing),
+        "ungoverned_existing_relationships_suppressed_from_dedupe": True,
+        "existing_relationship_authority_reused": True,
+        "parallel_semantic_linker_created": False,
+    })
     receipt["receipt_fingerprint"] = _impl._fingerprint(receipt)
     enriched["agent_semantic_link_receipt"] = receipt
     return enriched, receipt
@@ -355,9 +324,4 @@ def __getattr__(name: str) -> Any:
     return getattr(_impl, name)
 
 
-__all__ = [
-    "RECEIPT_SCHEMA",
-    "PROMPT_PROTOCOL",
-    "AgentSemanticLinkerError",
-    "enrich_knowledge_asset_with_agent_relationships",
-]
+__all__ = ["RECEIPT_SCHEMA", "PROMPT_PROTOCOL", "AgentSemanticLinkerError", "enrich_knowledge_asset_with_agent_relationships"]
