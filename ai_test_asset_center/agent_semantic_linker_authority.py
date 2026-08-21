@@ -6,6 +6,8 @@ as a legacy implementation while the public authority path delegates here.
 from __future__ import annotations
 
 from copy import deepcopy
+import os
+import tempfile
 import threading
 from typing import Any
 
@@ -54,6 +56,160 @@ def _existing_interfaces_by_rule(asset: dict[str, Any]) -> dict[str, set[str]]:
         if rule_id and interface_id:
             result.setdefault(rule_id, set()).add(interface_id)
     return result
+
+
+class _TransitionRecoveryClient:
+    """Forward only transition requests; suppress the synthetic recovery rule unit."""
+
+    def __init__(self, client: Any) -> None:
+        self._client = client
+
+    def complete_json(self, **kwargs: Any) -> dict[str, Any]:
+        prompt = str(kwargs.get("user_prompt") or "")
+        if _base._is_rule_prompt(prompt):
+            return {"assessments": []}
+        return self._client.complete_json(**kwargs)
+
+    def usage_snapshot(self) -> dict[str, float]:
+        snapshot = self._client.usage_snapshot()
+        return dict(snapshot) if isinstance(snapshot, dict) else {}
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._client, name)
+
+
+def _sanitize_transition_recovery_receipt(
+    receipt: dict[str, Any],
+    *,
+    transition_count: int,
+) -> dict[str, Any]:
+    """Remove the synthetic rule unit from a transition-only recovery receipt."""
+    sanitized = dict(receipt)
+    sanitized["rule_count"] = 0
+    sanitized["assessed_rule_count"] = 0
+    sanitized["unassessed_rule_ids"] = []
+    sanitized["unassessed_rule_count"] = 0
+    sanitized["budget_skipped_rule_ids"] = []
+    sanitized["budget_skipped_rule_count"] = 0
+    sanitized["rule_assessments"] = []
+    sanitized["candidate_recall"] = {
+        "rule_count": 0,
+        "candidate_total": 0,
+        "candidate_min": None,
+        "candidate_max": 0,
+        "fallback_rule_count": 0,
+        "empty_candidate_rule_count": 0,
+        "recall_basis": "transition_recovery",
+    }
+    sanitized["rejections"] = [
+        row
+        for row in sanitized.get("rejections", [])
+        if row.get("reason_code") != "PROVIDER_OMITTED_RULE"
+    ]
+    sanitized["failed_units"] = [
+        row
+        for row in sanitized.get("failed_units", [])
+        if row.get("unit_kind") != "rule_batch"
+    ]
+    sanitized["failed_unit_count"] = len(sanitized["failed_units"])
+    sanitized["rejected_proposal_count"] = len(sanitized["rejections"])
+    sanitized["transition_count"] = transition_count
+    sanitized["transition_budget_skipped_count"] = 0
+    sanitized["transition_request_count"] = 1 if transition_count else 0
+    sanitized["batch_count"] = 1 if transition_count else 0
+    # The core sees one local synthetic rule request. It never reaches the
+    # provider, so exclude that local attempt from provider accounting.
+    sanitized["provider_attempt_count"] = max(
+        0, int(sanitized.get("provider_attempt_count") or 0) - 1
+    )
+    sanitized["request_count"] = max(
+        0, int(sanitized.get("request_count") or 0) - 1
+    )
+    sanitized["provider_retry_count"] = max(
+        0, int(sanitized.get("provider_retry_count") or 0)
+    )
+    sanitized["status"] = _base._merge_status([sanitized])
+    sanitized["receipt_fingerprint"] = _impl._fingerprint(sanitized)
+    return sanitized
+
+
+def _run_transition_recovery_batches(
+    governed_asset: dict[str, Any],
+    *,
+    client: Any | None,
+    transition_rows: list[dict[str, Any]],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Re-assess only omitted transitions, paging the recovery set at 200 too."""
+    if not transition_rows:
+        return deepcopy(governed_asset), {
+            "transition_count": 0,
+            "unassessed_transition_ids": [],
+            "accepted_edge_ids": [],
+            "relationships": [],
+        }
+
+    base_client = client or _impl._default_client()
+    recovery_client = _TransitionRecoveryClient(base_client)
+    placeholder_rule = {
+        "rule_id": "__qualibug_transition_recovery_placeholder__",
+        "statement": "Transition-only recovery unit; no rule relationship is requested.",
+        "kind": "transition_recovery_placeholder",
+        "semantic_frame": {
+            "subject": "transition recovery",
+            "behavior": "Assess only the supplied state transitions.",
+            "source_anchors": [],
+        },
+        "source_id": "qualibug:transition-recovery",
+    }
+    recovery_asset = deepcopy(governed_asset)
+    recovery_asset["rule_library"] = [placeholder_rule]
+
+    chunks = [
+        transition_rows[index:index + _base._TRANSITION_BATCH_WINDOW]
+        for index in range(0, len(transition_rows), _base._TRANSITION_BATCH_WINDOW)
+    ]
+    recovered_assets: list[dict[str, Any]] = []
+    recovered_receipts: list[dict[str, Any]] = []
+
+    previous_cache_dir = os.environ.get(_impl.CACHE_DIRECTORY_ENV)
+    with tempfile.TemporaryDirectory(prefix="qualibug-transition-recovery-") as recovery_cache_dir:
+        os.environ[_impl.CACHE_DIRECTORY_ENV] = recovery_cache_dir
+        try:
+            for chunk in chunks:
+                recovered, raw_receipt = _base._run_core_with_transition_window(
+                    recovery_asset,
+                    client=recovery_client,
+                    transition_rows=chunk,
+                )
+                receipt = _sanitize_transition_recovery_receipt(
+                    raw_receipt,
+                    transition_count=len(chunk),
+                )
+                recovered_assets.append(recovered)
+                recovered_receipts.append(receipt)
+        finally:
+            if previous_cache_dir is None:
+                os.environ.pop(_impl.CACHE_DIRECTORY_ENV, None)
+            else:
+                os.environ[_impl.CACHE_DIRECTORY_ENV] = previous_cache_dir
+
+    merged_asset = deepcopy(governed_asset)
+    merged_asset["relationships"] = _base._merge_generated_relationships(
+        governed_asset,
+        recovered_assets,
+        recovered_receipts,
+    )
+    merged_receipt = _base._merge_receipts(
+        recovered_receipts,
+        rule_count=0,
+        duplicate_rule_windows=True,
+    )
+    merged_receipt["accepted_relationship_count"] = len(
+        merged_receipt.get("accepted_edge_ids", [])
+    )
+    merged_receipt["receipt_fingerprint"] = _impl._fingerprint(merged_receipt)
+    merged_asset["agent_semantic_link_receipt"] = merged_receipt
+    return merged_asset, merged_receipt
 
 
 def _run_window_with_omitted_rule_recovery(
@@ -145,13 +301,101 @@ def _run_window_with_omitted_rule_recovery(
     return merged_asset, merged_receipt
 
 
+def _run_window_with_omitted_transition_recovery(
+    governed_asset: dict[str, Any],
+    *,
+    client: Any | None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Re-assess only transitions the provider omitted from the formal response."""
+    enriched, receipt = _run_window_with_omitted_rule_recovery(
+        governed_asset,
+        client=client,
+    )
+    omitted_transition_ids = {
+        str(transition_id).strip()
+        for transition_id in receipt.get("unassessed_transition_ids", []) or []
+        if str(transition_id).strip()
+    }
+    if not omitted_transition_ids:
+        return enriched, receipt
+
+    source_transitions = _base._dicts(_base._original_asset_transition_rows(governed_asset))
+    transition_rows = [
+        row
+        for row in source_transitions
+        if str(row.get("transition_id") or "").strip() in omitted_transition_ids
+    ]
+    recovered, recovered_receipt = _run_transition_recovery_batches(
+        governed_asset,
+        client=client,
+        transition_rows=transition_rows,
+    )
+
+    merged_asset = deepcopy(governed_asset)
+    merged_asset["relationships"] = _base._merge_generated_relationships(
+        governed_asset,
+        [enriched, recovered],
+        [receipt, recovered_receipt],
+    )
+    merged_receipt = _base._merge_receipts(
+        [receipt, recovered_receipt],
+        rule_count=len(_base._dicts(governed_asset.get("rule_library"))),
+        duplicate_rule_windows=True,
+    )
+
+    remaining_omitted = {
+        str(transition_id).strip()
+        for transition_id in recovered_receipt.get("unassessed_transition_ids", []) or []
+        if str(transition_id).strip()
+    }
+    recovered_transition_ids = omitted_transition_ids - remaining_omitted
+    if recovered_transition_ids:
+        merged_receipt["unassessed_transition_ids"] = [
+            transition_id
+            for transition_id in merged_receipt.get("unassessed_transition_ids", [])
+            if transition_id not in recovered_transition_ids
+        ]
+        merged_receipt["unassessed_transition_count"] = len(
+            merged_receipt["unassessed_transition_ids"]
+        )
+        recovered_fingerprints = {
+            _impl._fingerprint({"transition_id": transition_id})
+            for transition_id in recovered_transition_ids
+        }
+        merged_receipt["rejections"] = [
+            row
+            for row in merged_receipt.get("rejections", [])
+            if not (
+                row.get("reason_code") == "PROVIDER_OMITTED_TRANSITION"
+                and row.get("proposal_fingerprint") in recovered_fingerprints
+            )
+        ]
+        merged_receipt["rejected_proposal_count"] = len(
+            merged_receipt["rejections"]
+        )
+
+    merged_receipt["omitted_transition_recovery"] = {
+        "enabled": True,
+        "initial_omitted_transition_count": len(omitted_transition_ids),
+        "recovered_transition_assessment_count": len(recovered_transition_ids),
+        "remaining_omitted_transition_count": len(remaining_omitted),
+        "recovered_transition_ids": sorted(recovered_transition_ids),
+        "reason_code": "PROVIDER_OMITTED_TRANSITION_REASSESSED_IN_TARGETED_UNIT",
+    }
+    merged_receipt["recovered_omitted_transition_count"] = len(recovered_transition_ids)
+    merged_receipt["status"] = _base._merge_status([merged_receipt])
+    merged_receipt["receipt_fingerprint"] = _impl._fingerprint(merged_receipt)
+    merged_asset["agent_semantic_link_receipt"] = merged_receipt
+    return merged_asset, merged_receipt
+
+
 def _run_window_with_confidence_recovery(
     governed_asset: dict[str, Any],
     *,
     client: Any | None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Retry a window only when Tier-3 confidence rejected an otherwise valid proposal."""
-    enriched, receipt = _run_window_with_omitted_rule_recovery(
+    enriched, receipt = _run_window_with_omitted_transition_recovery(
         governed_asset,
         client=client,
     )
@@ -274,8 +518,18 @@ def _relationship_paged_enrichment(governed_asset: dict[str, Any], *, client: An
         "remaining_omitted_rule_count": sum(int(row.get("remaining_omitted_rule_count") or 0) for row in omitted_recovery_rows),
         "reason_code": "PROVIDER_OMITTED_RULE_REASSESSED_IN_TARGETED_UNIT",
     }
+    omitted_transition_recovery_rows = [receipt.get("omitted_transition_recovery") for receipt in receipts if isinstance(receipt.get("omitted_transition_recovery"), dict)]
+    merged_receipt["omitted_transition_recovery"] = {
+        "enabled": bool(omitted_transition_recovery_rows),
+        "window_count": len(omitted_transition_recovery_rows),
+        "initial_omitted_transition_count": sum(int(row.get("initial_omitted_transition_count") or 0) for row in omitted_transition_recovery_rows),
+        "recovered_transition_assessment_count": sum(int(row.get("recovered_transition_assessment_count") or 0) for row in omitted_transition_recovery_rows),
+        "remaining_omitted_transition_count": sum(int(row.get("remaining_omitted_transition_count") or 0) for row in omitted_transition_recovery_rows),
+        "reason_code": "PROVIDER_OMITTED_TRANSITION_REASSESSED_IN_TARGETED_UNIT",
+    }
     merged_receipt["recovered_low_confidence_count"] = int(merged_receipt["confidence_recovery"]["recovered_low_confidence_count"])
     merged_receipt["recovered_omitted_rule_count"] = int(merged_receipt["omitted_rule_recovery"]["recovered_rule_assessment_count"])
+    merged_receipt["recovered_omitted_transition_count"] = int(merged_receipt["omitted_transition_recovery"]["recovered_transition_assessment_count"])
     merged_receipt["receipt_fingerprint"] = _impl._fingerprint(merged_receipt)
     merged_asset["agent_semantic_link_receipt"] = merged_receipt
     return merged_asset, merged_receipt
