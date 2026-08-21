@@ -17,8 +17,13 @@ from .runtime_probe_contract_derivation import (
     derive_runtime_probe_contracts,
     probe_observations_from_receipts,
 )
+from .runtime_probe_event_contract_derivation import (
+    derive_runtime_probe_event_contracts,
+    event_observations_from_receipts as event_observations_from_receipts,
+)
 from .source_performance_contract_binding import bind_source_performance_contracts
 from .source_stability_contract_binding import bind_source_stability_contracts
+from .source_event_contract_binding import bind_source_event_contracts
 
 
 ROUND_RECEIPT_SCHEMA = "qualibug.behavior-ir-expansion-round.v1"
@@ -227,9 +232,19 @@ def expand_behavior_ir_from_runtime_observations(
             runtime_observations=_probe_obs,
             runtime_actors=runtime_actors,
         )
+        # 档位 D (event): derive event_formal_contracts from the SAME governed
+        # probe receipts when the system exposes an event/audit listing surface.
+        # Reuses contract_auto_derivation._event_row; the binder below attaches
+        # the event_delivery_consistency invariant.  No new wheel.
+        knowledge_asset, _runtime_probe_event_receipt = derive_runtime_probe_event_contracts(
+            knowledge_asset,
+            operations=merged_operations,
+            runtime_observations=event_observations_from_receipts(observation_receipts),
+            runtime_actors=runtime_actors,
+        )
 
     def _bind_runtime_probe_contracts(ir: dict[str, Any]) -> dict[str, Any]:
-        """Add performance/stability invariants derived from runtime probes.
+        """Add performance/stability/event invariants derived from runtime probes.
 
         ``build_behavior_ir_from_knowledge_asset`` does not bind source
         contracts, so the invariants must be attached here with the same
@@ -238,6 +253,7 @@ def expand_behavior_ir_from_runtime_observations(
         """
         ir, _perf = bind_source_performance_contracts(ir, knowledge_asset)
         ir, _stab = bind_source_stability_contracts(ir, knowledge_asset)
+        ir, _evt = bind_source_event_contracts(ir, knowledge_asset)
         return ir
 
     documented_keys = {

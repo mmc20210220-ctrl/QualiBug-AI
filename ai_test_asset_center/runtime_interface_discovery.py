@@ -41,6 +41,63 @@ _SAFE_SEGMENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 # minimum that satisfies BOTH surfaces; read-only GETs are cheap and safe.
 _RUNTIME_PROBE_SAMPLE_COUNT = 5
 
+# ── P2b instrumentation: capture response schema (field names) for event-surface
+# detection.  Field names only — never response values — so this is safe,
+# non-PII structure observation.  A read-only GET that returns a JSON listing
+# whose shape resembles an event/audit log (id + type + time fields) is a
+# surface the event-delivery observer can target; learning its schema at runtime
+# lets 档位 D derive an event contract without the customer hard-declaring the
+# endpoint.  Detection is purely structural (field-name shapes), so no business
+# paths or terms are hardcoded.  This is the observation half of making
+# event_delivery_consistency reachable on a system that exposes (but does not
+# declare) an event surface.
+_OBSERVED_FIELDS_LIMIT = 200
+_OBSERVED_EVENT_TYPE_LIMIT = 20
+
+
+def _extract_observed_fields(body: Any) -> list[str]:
+    """Top-level JSON field names of a discovered GET response (schema only)."""
+    if isinstance(body, dict):
+        return [str(k) for k in body.keys()][:_OBSERVED_FIELDS_LIMIT]
+    if isinstance(body, list) and body and isinstance(body[0], dict):
+        return [str(k) for k in body[0].keys()][:_OBSERVED_FIELDS_LIMIT]
+    return []
+
+
+def _is_listing_body(body: Any) -> bool:
+    return isinstance(body, list) and len(body) > 0
+
+
+def _extract_event_type_values(body: Any, field_names: list[str], limit: int = _OBSERVED_EVENT_TYPE_LIMIT) -> list[str]:
+    """Bounded distinct values of a type-like field in a listing response.
+
+    Observation of the system's own event taxonomy (short categorical codes),
+    not payload data.  Methodology default (limit) bounds the capture.
+    """
+    if not isinstance(body, (dict, list)):
+        return []
+    type_fields = [
+        f for f in field_names
+        if f in ("type", "kind", "event_type") or f.endswith("_type") or f.endswith("_event")
+    ]
+    if not type_fields:
+        return []
+    values: list[str] = []
+    items = body if isinstance(body, list) else [body]
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        for f in type_fields:
+            v = item.get(f)
+            if v is None:
+                continue
+            s = str(v)
+            if s and s not in values:
+                values.append(s)
+            if len(values) >= limit:
+                return values
+    return values
+
 
 def _text(value: Any) -> str:
     return str(value or "").strip()
@@ -624,6 +681,19 @@ def build_runtime_interface_observation_receipt(
             primary_duration_ms = int(primary_duration_ms)
         except (TypeError, ValueError):
             primary_duration_ms = None
+    raw_observed_fields = observed.get("observed_fields")
+    observed_fields: list[str] | None = None
+    if isinstance(raw_observed_fields, list):
+        observed_fields = [
+            str(x) for x in raw_observed_fields if isinstance(x, str)
+        ][:_OBSERVED_FIELDS_LIMIT]
+    raw_event_types = observed.get("observed_event_types")
+    observed_event_types: list[str] | None = None
+    if isinstance(raw_event_types, list):
+        observed_event_types = [
+            str(x) for x in raw_event_types if isinstance(x, str)
+        ][:_OBSERVED_EVENT_TYPE_LIMIT]
+    is_listing_response = bool(observed.get("is_listing_response"))
     raw_samples = observed.get("samples")
     probe_samples: list[dict[str, Any]] = []
     if isinstance(raw_samples, list):
@@ -738,6 +808,9 @@ def build_runtime_interface_observation_receipt(
         "response_fingerprint": response_fingerprint,
         "primary_duration_ms": primary_duration_ms,
         "samples": probe_samples,
+        "observed_fields": observed_fields,
+        "observed_event_types": observed_event_types,
+        "is_listing_response": is_listing_response,
         "source_refs": source_refs,
     }
     if normalized_confirmations:
@@ -949,6 +1022,17 @@ def execute_runtime_interface_discovery(
             "body": response.get("body"),
             "headers": response.get("headers"),
         })
+        # ── P2b: capture response schema for event-surface detection ──
+        # Field names + bounded event-type values only (never payload data).
+        # Lets 档位 D derive an event contract when the system exposes (but
+        # does not declare) an event/audit listing surface.
+        _observed_body = response.get("body")
+        _observed_fields = _extract_observed_fields(_observed_body)
+        _observed_event_types = (
+            _extract_event_type_values(_observed_body, _observed_fields)
+            if _observed_fields else []
+        )
+        _is_listing = _is_listing_body(_observed_body)
         confirmation_observations: list[dict[str, Any]] = []
         for index, confirmation_response in enumerate(
             confirmation_responses,
@@ -978,6 +1062,9 @@ def execute_runtime_interface_discovery(
                 "response_fingerprint": response_fingerprint,
                 "primary_duration_ms": response.get("duration_ms"),
                 "samples": probe_samples,
+                "observed_fields": _observed_fields,
+                "observed_event_types": _observed_event_types,
+                "is_listing_response": _is_listing,
                 "confirmation_observations": confirmation_observations,
             },
         )

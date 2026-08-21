@@ -734,6 +734,39 @@ def build_discovery_plan(
             "status": "FAILED",
             "reason": f"{type(exc).__name__}:{str(exc)[:160]}",
         }
+    # ── 档位 D (event): derive event_formal_contracts from the SAME governed
+    # probe observations when the system exposes (but does not declare) an
+    # event/audit listing surface.  Reuses contract_auto_derivation._event_row
+    # via derive_runtime_probe_event_contracts — same asset flow as 档位 C.
+    # Binding is done downstream by the plan-time wrapper
+    # (discovery_runtime_semantic_binding.bind_source_event_contracts), which
+    # already binds event contracts, so we only write the asset here.  Closes
+    # event_delivery_consistency on doc-less unfamiliar systems that surface an
+    # event log.  No new wheel.
+    runtime_probe_event_contract_receipt: dict[str, Any] = {
+        "schema_version": "qualibug.runtime-probe-event-contract-derivation.v1",
+        "status": "SKIPPED",
+        "reason": "derivation_not_run",
+    }
+    try:
+        from .runtime_probe_event_contract_derivation import (
+            derive_runtime_probe_event_contracts,
+        )
+
+        _probe_obs = asset.get("runtime_probe_observations")
+        if _probe_obs:
+            asset, runtime_probe_event_contract_receipt = derive_runtime_probe_event_contracts(
+                asset,
+                operations=operations,
+                runtime_observations=_probe_obs,
+                runtime_actors=runtime_actors,
+            )
+    except Exception as exc:
+        runtime_probe_event_contract_receipt = {
+            "schema_version": "qualibug.runtime-probe-event-contract-derivation.v1",
+            "status": "FAILED",
+            "reason": f"{type(exc).__name__}:{str(exc)[:160]}",
+        }
     # Resolve adapter capability BEFORE the IR is built, so the IR's observation
     # surfaces and the experiment compiler's adapter set come from one computation.
     # They used to disagree: the IR hardcoded db_snapshot as unavailable while this
