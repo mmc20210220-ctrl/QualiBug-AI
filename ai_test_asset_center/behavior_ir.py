@@ -58,6 +58,67 @@ def _transport_key(operation: dict[str, Any], data: dict[str, Any]) -> tuple[str
     return method, _base._core._path_shape(path), _service_for_operation(operation, data)
 
 
+def _prepare_same_service_schema_conflicts(
+    rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Neutralize the legacy stale-tuple conflict branch, preserving its semantics.
+
+    The core still owns schema merging, but its old conflict receipt indexes a
+    two-element transport tuple as if it were three elements. For same-service
+    duplicate operations we pre-merge conflicting schemas so the legacy core
+    never enters that broken branch, then emit the authoritative conflict receipt
+    after the core returns.
+    """
+    groups: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+    for row in rows:
+        key = _transport_key(row, {})
+        if key is None:
+            continue
+        method, path_shape, service = key
+        if service:
+            groups.setdefault((method, path_shape, service), []).append(row)
+
+    receipts: list[dict[str, Any]] = []
+    for (method, path_shape, service), group in groups.items():
+        if len(group) < 2:
+            continue
+        for field in ("request_schema", "response_schema"):
+            schemas: list[dict[str, Any]] = []
+            for row in group:
+                if field == "request_schema":
+                    schema = _base._core._request_schema_for_operation(row)
+                else:
+                    schema = _base._core._dict(
+                        row.get("response_schema") or row.get("responses")
+                    )
+                if schema:
+                    schemas.append(schema)
+            if len(schemas) < 2:
+                continue
+            merged = deepcopy(schemas[0])
+            conflict_paths: set[str] = set()
+            for incoming in schemas[1:]:
+                conflict_paths.update(
+                    _base._core._schema_conflict_paths(merged, incoming)
+                )
+                merged = _base._core._merge_schema_dicts(merged, incoming)
+            if not conflict_paths:
+                continue
+            for row in group:
+                if field == "request_schema":
+                    row["request_schema"] = deepcopy(merged)
+                else:
+                    row["response_schema"] = deepcopy(merged)
+            receipts.append({
+                "service": service,
+                "method": method,
+                "path_shape": path_shape,
+                "field": field,
+                "conflict_paths": sorted(conflict_paths),
+            })
+    return receipts
+
+
 def _service_aware_operation_inputs(
     asset: dict[str, Any] | None,
     api_operations: list[dict[str, Any]] | None,
@@ -67,6 +128,7 @@ def _service_aware_operation_inputs(
     list[dict[str, Any]] | None,
     set[tuple[str, str]] | None,
     dict[tuple[str, str, str], str],
+    list[dict[str, Any]],
     list[dict[str, Any]],
 ]:
     """Protect service execution identity before the legacy core dedupe runs.
@@ -82,7 +144,7 @@ def _service_aware_operation_inputs(
     attached to it; multiple owners are rejected with a visible coverage gap.
     """
     if not isinstance(asset, dict):
-        return asset, api_operations, operation_path_scope, {}, []
+        return asset, api_operations, operation_path_scope, {}, [], []
 
     data = deepcopy(asset)
     submitted = [dict(row) for row in (api_operations or []) if isinstance(row, dict)]
@@ -161,6 +223,9 @@ def _service_aware_operation_inputs(
         if (prepared := prepare(row)) is not None
     ]
 
+    prepared_all_rows = [*prepared_submitted, *prepared_asset_rows]
+    schema_conflicts = _prepare_same_service_schema_conflicts(prepared_all_rows)
+
     if asset_key == "operations":
         data["operations"] = prepared_asset_rows
     else:
@@ -178,7 +243,14 @@ def _service_aware_operation_inputs(
             if (method, original_path.rstrip("/")) in prepared_scope:
                 prepared_scope.add((method, synthetic_path.rstrip("/")))
 
-    return data, prepared_submitted, prepared_scope, synthetic_paths, ambiguous_rows
+    return (
+        data,
+        prepared_submitted,
+        prepared_scope,
+        synthetic_paths,
+        ambiguous_rows,
+        schema_conflicts,
+    )
 
 
 def _restore_service_aware_paths(
@@ -230,6 +302,7 @@ def _append_service_ownership_gaps(
                     "operation_service_ownership_ambiguous",
                     method,
                     path_shape,
+                    source_id,
                     *owners,
                 ),
                 typed_fields={
@@ -257,6 +330,53 @@ def _append_service_ownership_gaps(
         )
 
 
+def _append_schema_conflicts(
+    model: dict[str, Any],
+    schema_conflicts: list[dict[str, Any]],
+) -> None:
+    for conflict in schema_conflicts:
+        service = conflict["service"]
+        method = conflict["method"]
+        path_shape = conflict["path_shape"]
+        operation_ref = ""
+        for operation in model.get("operations", []):
+            if not isinstance(operation, dict):
+                continue
+            if (
+                str(operation.get("service") or operation.get("_service_name") or "").strip() == service
+                and str(operation.get("method") or "").strip().upper() == method
+                and _base._core._path_shape(operation.get("path")) == path_shape
+            ):
+                operation_ref = str(operation.get("id") or "").strip()
+                break
+        conflict_id = _base._core._stable_id(
+            "conflict",
+            "operation_schema",
+            service,
+            method,
+            path_shape,
+            conflict["field"],
+        )
+        model.setdefault("conflicts", []).append(
+            _base._core._fact_node(
+                node_id=conflict_id,
+                typed_fields={
+                    "conflict_type": "operation_schema_conflict",
+                    "operation_ref": operation_ref,
+                    "field": conflict["field"],
+                    "service": service,
+                    "method": method,
+                    "path_shape": path_shape,
+                    "conflict_paths": list(conflict["conflict_paths"]),
+                },
+                source_refs=[],
+                confidence=1.0,
+                derivation="explicit",
+                status="conflicting",
+            )
+        )
+
+
 def build_behavior_ir_from_knowledge_asset(
     asset: dict[str, Any] | None,
     *,
@@ -273,6 +393,7 @@ def build_behavior_ir_from_knowledge_asset(
         prepared_scope,
         synthetic_paths,
         ambiguous_rows,
+        schema_conflicts,
     ) = _service_aware_operation_inputs(
         asset,
         api_operations,
@@ -289,6 +410,7 @@ def build_behavior_ir_from_knowledge_asset(
     )
     _restore_service_aware_paths(model, synthetic_paths)
     _append_service_ownership_gaps(model, ambiguous_rows)
+    _append_schema_conflicts(model, schema_conflicts)
 
     # Enterprise Understanding already owns the source-backed behavior→interface
     # decision. Project that exact authority into runtime invariants through the
