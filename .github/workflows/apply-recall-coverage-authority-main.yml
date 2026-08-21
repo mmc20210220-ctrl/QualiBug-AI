@@ -3,6 +3,8 @@ name: Apply recall coverage authority root fix to main
 on:
   issues:
     types: [opened]
+  pull_request_target:
+    types: [synchronize, ready_for_review]
 
 permissions:
   contents: write
@@ -14,7 +16,9 @@ concurrency:
 
 jobs:
   apply-service-aware-dedupe:
-    if: github.event.issue.title == 'RUN_RECALL_SERVICE_AWARE_OPERATION_DEDUPE_20260821'
+    if: >-
+      (github.event_name == 'issues' && github.event.issue.title == 'RUN_RECALL_SERVICE_AWARE_OPERATION_DEDUPE_20260821') ||
+      (github.event_name == 'pull_request_target' && github.event.pull_request.number == 183)
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -28,10 +32,9 @@ jobs:
           python-version: '3.11'
 
       - name: Apply exact patch and verify
-        id: verify
         env:
           GH_TOKEN: ${{ github.token }}
-          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_NUMBER: ${{ github.event.issue.number || github.event.pull_request.number }}
         shell: bash
         run: |
           set +e
@@ -60,7 +63,7 @@ jobs:
               cat /tmp/recall-tail.txt
               echo '```'
             } > /tmp/issue-comment.md
-            gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file /tmp/issue-comment.md || true
+            if [ -n "${ISSUE_NUMBER:-}" ]; then gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file /tmp/issue-comment.md || true; fi
             exit "$status"
           fi
 
@@ -79,13 +82,15 @@ jobs:
           git commit -m 'fix(recall): preserve service-aware operation identity'
           git push origin HEAD:main
           commit_sha=$(git rev-parse HEAD)
-          {
-            echo "Service-aware operation identity Recall fix PASSED and was pushed to main: \`$commit_sha\`."
-            echo
-            echo 'Verification executed: exact patch, py_compile, focused regressions, and compileall.'
-            echo
-            echo '```text'
-            tail -n 100 /tmp/recall-service-aware-dedupe.log
-            echo '```'
-          } > /tmp/issue-comment.md
-          gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file /tmp/issue-comment.md || true
+          if [ -n "${ISSUE_NUMBER:-}" ]; then
+            {
+              echo "Service-aware operation identity Recall fix PASSED and was pushed to main: \`$commit_sha\`."
+              echo
+              echo 'Verification executed: exact patch, py_compile, focused regressions, and compileall.'
+              echo
+              echo '```text'
+              tail -n 100 /tmp/recall-service-aware-dedupe.log
+              echo '```'
+            } > /tmp/issue-comment.md
+            gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file /tmp/issue-comment.md || true
+          fi
