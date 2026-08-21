@@ -130,8 +130,6 @@ def _sanitize_transition_recovery_receipt(
     sanitized["transition_budget_skipped_count"] = 0
     sanitized["transition_request_count"] = 1 if transition_count else 0
     sanitized["batch_count"] = 1 if transition_count else 0
-    # The core sees one local synthetic rule request. It never reaches the
-    # provider, so exclude that local attempt from provider accounting.
     sanitized["provider_attempt_count"] = max(
         0, int(sanitized.get("provider_attempt_count") or 0) - 1
     )
@@ -437,6 +435,139 @@ def _run_window_with_confidence_recovery(
     recovered["agent_semantic_link_receipt"] = recovered_receipt
     recovered_receipt["receipt_fingerprint"] = _impl._fingerprint(recovered_receipt)
     return recovered, recovered_receipt
+
+
+_original_fact_paged_enrichment = getattr(
+    _base._fact_paged_enrichment,
+    "_qualibug_lossless_fact_paging_original",
+    _base._fact_paged_enrichment,
+)
+
+
+def _accepted_rule_edges_by_rule(
+    enriched: dict[str, Any],
+    receipt: dict[str, Any],
+) -> dict[str, set[str]]:
+    accepted_edge_ids = {
+        str(value).strip()
+        for value in receipt.get("accepted_edge_ids", []) or []
+        if str(value).strip()
+    }
+    result: dict[str, set[str]] = {}
+    for row in _base._dicts(enriched.get("relationships")):
+        edge_id = str(row.get("edge_id") or "").strip()
+        if edge_id not in accepted_edge_ids or not _base._is_rule_interface(row):
+            continue
+        rule_id = str(row.get("from") or "").strip()
+        interface_id = str(row.get("to") or "").strip()
+        if rule_id and interface_id:
+            result.setdefault(rule_id, set()).add(interface_id)
+    return result
+
+
+def _lossless_fact_paged_enrichment(
+    governed_asset: dict[str, Any],
+    *,
+    client: Any | None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Keep assessing a rule across fact windows until its link set closes."""
+    fact_pool = _base._original_all_fact_rows(governed_asset)
+    if len(fact_pool) <= _base._FACT_BATCH_WINDOW:
+        return _base._candidate_paged_enrichment(governed_asset, client=client)
+
+    base_client = client or _impl._default_client()
+    chunks = [
+        fact_pool[index:index + _base._FACT_BATCH_WINDOW]
+        for index in range(0, len(fact_pool), _base._FACT_BATCH_WINDOW)
+    ]
+    rules = _base._dicts(governed_asset.get("rule_library"))
+    existing_by_rule = _existing_interfaces_by_rule(governed_asset)
+    accumulated_by_rule = {
+        rule_id: set(interface_ids)
+        for rule_id, interface_ids in existing_by_rule.items()
+    }
+    remaining_rules = [
+        dict(rule)
+        for rule in rules
+        if len(accumulated_by_rule.get(_rule_id(rule), set())) < MAX_LINKS_PER_RULE
+    ]
+    receipts: list[dict[str, Any]] = []
+    enriched_assets: list[dict[str, Any]] = []
+    consumed_chunks: list[list[dict[str, Any]]] = []
+    unresolved_rule_counts: list[int] = []
+
+    for index, chunk in enumerate(chunks):
+        if not remaining_rules:
+            break
+        chunk_asset = deepcopy(governed_asset)
+        chunk_asset["rule_library"] = remaining_rules
+        if index > 0:
+            chunk_asset["state_machines"] = []
+        token = _base._FACT_ROWS_OVERRIDE.set(tuple(dict(row) for row in chunk))
+        try:
+            enriched, receipt = _base._candidate_paged_enrichment(
+                chunk_asset,
+                client=base_client,
+            )
+        finally:
+            _base._FACT_ROWS_OVERRIDE.reset(token)
+        receipts.append(receipt)
+        enriched_assets.append(enriched)
+        consumed_chunks.append([dict(row) for row in chunk])
+
+        accepted_now = _accepted_rule_edges_by_rule(enriched, receipt)
+        for rule_id, interface_ids in accepted_now.items():
+            accumulated_by_rule.setdefault(rule_id, set()).update(interface_ids)
+
+        next_rules: list[dict[str, Any]] = []
+        for rule in remaining_rules:
+            rule_id = _rule_id(rule)
+            if len(accumulated_by_rule.get(rule_id, set())) < MAX_LINKS_PER_RULE:
+                next_rules.append(dict(rule))
+        remaining_rules = next_rules
+        unresolved_rule_counts.append(len(remaining_rules))
+
+    merged_asset = deepcopy(governed_asset)
+    merged_asset["relationships"] = _base._merge_generated_relationships(
+        governed_asset,
+        enriched_assets,
+        receipts,
+    )
+    merged_receipt = _base._merge_receipts(
+        receipts,
+        rule_count=len(rules),
+        duplicate_rule_windows=True,
+    )
+    merged_receipt["accepted_relationship_count"] = len(
+        merged_receipt.get("accepted_edge_ids", [])
+    )
+    merged_receipt["supporting_fact_pool_count"] = len(fact_pool)
+    merged_receipt["context_fact_omitted_count"] = 0
+    merged_receipt["supporting_fact_paging"] = {
+        "enabled": True,
+        "window_size": _base._FACT_BATCH_WINDOW,
+        "window_count": len(consumed_chunks),
+        "source_fact_count": len(fact_pool),
+        "window_fact_counts": [len(chunk) for chunk in consumed_chunks],
+        "unconsumed_tail_fact_count": max(
+            0,
+            len(fact_pool) - sum(len(chunk) for chunk in consumed_chunks),
+        ),
+        "fact_budget_skipped_count": 0,
+        "unresolved_rule_counts_after_window": unresolved_rule_counts,
+        "relationship_closure_rule_counts_after_window": unresolved_rule_counts,
+        "zero_score_fact_fill_enabled": True,
+        "reason_code": "SOURCE_SUPPORTING_FACTS_PAGED_UNTIL_RULE_LINK_CLOSURE_OR_FACT_EXHAUSTION",
+    }
+    merged_receipt["receipt_fingerprint"] = _impl._fingerprint(merged_receipt)
+    merged_asset["agent_semantic_link_receipt"] = merged_receipt
+    return merged_asset, merged_receipt
+
+
+_lossless_fact_paged_enrichment._qualibug_lossless_fact_paging_original = _original_fact_paged_enrichment
+_lossless_fact_paged_enrichment._qualibug_lossless_fact_paging_wrapper = True
+if not getattr(_base._fact_paged_enrichment, "_qualibug_lossless_fact_paging_wrapper", False):
+    _base._fact_paged_enrichment = _lossless_fact_paged_enrichment
 
 
 def _relationship_paged_enrichment(governed_asset: dict[str, Any], *, client: Any | None) -> tuple[dict[str, Any], dict[str, Any]]:
