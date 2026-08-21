@@ -56,13 +56,102 @@ def _existing_interfaces_by_rule(asset: dict[str, Any]) -> dict[str, set[str]]:
     return result
 
 
+def _run_window_with_omitted_rule_recovery(
+    governed_asset: dict[str, Any],
+    *,
+    client: Any | None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Re-assess rules the provider silently omitted from a successful response."""
+    enriched, receipt = _base._transition_paged_enrichment(
+        governed_asset,
+        client=client,
+    )
+    omitted_rule_ids = [
+        str(rule_id).strip()
+        for rule_id in receipt.get("unassessed_rule_ids", []) or []
+        if str(rule_id).strip()
+    ]
+    if not omitted_rule_ids:
+        return enriched, receipt
+
+    omitted_set = set(omitted_rule_ids)
+    recovery_asset = deepcopy(governed_asset)
+    recovery_asset["rule_library"] = [
+        dict(row)
+        for row in _base._dicts(governed_asset.get("rule_library"))
+        if _rule_id(row) in omitted_set
+    ]
+    recovery_asset["state_machines"] = []
+    recovered, recovered_receipt = _base._transition_paged_enrichment(
+        recovery_asset,
+        client=client,
+    )
+
+    merged_asset = deepcopy(governed_asset)
+    merged_asset["relationships"] = _base._merge_generated_relationships(
+        governed_asset,
+        [enriched, recovered],
+        [receipt, recovered_receipt],
+    )
+    merged_receipt = _base._merge_receipts(
+        [receipt, recovered_receipt],
+        rule_count=len(_base._dicts(governed_asset.get("rule_library"))),
+        duplicate_rule_windows=True,
+    )
+
+    remaining_omitted = set(
+        str(rule_id).strip()
+        for rule_id in recovered_receipt.get("unassessed_rule_ids", []) or []
+        if str(rule_id).strip()
+    )
+    recovered_rule_ids = omitted_set - remaining_omitted
+    if recovered_rule_ids:
+        merged_receipt["unassessed_rule_ids"] = [
+            rule_id
+            for rule_id in merged_receipt.get("unassessed_rule_ids", [])
+            if rule_id not in recovered_rule_ids
+        ]
+        merged_receipt["unassessed_rule_count"] = len(
+            merged_receipt["unassessed_rule_ids"]
+        )
+        recovered_fingerprints = {
+            _impl._fingerprint({"rule_id": rule_id})
+            for rule_id in recovered_rule_ids
+        }
+        merged_receipt["rejections"] = [
+            row
+            for row in merged_receipt.get("rejections", [])
+            if not (
+                row.get("reason_code") == "PROVIDER_OMITTED_RULE"
+                and row.get("proposal_fingerprint") in recovered_fingerprints
+            )
+        ]
+        merged_receipt["rejected_proposal_count"] = len(
+            merged_receipt["rejections"]
+        )
+
+    merged_receipt["omitted_rule_recovery"] = {
+        "enabled": True,
+        "initial_omitted_rule_count": len(omitted_set),
+        "recovered_rule_assessment_count": len(recovered_rule_ids),
+        "remaining_omitted_rule_count": len(remaining_omitted),
+        "recovered_rule_ids": sorted(recovered_rule_ids),
+        "reason_code": "PROVIDER_OMITTED_RULE_REASSESSED_IN_TARGETED_UNIT",
+    }
+    merged_receipt["recovered_omitted_rule_count"] = len(recovered_rule_ids)
+    merged_receipt["status"] = _base._merge_status([merged_receipt])
+    merged_receipt["receipt_fingerprint"] = _impl._fingerprint(merged_receipt)
+    merged_asset["agent_semantic_link_receipt"] = merged_receipt
+    return merged_asset, merged_receipt
+
+
 def _run_window_with_confidence_recovery(
     governed_asset: dict[str, Any],
     *,
     client: Any | None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Retry a window only when Tier-3 confidence rejected an otherwise valid proposal."""
-    enriched, receipt = _base._transition_paged_enrichment(
+    enriched, receipt = _run_window_with_omitted_rule_recovery(
         governed_asset,
         client=client,
     )
@@ -97,8 +186,8 @@ def _run_window_with_confidence_recovery(
     }
     recovered_receipt["recovered_low_confidence_count"] = recovered_count
     recovered_receipt["initial_rejected_low_confidence_count"] = initial_low_confidence
-    recovered_receipt["receipt_fingerprint"] = _impl._fingerprint(recovered_receipt)
     recovered["agent_semantic_link_receipt"] = recovered_receipt
+    recovered_receipt["receipt_fingerprint"] = _impl._fingerprint(recovered_receipt)
     return recovered, recovered_receipt
 
 
@@ -176,7 +265,17 @@ def _relationship_paged_enrichment(governed_asset: dict[str, Any], *, client: An
         "remaining_rejected_low_confidence_count": sum(int(row.get("remaining_rejected_low_confidence_count") or 0) for row in recovery_rows),
         "reason_code": "LOW_CONFIDENCE_REASSESSED_WITH_DETERMINISTIC_CONTRACT_GATES",
     }
+    omitted_recovery_rows = [receipt.get("omitted_rule_recovery") for receipt in receipts if isinstance(receipt.get("omitted_rule_recovery"), dict)]
+    merged_receipt["omitted_rule_recovery"] = {
+        "enabled": bool(omitted_recovery_rows),
+        "window_count": len(omitted_recovery_rows),
+        "initial_omitted_rule_count": sum(int(row.get("initial_omitted_rule_count") or 0) for row in omitted_recovery_rows),
+        "recovered_rule_assessment_count": sum(int(row.get("recovered_rule_assessment_count") or 0) for row in omitted_recovery_rows),
+        "remaining_omitted_rule_count": sum(int(row.get("remaining_omitted_rule_count") or 0) for row in omitted_recovery_rows),
+        "reason_code": "PROVIDER_OMITTED_RULE_REASSESSED_IN_TARGETED_UNIT",
+    }
     merged_receipt["recovered_low_confidence_count"] = int(merged_receipt["confidence_recovery"]["recovered_low_confidence_count"])
+    merged_receipt["recovered_omitted_rule_count"] = int(merged_receipt["omitted_rule_recovery"]["recovered_rule_assessment_count"])
     merged_receipt["receipt_fingerprint"] = _impl._fingerprint(merged_receipt)
     merged_asset["agent_semantic_link_receipt"] = merged_receipt
     return merged_asset, merged_receipt
