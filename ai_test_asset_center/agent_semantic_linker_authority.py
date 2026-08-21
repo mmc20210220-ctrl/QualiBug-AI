@@ -1,7 +1,7 @@
 """Authority facade for lossless semantic-link scheduling.
 
 The mature semantic linker keeps bounded provider units. This facade turns those
-unit budgets into paging boundaries so a source asset is never silently
+unit budgets into explicit paging boundaries so a source asset is never silently
 truncated before semantic linking.
 """
 from __future__ import annotations
@@ -20,6 +20,7 @@ AgentSemanticLinkerError = _impl.AgentSemanticLinkerError
 
 _RULE_BATCH_WINDOW = max(1, int(_impl.MAX_RULES_PER_REQUEST) * int(_impl.MAX_PROVIDER_REQUESTS))
 _TRANSITION_BATCH_WINDOW = max(1, int(_impl.MAX_TRANSITIONS_PER_REQUEST))
+_CANDIDATE_BATCH_WINDOW = max(1, int(_impl.MAX_CANDIDATES_PER_RULE))
 _TRANSITION_ROWS_OVERRIDE: ContextVar[tuple[dict[str, Any], ...] | None] = ContextVar(
     "qualibug_transition_rows_override",
     default=None,
@@ -132,11 +133,11 @@ def _merge_candidate_recall(
         first = rows[0]
         return {
             "rule_count": int(first.get("rule_count") or 0),
-            "candidate_total": int(first.get("candidate_total") or 0),
-            "candidate_min": first.get("candidate_min"),
-            "candidate_max": int(first.get("candidate_max") or 0),
-            "fallback_rule_count": int(first.get("fallback_rule_count") or 0),
-            "empty_candidate_rule_count": int(first.get("empty_candidate_rule_count") or 0),
+            "candidate_total": sum(int(r.get("candidate_total") or 0) for r in rows),
+            "candidate_min": min([r.get("candidate_min") for r in rows if r.get("candidate_min") is not None], default=None),
+            "candidate_max": max([int(r.get("candidate_max") or 0) for r in rows], default=0),
+            "fallback_rule_count": sum(int(r.get("fallback_rule_count") or 0) for r in rows),
+            "empty_candidate_rule_count": sum(int(r.get("empty_candidate_rule_count") or 0) for r in rows),
             "recall_basis": next(iter(bases)) if len(bases) == 1 else "mixed",
         }
     mins = [r.get("candidate_min") for r in rows if r.get("candidate_min") is not None]
@@ -225,6 +226,23 @@ def _merge_receipts(
     return merged
 
 
+def _merge_generated_relationships(
+    governed_asset: dict[str, Any],
+    enriched_assets: list[dict[str, Any]],
+    receipts: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    relationships = [dict(row) for row in _dicts(governed_asset.get("relationships"))]
+    seen_edges = {str(row.get("edge_id")) for row in relationships if row.get("edge_id")}
+    for enriched, receipt in zip(enriched_assets, receipts):
+        accepted_edge_ids = {str(x).strip() for x in receipt.get("accepted_edge_ids", []) if str(x).strip()}
+        for row in _dicts(enriched.get("relationships")):
+            edge_id = str(row.get("edge_id") or "").strip()
+            if edge_id and edge_id in accepted_edge_ids and edge_id not in seen_edges:
+                seen_edges.add(edge_id)
+                relationships.append(dict(row))
+    return relationships
+
+
 def _transition_paged_enrichment(governed_asset: dict[str, Any], *, client: Any | None) -> tuple[dict[str, Any], dict[str, Any]]:
     transitions = _dicts(_original_asset_transition_rows(governed_asset))
     if len(transitions) <= _TRANSITION_BATCH_WINDOW:
@@ -234,26 +252,14 @@ def _transition_paged_enrichment(governed_asset: dict[str, Any], *, client: Any 
     paging_client = _PagingClient(base_client)
     chunks = [transitions[i:i + _TRANSITION_BATCH_WINDOW] for i in range(0, len(transitions), _TRANSITION_BATCH_WINDOW)]
     receipts: list[dict[str, Any]] = []
-    generated_relationships: list[dict[str, Any]] = []
-
+    enriched_assets: list[dict[str, Any]] = []
     for chunk in chunks:
         enriched, receipt = _run_core_with_transition_window(governed_asset, client=paging_client, transition_rows=chunk)
+        enriched_assets.append(enriched)
         receipts.append(receipt)
-        accepted_edge_ids = {str(x).strip() for x in receipt.get("accepted_edge_ids", []) if str(x).strip()}
-        generated_relationships.extend(
-            dict(row) for row in _dicts(enriched.get("relationships"))
-            if str(row.get("edge_id") or "").strip() in accepted_edge_ids
-        )
 
     merged_asset = deepcopy(governed_asset)
-    merged_asset["relationships"] = [dict(row) for row in _dicts(governed_asset.get("relationships"))]
-    seen_edges = {str(row.get("edge_id")) for row in merged_asset["relationships"] if row.get("edge_id")}
-    for row in generated_relationships:
-        edge_id = str(row.get("edge_id") or "")
-        if edge_id and edge_id not in seen_edges:
-            seen_edges.add(edge_id)
-            merged_asset["relationships"].append(row)
-
+    merged_asset["relationships"] = _merge_generated_relationships(governed_asset, enriched_assets, receipts)
     merged_receipt = _merge_receipts(receipts, rule_count=len(_dicts(governed_asset.get("rule_library"))), duplicate_rule_windows=True)
     merged_receipt["accepted_relationship_count"] = len(merged_receipt["accepted_edge_ids"])
     merged_receipt["provider_attempt_count"] = max(0, int(merged_receipt.get("provider_attempt_count") or 0) - paging_client.cached_rule_calls)
@@ -273,10 +279,52 @@ def _transition_paged_enrichment(governed_asset: dict[str, Any], *, client: Any 
     return merged_asset, merged_receipt
 
 
+def _candidate_paged_enrichment(governed_asset: dict[str, Any], *, client: Any | None) -> tuple[dict[str, Any], dict[str, Any]]:
+    interfaces = _dicts(governed_asset.get("interfaces"))
+    if len(interfaces) <= _CANDIDATE_BATCH_WINDOW:
+        return _transition_paged_enrichment(governed_asset, client=client)
+
+    chunks = [interfaces[i:i + _CANDIDATE_BATCH_WINDOW] for i in range(0, len(interfaces), _CANDIDATE_BATCH_WINDOW)]
+    receipts: list[dict[str, Any]] = []
+    enriched_assets: list[dict[str, Any]] = []
+    for index, chunk in enumerate(chunks):
+        chunk_asset = deepcopy(governed_asset)
+        chunk_asset["interfaces"] = chunk
+        if index > 0:
+            chunk_asset["state_machines"] = []
+        enriched, receipt = _transition_paged_enrichment(chunk_asset, client=client)
+        enriched_assets.append(enriched)
+        receipts.append(receipt)
+
+    merged_asset = deepcopy(governed_asset)
+    merged_asset["relationships"] = _merge_generated_relationships(governed_asset, enriched_assets, receipts)
+    merged_receipt = _merge_receipts(
+        receipts,
+        rule_count=len(_dicts(governed_asset.get("rule_library"))),
+        duplicate_rule_windows=True,
+    )
+    merged_receipt["accepted_relationship_count"] = len(merged_receipt["accepted_edge_ids"])
+    merged_receipt["candidate_window_rule_assessment_count"] = sum(
+        len(receipt.get("rule_assessments", []) or []) for receipt in receipts
+    )
+    merged_receipt["candidate_paging"] = {
+        "enabled": True,
+        "window_size": _CANDIDATE_BATCH_WINDOW,
+        "window_count": len(chunks),
+        "source_interface_count": len(interfaces),
+        "window_interface_counts": [len(chunk) for chunk in chunks],
+        "candidate_budget_skipped_count": 0,
+        "reason_code": "SOURCE_INTERFACES_PAGED_INSTEAD_OF_TOP_CANDIDATE_TRUNCATION",
+    }
+    merged_receipt["receipt_fingerprint"] = _impl._fingerprint(merged_receipt)
+    merged_asset["agent_semantic_link_receipt"] = merged_receipt
+    return merged_asset, merged_receipt
+
+
 def _lossless_rule_enrichment(governed_asset: dict[str, Any], *, client: Any | None) -> tuple[dict[str, Any], dict[str, Any]]:
     rules = _dicts(governed_asset.get("rule_library"))
     if len(rules) <= _RULE_BATCH_WINDOW:
-        return _transition_paged_enrichment(governed_asset, client=client)
+        return _candidate_paged_enrichment(governed_asset, client=client)
 
     chunks = [rules[i:i + _RULE_BATCH_WINDOW] for i in range(0, len(rules), _RULE_BATCH_WINDOW)]
     receipts: list[dict[str, Any]] = []
@@ -286,7 +334,7 @@ def _lossless_rule_enrichment(governed_asset: dict[str, Any], *, client: Any | N
         chunk_asset["rule_library"] = chunk
         if index > 0:
             chunk_asset["state_machines"] = []
-        enriched, receipt = _transition_paged_enrichment(chunk_asset, client=client)
+        enriched, receipt = _candidate_paged_enrichment(chunk_asset, client=client)
         receipts.append(receipt)
         accepted_edge_ids = {str(x).strip() for x in receipt.get("accepted_edge_ids", []) if str(x).strip()}
         generated_relationships.extend(
