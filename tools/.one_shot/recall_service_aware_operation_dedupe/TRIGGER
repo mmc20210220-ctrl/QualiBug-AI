@@ -1,1 +1,1 @@
-trigger synchronize for PR #183 verifier
+trigger public-boundary service-aware verifier
