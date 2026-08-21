@@ -50,6 +50,40 @@ def _api_doc_parseable(text: str) -> bool:
     return bool(parsed.get("paths"))
 
 
+def _http_text(value: Any) -> str:
+    text = str(value or "").strip()
+    return text if text.startswith(("http://", "https://")) else ""
+
+
+def _merge_route_inventory(existing_doc: str, inventory_doc: str) -> str:
+    """Merge a frontend route inventory into the current API document.
+
+    When the current document is a JSON OpenAPI contract the inventory paths
+    are merged into it (never replacing declared operations). Otherwise the
+    synthetic inventory becomes the machine contract so the scan mainline can
+    plan against the probed surface.
+    """
+    import json as _json
+
+    try:
+        existing = _json.loads(str(existing_doc or "").strip())
+    except (ValueError, TypeError):
+        existing = None
+    if isinstance(existing, dict) and isinstance(existing.get("paths"), dict):
+        try:
+            inventory = _json.loads(str(inventory_doc or "").strip())
+        except (ValueError, TypeError):
+            return str(existing_doc or "")
+        if isinstance(inventory, dict) and isinstance(inventory.get("paths"), dict):
+            merged = dict(existing)
+            merged_paths = dict(existing["paths"])
+            for path, item in inventory["paths"].items():
+                merged_paths.setdefault(path, item)
+            merged["paths"] = merged_paths
+            return _json.dumps(merged, ensure_ascii=False)
+    return str(inventory_doc or "")
+
+
 def _project_openapi_doc_text(root: Path, project: str) -> str:
     """Raw content of the first source-declared OpenAPI file in project inputs."""
     from .api_doc_assets import _OPENAPI_FILENAMES, _project_api_input_dirs
@@ -280,6 +314,82 @@ def prepare_scan_before_pipeline(
                 )
                 runtime_api_doc_probe_receipt["replaced_operation_surface"] = True
     context["runtime_api_doc_probe_receipt"] = runtime_api_doc_probe_receipt
+    # ── Runtime frontend route probing (web-system surface expansion) ──
+    # Web systems without a standard document endpoint still expose their API
+    # surface verbatim inside the frontend JavaScript bundle. Probe the
+    # approved non-production frontend entry (connector_registry
+    # test_profile.frontend_urls / ui_base_url, context override) and merge the
+    # extracted /api/... route inventory into the operation surface: when the
+    # current document is a machine-parseable OpenAPI contract the routes are
+    # merged into its paths; otherwise the synthetic route inventory becomes
+    # the machine contract. All outcomes are receipted; probing never blocks.
+    runtime_frontend_route_probe_receipt: dict[str, Any] = {
+        "schema_version": "qualibug.runtime-frontend-route-probe.v1",
+        "status": "skipped",
+        "reason": "not_triggered",
+    }
+    _route_probe_control = str(
+        context.get("runtime_frontend_route_probe_enabled") or "auto"
+    ).strip().lower()
+    _route_probe_env_disabled = (
+        str(os.environ.get("QUALIBUG_RUNTIME_FRONTEND_ROUTE_PROBE_DISABLED") or "")
+        .strip()
+        .lower()
+        in {"1", "true", "yes"}
+    )
+    if approved_base_url and not _route_probe_env_disabled and _route_probe_control not in {
+        "false",
+        "0",
+        "no",
+        "off",
+    }:
+        ui_url = _first_text(
+            _http_text(context.get("ui_base_url")),
+            _http_text(context.get("frontend_url")),
+            _http_text(context.get("target_ui_base_url")),
+        )
+        ui_basis = "scan_context"
+        if not ui_url:
+            try:
+                from .enterprise_pilot_runtime import load_connector_registry
+                from .private_pilot_scan_prep import (
+                    _resolve_ui_base_url_from_profile,
+                )
+
+                _registry = load_connector_registry(project, root)
+                _profile = (
+                    _registry.get("test_profile")
+                    if isinstance(_registry, dict)
+                    else {}
+                )
+                if isinstance(_profile, dict):
+                    ui_url, _, ui_basis = _resolve_ui_base_url_from_profile(_profile)
+            except Exception as exc:
+                _LOGGER.warning(
+                    "frontend_route_probe_registry_resolution_failed error_type=%s",
+                    type(exc).__name__,
+                )
+                ui_url = ""
+        if ui_url:
+            from .runtime_frontend_route_probe import probe_frontend_routes
+
+            runtime_frontend_route_probe_receipt = probe_frontend_routes(ui_url)
+            runtime_frontend_route_probe_receipt["ui_basis"] = ui_basis
+            if runtime_frontend_route_probe_receipt.get("status") == "found":
+                inventory = str(
+                    runtime_frontend_route_probe_receipt.get("document_text") or ""
+                )
+                merged_doc = _merge_route_inventory(api_doc_text, inventory)
+                if merged_doc:
+                    api_doc_text = merged_doc
+                    runtime_frontend_route_probe_receipt[
+                        "merged_into_operation_surface"
+                    ] = True
+        else:
+            runtime_frontend_route_probe_receipt["reason"] = "no_frontend_url"
+    context["runtime_frontend_route_probe_receipt"] = (
+        runtime_frontend_route_probe_receipt
+    )
     if base_url and context.get("runtime_scenario_contract"):
         from .runtime_scenario_contract_gate import runtime_scenario_contract_gaps
 
