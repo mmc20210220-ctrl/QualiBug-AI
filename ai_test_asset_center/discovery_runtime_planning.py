@@ -703,6 +703,37 @@ def build_discovery_plan(
             "status": "FAILED",
             "reason": f"{type(exc).__name__}:{str(exc)[:160]}",
         }
+    # ── Runtime-probe contract derivation (档位 D breadth closure) ──
+    # performance_latency / stability_reliability were only reachable from
+    # source-declared contracts (档位 C).  For a doc-less unfamiliar system the
+    # governed surface probe already records per-sample status + latency (P2
+    # instrumentation in runtime_interface_discovery); derive the SAME
+    # formal-contract asset keys from those observations so the binders below
+    # compile open-class obligations.  Reuses bind_source_* + the contract-row
+    # builders from contract_auto_derivation — no new wheel, same asset flow as
+    # derive_source_contracts above.
+    runtime_probe_contract_receipt: dict[str, Any] = {
+        "schema_version": "qualibug.runtime-probe-contract-derivation.v1",
+        "status": "SKIPPED",
+        "reason": "derivation_not_run",
+    }
+    try:
+        from .runtime_probe_contract_derivation import derive_runtime_probe_contracts
+
+        _probe_obs = asset.get("runtime_probe_observations")
+        if _probe_obs:
+            asset, runtime_probe_contract_receipt = derive_runtime_probe_contracts(
+                asset,
+                operations=operations,
+                runtime_observations=_probe_obs,
+                runtime_actors=runtime_actors,
+            )
+    except Exception as exc:
+        runtime_probe_contract_receipt = {
+            "schema_version": "qualibug.runtime-probe-contract-derivation.v1",
+            "status": "FAILED",
+            "reason": f"{type(exc).__name__}:{str(exc)[:160]}",
+        }
     # Resolve adapter capability BEFORE the IR is built, so the IR's observation
     # surfaces and the experiment compiler's adapter set come from one computation.
     # They used to disagree: the IR hardcoded db_snapshot as unavailable while this

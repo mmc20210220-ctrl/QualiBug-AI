@@ -25,6 +25,22 @@ OBSERVATION_SCHEMA = "qualibug.runtime-interface-observation.v1"
 _PLACEHOLDER_RE = re.compile(r"\{[^{}]+\}|:[A-Za-z_][A-Za-z0-9_]*")
 _SAFE_SEGMENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
+# ── P2 instrumentation: bounded repeat-sampling for latency/stability ──
+# Read-only GET only, sequential, no state mutation, low risk.  Retries are
+# disabled on the extra samples so each is a single clean attempt (the latency
+# observer rejects multi-attempt durations).  Product-owned methodology
+# default, not a business SLA.  This is what lets open-class bug families
+# (performance_latency / stability_reliability) become reachable on a system
+# with no source-declared contract — the governed probe now records the
+# observations those contracts are derived from.
+#
+# Must be >= 5: the stability surface (formal_stability_surface) hard-requires
+# sample_count in [5, 20] before it will compile a stability_reliability
+# protocol, while the performance surface needs [3, 20].  3 repeats would make
+# stability_reliability structurally unreachable via runtime probe.  5 is the
+# minimum that satisfies BOTH surfaces; read-only GETs are cheap and safe.
+_RUNTIME_PROBE_SAMPLE_COUNT = 5
+
 
 def _text(value: Any) -> str:
     return str(value or "").strip()
@@ -602,6 +618,36 @@ def build_runtime_interface_observation_receipt(
 
     observed = dict(observation) if isinstance(observation, dict) else {}
     request_receipt_id = _text(observed.get("request_receipt_id"))
+    primary_duration_ms = observed.get("primary_duration_ms")
+    if primary_duration_ms is not None:
+        try:
+            primary_duration_ms = int(primary_duration_ms)
+        except (TypeError, ValueError):
+            primary_duration_ms = None
+    raw_samples = observed.get("samples")
+    probe_samples: list[dict[str, Any]] = []
+    if isinstance(raw_samples, list):
+        for sample in raw_samples:
+            if not isinstance(sample, dict):
+                continue
+            sample_status = sample.get("status_code")
+            sample_duration = sample.get("duration_ms")
+            sample_attempts = sample.get("attempts")
+            if sample_duration is not None:
+                try:
+                    sample_duration = int(sample_duration)
+                except (TypeError, ValueError):
+                    sample_duration = None
+            if sample_attempts is not None:
+                try:
+                    sample_attempts = int(sample_attempts)
+                except (TypeError, ValueError):
+                    sample_attempts = 1
+            probe_samples.append({
+                "status_code": int(sample_status or -1),
+                "duration_ms": sample_duration,
+                "attempts": sample_attempts or 1,
+            })
     if not request_receipt_id:
         raise ValueError("runtime_interface_request_receipt_missing")
     response_fingerprint = _text(observed.get("response_fingerprint")).lower()
@@ -690,6 +736,8 @@ def build_runtime_interface_observation_receipt(
         "status_code": status_code,
         "request_receipt_id": request_receipt_id,
         "response_fingerprint": response_fingerprint,
+        "primary_duration_ms": primary_duration_ms,
+        "samples": probe_samples,
         "source_refs": source_refs,
     }
     if normalized_confirmations:
@@ -858,6 +906,36 @@ def execute_runtime_interface_discovery(
                     ):
                         break
         status_code = int(response.get("status") or 0)
+        # ── P2: bounded repeat-sampling for latency / stability observation ──
+        # Sequential read-only GETs (no state mutation, low risk).  Retries are
+        # disabled on the extra samples so each is a single clean attempt; the
+        # latency observer rejects multi-attempt durations.  Methodology default
+        # (_RUNTIME_PROBE_SAMPLE_COUNT).  This is what makes open-class bug
+        # families reachable on a system with no source-declared contract.
+        _primary_dur = response.get("duration_ms")
+        probe_samples: list[dict[str, Any]] = [{
+            "status_code": status_code,
+            "duration_ms": int(_primary_dur) if _primary_dur is not None else None,
+            "attempts": int(response.get("_attempts") or 1),
+        }]
+        # Only repeat-sample a response we could actually read.  Latency and
+        # read-stability are meaningful only for successful reads, and the
+        # latency observer rejects non-2xx samples; auth-gated / missing
+        # endpoints yield no extra samples (the producer treats them as
+        # auth-gated, never as reliability defects).  Guarding also keeps the
+        # governed probe's request budget on the genuinely readable surface and
+        # avoids issuing speculative repeats against endpoints that already
+        # refused the primary read.
+        if 200 <= status_code < 300:
+            for _ in range(max(0, _RUNTIME_PROBE_SAMPLE_COUNT - 1)):
+                _sample = _http_request("GET", target + path, max_retries=0)
+                _sample_status = int(_sample.get("status") or 0)
+                _sample_dur = _sample.get("duration_ms")
+                probe_samples.append({
+                    "status_code": _sample_status,
+                    "duration_ms": int(_sample_dur) if _sample_dur is not None else None,
+                    "attempts": int(_sample.get("_attempts") or 1),
+                })
         request_receipt_id = "surfreq_" + _fingerprint({
             "run_id": identities["run_id"],
             "obligation_id": obligation_id,
@@ -898,6 +976,8 @@ def execute_runtime_interface_discovery(
                 "status_code": status_code,
                 "request_receipt_id": request_receipt_id,
                 "response_fingerprint": response_fingerprint,
+                "primary_duration_ms": response.get("duration_ms"),
+                "samples": probe_samples,
                 "confirmation_observations": confirmation_observations,
             },
         )

@@ -13,6 +13,12 @@ from .experiment_compiler import compile_experiments
 from .fixture_dag import attach_fixture_dag_to_experiments
 from .obligation_compiler import compile_obligations_from_behavior_ir
 from .runtime_interface_discovery import merge_runtime_discovered_operations
+from .runtime_probe_contract_derivation import (
+    derive_runtime_probe_contracts,
+    probe_observations_from_receipts,
+)
+from .source_performance_contract_binding import bind_source_performance_contracts
+from .source_stability_contract_binding import bind_source_stability_contracts
 
 
 ROUND_RECEIPT_SCHEMA = "qualibug.behavior-ir-expansion-round.v1"
@@ -200,6 +206,40 @@ def expand_behavior_ir_from_runtime_observations(
         documented_operations,
         observation_receipts,
     )
+    # ── 档位 D breadth closure (runtime-probe contract derivation) ──
+    # Open-class bug families (performance_latency / stability_reliability)
+    # were only reachable from source-declared contracts.  The governed surface
+    # probe already recorded per-sample status + latency for the discovered
+    # endpoints (P2 instrumentation); derive the SAME formal-contract asset
+    # keys from those observations so the discovered operations can yield
+    # open-class obligations in this expansion round.  Reuses
+    # bind_source_*_contracts + the contract-row builders — no new wheel.
+    _probe_obs = probe_observations_from_receipts(observation_receipts)
+    _runtime_probe_receipt: dict[str, Any] = {
+        "schema_version": "qualibug.runtime-probe-contract-derivation.v1",
+        "status": "SKIPPED",
+        "reason": "no_probe_observations",
+    }
+    if _probe_obs:
+        knowledge_asset, _runtime_probe_receipt = derive_runtime_probe_contracts(
+            knowledge_asset,
+            operations=merged_operations,
+            runtime_observations=_probe_obs,
+            runtime_actors=runtime_actors,
+        )
+
+    def _bind_runtime_probe_contracts(ir: dict[str, Any]) -> dict[str, Any]:
+        """Add performance/stability invariants derived from runtime probes.
+
+        ``build_behavior_ir_from_knowledge_asset`` does not bind source
+        contracts, so the invariants must be attached here with the same
+        binders ``build_discovery_plan`` uses.  Idempotent across rounds:
+        binders dedup by contract_id.
+        """
+        ir, _perf = bind_source_performance_contracts(ir, knowledge_asset)
+        ir, _stab = bind_source_stability_contracts(ir, knowledge_asset)
+        return ir
+
     documented_keys = {
         _operation_key(row)
         for row in documented_operations
@@ -256,6 +296,7 @@ def expand_behavior_ir_from_runtime_observations(
             api_operations=merged_operations,
             runtime_actors=runtime_actors,
         )
+        behavior_ir = _bind_runtime_probe_contracts(behavior_ir)
         obligation_pack = compile_obligations_from_behavior_ir(
             behavior_ir,
             root=_text(_dict(planning_context).get("root")),
@@ -272,6 +313,7 @@ def expand_behavior_ir_from_runtime_observations(
         # Recompile-only: keep the immutable IR identity and retry named
         # obligations against the same operation set + planning materialization.
         behavior_ir = dict(initial_behavior_ir)
+        behavior_ir = _bind_runtime_probe_contracts(behavior_ir)
         obligation_pack = compile_obligations_from_behavior_ir(
             behavior_ir,
             root=_text(_dict(planning_context).get("root")),
