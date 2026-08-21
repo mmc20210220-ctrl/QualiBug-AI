@@ -32,7 +32,12 @@ def selected_continuation_identity(row: dict[str, Any]) -> str:
 def _continuation_result_rows(batch: dict[str, Any]) -> list[dict[str, Any]]:
     """Project result rows onto continuation semantics without mutating evidence."""
     projected: list[dict[str, Any]] = []
-    for raw in _list(_dict(batch).get("results")):
+    # The view's overridden get("results") calls this function; reading through
+    # it again would recurse forever. The projection must consume the RAW
+    # results of the underlying mapping, so bypass the subclass override with
+    # the dict base implementation.
+    raw_results = dict.get(batch, "results") if isinstance(batch, dict) else None
+    for raw in _list(raw_results):
         if not isinstance(raw, dict):
             continue
         row = dict(raw)
