@@ -209,6 +209,29 @@ def _effective_max_tokens(*values: Any) -> int:
 # JSON Truncation Recovery
 # ═══════════════════════════════════════════════════════════════════
 
+_API_PATH_HINT_MAX_CHARS = 8000
+# Source documents arrive in heterogeneous formats: OpenAPI JSON, markdown
+# inline-code, or bare ``METHOD /path`` lines. The historical extractor only
+# matched JSON double-quoted paths, so a markdown API spec (the benchmark
+# mall's API_SPEC.md, for example) produced an empty path inventory and the
+# reasoner never saw a documented-surface hint. Express-style ``:param``
+# segments must survive extraction too.
+_API_PATH_PATTERNS = (
+    re.compile(r'"(/api/[\w\-\/{}:]+)"'),
+    re.compile(r"`(/api/[\w\-\/{}:]+)`"),
+    re.compile(r"\b(?:GET|POST|PUT|PATCH|DELETE)\s+(/api/[\w\-\/{}:]+)", re.I),
+)
+
+
+def _extract_api_paths(text: str) -> list[str]:
+    """Collect distinct documented API paths across supported doc formats."""
+    return list(dict.fromkeys(
+        match.group(1).rstrip("/")
+        for pattern in _API_PATH_PATTERNS
+        for match in pattern.finditer(text or "")
+    ))
+
+
 def _salvage_truncated_json(text: str) -> list[dict] | None:
     """Attempt to recover complete hypothesis dicts from truncated JSON content.
 
@@ -1318,10 +1341,24 @@ def _stage_reason_all_v2(self, prd_text: str, api_spec: str,
 
     # Extract real API paths for the Phase90 fallback only.  Active graph mode
     # avoids sending the full PRD/API documents to every Reasoner invocation.
-    path_matches = re.findall(r'"(/api/[\w\-\/{}]+)"', api_spec + prd_text)
+    # The inventory covers every documented format (JSON-quoted, markdown
+    # inline-code, bare METHOD+path lines) and is bounded by characters, not a
+    # fixed path count, so a large documented surface stays maximally visible.
+    path_matches = _extract_api_paths(api_spec + prd_text)
     api_with_paths = api_spec
     if path_matches:
-        paths_hint = "EXACT API PATHS AVAILABLE:\n" + "\n".join(sorted(set(path_matches))[:50])
+        hinted_lines: list[str] = []
+        hinted_chars = 0
+        for path in sorted(path_matches):
+            line = path + "\n"
+            if hinted_chars + len(line) > _API_PATH_HINT_MAX_CHARS:
+                hinted_lines.append(
+                    f"... ({len(path_matches) - len(hinted_lines)} more documented paths omitted)"
+                )
+                break
+            hinted_lines.append(path)
+            hinted_chars += len(line)
+        paths_hint = "EXACT API PATHS AVAILABLE:\n" + "\n".join(hinted_lines)
         api_with_paths = paths_hint + "\n\n" + api_spec
     prompt_prd = graph_rendered if use_graph_context else prd_text
     prompt_api = graph_rendered if use_graph_context else api_with_paths
