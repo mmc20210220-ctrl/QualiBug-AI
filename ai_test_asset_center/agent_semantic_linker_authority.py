@@ -16,7 +16,7 @@ RECEIPT_SCHEMA = _base.RECEIPT_SCHEMA
 PROMPT_PROTOCOL = _base.PROMPT_PROTOCOL
 AgentSemanticLinkerError = _base.AgentSemanticLinkerError
 MAX_LINKS_PER_RULE = max(1, int(_impl.MAX_LINKS_PER_RULE))
-_CONFIDENCE_RECOVERY_LOCK = threading.Lock()
+_CONFIDENCE_RECOVERY_LOCK = threading.RLock()
 
 if not hasattr(_base, "_text"):
     _base._text = getattr(_impl, "_text", lambda value: str(value or "").strip())
@@ -238,10 +238,11 @@ if not getattr(_base._candidate_paged_enrichment, "_qualibug_relationship_paging
 
 
 def enrich_knowledge_asset_with_agent_relationships(knowledge_asset: dict[str, Any], *, client: Any | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
-    return _base.enrich_knowledge_asset_with_agent_relationships(
-        knowledge_asset,
-        client=client,
-    )
+    with _CONFIDENCE_RECOVERY_LOCK:
+        return _base.enrich_knowledge_asset_with_agent_relationships(
+            knowledge_asset,
+            client=client,
+        )
 
 
 def __getattr__(name: str) -> Any:
