@@ -16,7 +16,19 @@ class OmittedTransitionFakeClient:
     def complete_json(self, **kwargs: object) -> dict:
         prompt = str(kwargs["user_prompt"])
         if '"assessment_mode":"rule_to_interface"' in prompt:
-            return {"assessments": []}
+            return {
+                "assessments": [{
+                    "rule_id": "rule-order-transition",
+                    "disposition": "LINKED",
+                    "reason": "The cancellation interface is the documented executable surface for the rule.",
+                    "relationships": [{
+                        "interface_id": "api:POST:/order/cancel",
+                        "confidence": 0.99,
+                        "reason": "The interface is the documented order lifecycle operation.",
+                        "evidence_refs": ["rule-order-transition", "api:POST:/order/cancel"],
+                    }],
+                }]
+            }
         assert '"assessment_mode":"state_transition_to_interface"' in prompt
         packet = json.loads(
             prompt.split("INPUT:\n", 1)[1].split("\n\nFINAL CONTRACT CHECK", 1)[0]
@@ -150,7 +162,19 @@ def test_transition_recovery_preserves_unresolved_transition_when_provider_omits
         def complete_json(self, **kwargs: object) -> dict:
             prompt = str(kwargs["user_prompt"])
             if '"assessment_mode":"rule_to_interface"' in prompt:
-                return {"assessments": []}
+                return {
+                    "assessments": [{
+                        "rule_id": "rule-order-transition",
+                        "disposition": "LINKED",
+                        "reason": "The cancellation interface is the documented executable surface for the rule.",
+                        "relationships": [{
+                            "interface_id": "api:POST:/order/cancel",
+                            "confidence": 0.99,
+                            "reason": "The interface is the documented order lifecycle operation.",
+                            "evidence_refs": ["rule-order-transition", "api:POST:/order/cancel"],
+                        }],
+                    }]
+                }
             packet = json.loads(
                 prompt.split("INPUT:\n", 1)[1].split("\n\nFINAL CONTRACT CHECK", 1)[0]
             )
