@@ -61,23 +61,12 @@ def _run_window_with_confidence_recovery(
     *,
     client: Any | None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Retry a window only when Tier-3 confidence rejected an otherwise valid proposal.
-
-    Confidence is intentionally a quality signal, not an irreversible Recall
-    boundary. The normal pass keeps the existing 0.65 guidance. If that pass
-    produces LOW_CONFIDENCE rejections, the exact same source window is
-    re-assessed once with the confidence gate disabled. Identity, candidate,
-    evidence, disposition, duplicate, and per-rule relationship limits remain
-    fully enforced, so the recovery cannot turn an invented or non-candidate
-    relationship into an accepted edge.
-    """
+    """Retry a window only when Tier-3 confidence rejected an otherwise valid proposal."""
     enriched, receipt = _base._transition_paged_enrichment(
         governed_asset,
         client=client,
     )
-    initial_low_confidence = int(
-        receipt.get("rejected_low_confidence_count") or 0
-    )
+    initial_low_confidence = int(receipt.get("rejected_low_confidence_count") or 0)
     if initial_low_confidence <= 0:
         return enriched, receipt
 
@@ -97,18 +86,15 @@ def _run_window_with_confidence_recovery(
         initial_low_confidence
         - int(recovered_receipt.get("rejected_low_confidence_count") or 0),
     )
-    recovery = {
+    recovered_receipt["confidence_recovery"] = {
         "enabled": True,
         "initial_rejected_low_confidence_count": initial_low_confidence,
         "recovered_low_confidence_count": recovered_count,
-        "remaining_rejected_low_confidence_count": int(
-            recovered_receipt.get("rejected_low_confidence_count") or 0
-        ),
+        "remaining_rejected_low_confidence_count": int(recovered_receipt.get("rejected_low_confidence_count") or 0),
         "threshold_before_recovery": previous_threshold,
         "threshold_during_recovery": 0.0,
         "reason_code": "LOW_CONFIDENCE_REASSESSED_WITH_DETERMINISTIC_CONTRACT_GATES",
     }
-    recovered_receipt["confidence_recovery"] = recovery
     recovered_receipt["recovered_low_confidence_count"] = recovered_count
     recovered_receipt["initial_rejected_low_confidence_count"] = initial_low_confidence
     recovered_receipt["receipt_fingerprint"] = _impl._fingerprint(recovered_receipt)
@@ -170,31 +156,27 @@ def _relationship_paged_enrichment(governed_asset: dict[str, Any], *, client: An
     merged_asset["relationships"] = _base._merge_generated_relationships(original_asset, enriched_assets, receipts)
     merged_receipt = _base._merge_receipts(receipts, rule_count=len(rules), duplicate_rule_windows=True)
     merged_receipt["accepted_relationship_count"] = len(merged_receipt.get("accepted_edge_ids", []))
-    recovery_rows = [
-        receipt.get("confidence_recovery")
-        for receipt in receipts
-        if isinstance(receipt.get("confidence_recovery"), dict)
-    ]
+    relationship_passes = [receipt.get("relationship_paging") for receipt in receipts if isinstance(receipt.get("relationship_paging"), dict)]
+    merged_receipt["relationship_paging"] = {
+        "enabled": pass_count > 1 or any(bool(item.get("enabled")) for item in relationship_passes),
+        "window_size": MAX_LINKS_PER_RULE,
+        "pass_count": pass_count,
+        "followup_call_count": max(0, pass_count - 1),
+        "source_interface_count": len(interface_rows),
+        "saturated_rule_count": len(saturated_rule_ids),
+        "saturated_rule_ids": sorted(saturated_rule_ids),
+        "reason_code": "RULE_LINKS_PAGED_INSTEAD_OF_HARD_RESPONSE_CAP",
+    }
+    recovery_rows = [receipt.get("confidence_recovery") for receipt in receipts if isinstance(receipt.get("confidence_recovery"), dict)]
     merged_receipt["confidence_recovery"] = {
         "enabled": bool(recovery_rows),
         "window_count": len(recovery_rows),
-        "initial_rejected_low_confidence_count": sum(
-            int(row.get("initial_rejected_low_confidence_count") or 0)
-            for row in recovery_rows
-        ),
-        "recovered_low_confidence_count": sum(
-            int(row.get("recovered_low_confidence_count") or 0)
-            for row in recovery_rows
-        ),
-        "remaining_rejected_low_confidence_count": sum(
-            int(row.get("remaining_rejected_low_confidence_count") or 0)
-            for row in recovery_rows
-        ),
+        "initial_rejected_low_confidence_count": sum(int(row.get("initial_rejected_low_confidence_count") or 0) for row in recovery_rows),
+        "recovered_low_confidence_count": sum(int(row.get("recovered_low_confidence_count") or 0) for row in recovery_rows),
+        "remaining_rejected_low_confidence_count": sum(int(row.get("remaining_rejected_low_confidence_count") or 0) for row in recovery_rows),
         "reason_code": "LOW_CONFIDENCE_REASSESSED_WITH_DETERMINISTIC_CONTRACT_GATES",
     }
-    merged_receipt["recovered_low_confidence_count"] = int(
-        merged_receipt["confidence_recovery"]["recovered_low_confidence_count"]
-    )
+    merged_receipt["recovered_low_confidence_count"] = int(merged_receipt["confidence_recovery"]["recovered_low_confidence_count"])
     merged_receipt["receipt_fingerprint"] = _impl._fingerprint(merged_receipt)
     merged_asset["agent_semantic_link_receipt"] = merged_receipt
     return merged_asset, merged_receipt
