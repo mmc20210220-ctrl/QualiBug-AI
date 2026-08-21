@@ -6,9 +6,8 @@ as a legacy implementation while the public authority path delegates here.
 from __future__ import annotations
 
 from copy import deepcopy
-import os
-import tempfile
 import threading
+from types import SimpleNamespace
 from typing import Any
 
 from . import agent_semantic_linker as _impl
@@ -59,10 +58,24 @@ def _existing_interfaces_by_rule(asset: dict[str, Any]) -> dict[str, set[str]]:
 
 
 class _TransitionRecoveryClient:
-    """Forward only transition requests; suppress the synthetic recovery rule unit."""
+    """Forward transition requests while isolating them from normal cache entries."""
 
     def __init__(self, client: Any) -> None:
         self._client = client
+        base_config = getattr(client, "config", None)
+        config_values: dict[str, Any] = {}
+        for key in (
+            "model",
+            "base_url",
+            "temperature",
+            "max_tokens",
+            "timeout_seconds",
+        ):
+            value = getattr(base_config, key, None)
+            if value is not None:
+                config_values[key] = value
+        config_values["model"] = f"{config_values.get('model', 'unknown')}:transition-recovery"
+        self.config = SimpleNamespace(**config_values)
 
     def complete_json(self, **kwargs: Any) -> dict[str, Any]:
         prompt = str(kwargs.get("user_prompt") or "")
@@ -171,27 +184,18 @@ def _run_transition_recovery_batches(
     recovered_assets: list[dict[str, Any]] = []
     recovered_receipts: list[dict[str, Any]] = []
 
-    previous_cache_dir = os.environ.get(_impl.CACHE_DIRECTORY_ENV)
-    with tempfile.TemporaryDirectory(prefix="qualibug-transition-recovery-") as recovery_cache_dir:
-        os.environ[_impl.CACHE_DIRECTORY_ENV] = recovery_cache_dir
-        try:
-            for chunk in chunks:
-                recovered, raw_receipt = _base._run_core_with_transition_window(
-                    recovery_asset,
-                    client=recovery_client,
-                    transition_rows=chunk,
-                )
-                receipt = _sanitize_transition_recovery_receipt(
-                    raw_receipt,
-                    transition_count=len(chunk),
-                )
-                recovered_assets.append(recovered)
-                recovered_receipts.append(receipt)
-        finally:
-            if previous_cache_dir is None:
-                os.environ.pop(_impl.CACHE_DIRECTORY_ENV, None)
-            else:
-                os.environ[_impl.CACHE_DIRECTORY_ENV] = previous_cache_dir
+    for chunk in chunks:
+        recovered, raw_receipt = _base._run_core_with_transition_window(
+            recovery_asset,
+            client=recovery_client,
+            transition_rows=chunk,
+        )
+        receipt = _sanitize_transition_recovery_receipt(
+            raw_receipt,
+            transition_count=len(chunk),
+        )
+        recovered_assets.append(recovered)
+        recovered_receipts.append(receipt)
 
     merged_asset = deepcopy(governed_asset)
     merged_asset["relationships"] = _base._merge_generated_relationships(
