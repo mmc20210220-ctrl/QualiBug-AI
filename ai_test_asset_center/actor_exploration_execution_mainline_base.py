@@ -428,6 +428,17 @@ def exploration_execution_policy(
             and not _list(_dict(operation).get("security"))
         ):
             return True, 1, "anonymous_accepted_residue_write"
+        # A single-candidate exploration degenerates to exactly one governed
+        # attempt: the residue gate exists to stop REPEATING an unknown write
+        # under several actors, and one execution carries the identical risk
+        # profile the scan's execution policy already authorizes for the
+        # compiled experiment itself under accepted residue. Multi-candidate
+        # exploration keeps the strict gate.
+        if (
+            reversibility_reason == "accepted_residue_is_not_reversible"
+            and int(requested_max_attempts or 0) <= 1
+        ):
+            return True, 1, "single_candidate_accepted_residue_write"
         return False, 0, reversibility_reason
 
     if _operation_has_semantic_marker(operation, _STATE_TRANSITION_PATTERNS):

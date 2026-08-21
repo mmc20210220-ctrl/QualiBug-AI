@@ -232,6 +232,46 @@ def test_runtime_policy_rejects_accepted_residue_as_reversibility():
     ) == (False, 0, "accepted_residue_is_not_reversible")
 
 
+def test_single_candidate_accepted_residue_is_one_governed_attempt():
+    """One candidate cannot be repeated under several actors.
+
+    With a single ranked candidate the exploration degenerates to exactly
+    one governed attempt — the same risk profile the scan's execution
+    policy already authorizes for the compiled experiment under accepted
+    residue. The gate exists to stop multi-actor repetition.
+    """
+    residue_experiment = {
+        "cleanup_plan": [
+            {
+                "action": "accepted_residue",
+                "mode": "accepted_residue_no_cleanup",
+                "residue": True,
+            }
+        ],
+        "write_reversibility_proof": {
+            "proof_status": "PROVEN",
+            "proof_kind": "accepted_residue",
+            "reversibility": "none",
+            "cleanup_authority": {"kind": "accepted_residue"},
+        },
+    }
+    assert exploration_execution_policy(
+        operation={"method": "POST", "path": "/api/items"},
+        experiment=residue_experiment,
+        requested_max_attempts=1,
+    ) == (True, 1, "single_candidate_accepted_residue_write")
+
+
+def test_single_candidate_without_cleanup_still_blocked():
+    # The single-candidate exception only covers the accepted-residue form;
+    # a write with NO cleanup plan at all keeps the strict gate.
+    assert exploration_execution_policy(
+        operation={"method": "POST", "path": "/api/items"},
+        experiment={},
+        requested_max_attempts=1,
+    ) == (False, 0, "write_without_cleanup_proof")
+
+
 def test_executor_really_switches_step_actor(monkeypatch):
     calls = []
 
