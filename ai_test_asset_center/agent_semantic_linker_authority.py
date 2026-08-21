@@ -46,6 +46,11 @@ _original_recall_supporting_facts = getattr(
     "_qualibug_authority_original",
     _impl._recall_supporting_facts,
 )
+_original_recall_candidate_interfaces = getattr(
+    _impl._recall_candidate_interfaces,
+    "_qualibug_authority_original",
+    _impl._recall_candidate_interfaces,
+)
 
 
 def _authority_asset_transition_rows(asset: dict[str, Any]) -> list[dict[str, Any]]:
@@ -103,9 +108,62 @@ def _authority_recall_supporting_facts(
     return selected[:budget]
 
 
+def _authority_recall_candidate_interfaces(
+    ctx: dict[str, Any],
+    interface_signals: dict[str, dict[str, Any]],
+    asset: dict[str, Any],
+) -> tuple[list[str], dict[str, Any]]:
+    """Fill unused candidate-window slots with otherwise-unscored interfaces.
+
+    Candidate paging makes MAX_CANDIDATES_PER_RULE a source-interface window size.
+    The core scorer can still return only three or fewer interfaces when several
+    interfaces have deterministic signals and another valid interface has no
+    signal at all. Without this fill, that zero-score interface is in exactly one
+    source window and is permanently invisible to Tier 2. Filling the remaining
+    slots makes each interface window lossless; the LLM remains bounded by the
+    same candidate budget and later windows cover the rest of the catalog.
+    """
+    ranked, stats = _original_recall_candidate_interfaces(
+        ctx,
+        interface_signals,
+        asset,
+    )
+    ranked = list(ranked)
+    budget = max(1, int(_impl.MAX_CANDIDATES_PER_RULE))
+    target_size = min(budget, len(interface_signals))
+    if len(ranked) >= target_size:
+        return ranked[:budget], stats
+
+    channels = {
+        str(interface_id): list(channel_names)
+        for interface_id, channel_names in (stats.get("channels") or {}).items()
+    }
+    selected_ids = set(ranked)
+    for interface_id in sorted(interface_signals):
+        if interface_id in selected_ids:
+            continue
+        ranked.append(interface_id)
+        selected_ids.add(interface_id)
+        channels.setdefault(interface_id, [])
+        if "window_fill" not in channels[interface_id]:
+            channels[interface_id].append("window_fill")
+        if len(ranked) >= target_size:
+            break
+
+    merged_stats = dict(stats)
+    merged_stats["channels"] = {
+        interface_id: sorted(set(channel_names))
+        for interface_id, channel_names in channels.items()
+        if interface_id in ranked
+    }
+    merged_stats["window_fill"] = len(ranked) > len(stats.get("channels") or {})
+    return ranked[:budget], merged_stats
+
+
 _authority_asset_transition_rows._qualibug_authority_original = _original_asset_transition_rows
 _authority_all_fact_rows._qualibug_authority_original = _original_all_fact_rows
 _authority_recall_supporting_facts._qualibug_authority_original = _original_recall_supporting_facts
+_authority_recall_candidate_interfaces._qualibug_authority_original = _original_recall_candidate_interfaces
 if not getattr(_impl._asset_transition_rows, "_qualibug_authority_wrapper", False):
     _authority_asset_transition_rows._qualibug_authority_wrapper = True
     _impl._asset_transition_rows = _authority_asset_transition_rows
@@ -115,6 +173,9 @@ if not getattr(_impl._all_fact_rows, "_qualibug_authority_wrapper", False):
 if not getattr(_impl._recall_supporting_facts, "_qualibug_authority_wrapper", False):
     _authority_recall_supporting_facts._qualibug_authority_wrapper = True
     _impl._recall_supporting_facts = _authority_recall_supporting_facts
+if not getattr(_impl._recall_candidate_interfaces, "_qualibug_authority_wrapper", False):
+    _authority_recall_candidate_interfaces._qualibug_authority_wrapper = True
+    _impl._recall_candidate_interfaces = _authority_recall_candidate_interfaces
 
 
 def _dicts(value: Any) -> list[dict[str, Any]]:
@@ -361,6 +422,7 @@ def _candidate_paged_enrichment(governed_asset: dict[str, Any], *, client: Any |
         "source_interface_count": len(interfaces),
         "window_interface_counts": [len(chunk) for chunk in chunks],
         "candidate_budget_skipped_count": 0,
+        "candidate_window_fill_enabled": True,
         "reason_code": "SOURCE_INTERFACES_PAGED_INSTEAD_OF_TOP_CANDIDATE_TRUNCATION",
     }
     merged_receipt["receipt_fingerprint"] = _impl._fingerprint(merged_receipt)
