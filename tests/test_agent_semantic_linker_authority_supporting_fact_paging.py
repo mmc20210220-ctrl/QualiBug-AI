@@ -121,8 +121,13 @@ def test_supporting_fact_recall_pages_past_the_20_fact_window() -> None:
         "window_fact_counts": [20, 1],
         "unconsumed_tail_fact_count": 0,
         "fact_budget_skipped_count": 0,
-        "unresolved_rule_counts_after_window": [1, 0],
-        "reason_code": "SOURCE_SUPPORTING_FACTS_PAGED_UNTIL_RULE_CLOSURE",
+        # The rule closes only when MAX_LINKS_PER_RULE links accumulate; one
+        # link leaves it unresolved after both windows, so fact exhaustion is
+        # what terminates the paging loop.
+        "unresolved_rule_counts_after_window": [1, 1],
+        "relationship_closure_rule_counts_after_window": [1, 1],
+        "zero_score_fact_fill_enabled": True,
+        "reason_code": "SOURCE_SUPPORTING_FACTS_PAGED_UNTIL_RULE_LINK_CLOSURE_OR_FACT_EXHAUSTION",
     }
     assert client.rule_calls == 2
     assert client.fact_batch_sizes == [20, 1]

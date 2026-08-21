@@ -1,5 +1,12 @@
 """
-QualiBug Full Discovery Sweep — adapted from Loop Library #010
+[DEPRECATED] QualiBug Full Discovery Sweep -- adapted from Loop Library #010
+Status: ZOMBIE MODULE -- 0 active cross-references in the mainline.
+  Its DB verification dependency (ai_test_asset_center.db_verifier) was
+  removed during dead-code cleanup, so DiscoverySweep cannot run.
+Roadmap: reuse the Loop Library six-step feedback pattern inside the unified
+  mainline (python -m ai_test_asset_center scan ...) instead of reviving this
+  side-path CLI.
+See DEPRECATED.md for architecture decisions.
 
 六步循环:
   Observe → Choose → Act → Verify → Record → Repeat/Stop
@@ -20,7 +27,6 @@ from typing import Any
 
 from .discovery_engine import AutonomousDiscoveryEngine, DiscoveryFinding
 from .target_endpoint import resolve_target_base_url
-from .db_verifier import DBVerifier
 
 # ── 心跳 (供 Loop Watchdog 读取) ──────────────────────────
 DEFAULT_PROJECT_ID = os.environ.get("QUALIBUG_DEFAULT_PROJECT_ID", "default_project")
@@ -127,6 +133,14 @@ class DiscoverySweep:
         self.api = _read_optional_text(api_path)
         self.base_url = resolve_target_base_url(base_url)
         self.engine = AutonomousDiscoveryEngine(base_url=self.base_url, project_id=self.project_id)
+        try:
+            from .db_verifier import DBVerifier  # noqa: F401  # [DEPRECATED] see DEPRECATED.md
+        except ImportError as exc:
+            raise RuntimeError(
+                "DiscoverySweep is deprecated: ai_test_asset_center.db_verifier "
+                "was removed. Use the unified mainline instead: "
+                "python -m ai_test_asset_center scan --project <project> ..."
+            ) from exc
         self.db = DBVerifier(project_id=self.project_id)
         self.rounds: list[SweepRound] = []
 

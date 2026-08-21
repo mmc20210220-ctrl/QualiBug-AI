@@ -114,6 +114,7 @@ def test_interface_recall_pages_past_the_12_candidate_window() -> None:
         "source_interface_count": 13,
         "window_interface_counts": [12, 1],
         "candidate_budget_skipped_count": 0,
+        "candidate_window_fill_enabled": True,
         "reason_code": "SOURCE_INTERFACES_PAGED_INSTEAD_OF_TOP_CANDIDATE_TRUNCATION",
     }
     assert client.rule_calls == 2

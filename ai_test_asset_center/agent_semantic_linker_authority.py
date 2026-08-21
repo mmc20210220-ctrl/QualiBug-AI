@@ -651,6 +651,12 @@ def _relationship_paged_enrichment(governed_asset: dict[str, Any], *, client: An
         "initial_omitted_rule_count": sum(int(row.get("initial_omitted_rule_count") or 0) for row in omitted_recovery_rows),
         "recovered_rule_assessment_count": sum(int(row.get("recovered_rule_assessment_count") or 0) for row in omitted_recovery_rows),
         "remaining_omitted_rule_count": sum(int(row.get("remaining_omitted_rule_count") or 0) for row in omitted_recovery_rows),
+        "recovered_rule_ids": sorted({
+            str(rule_id).strip()
+            for row in omitted_recovery_rows
+            for rule_id in (row.get("recovered_rule_ids") or [])
+            if str(rule_id).strip()
+        }),
         "reason_code": "PROVIDER_OMITTED_RULE_REASSESSED_IN_TARGETED_UNIT",
     }
     omitted_transition_recovery_rows = [receipt.get("omitted_transition_recovery") for receipt in receipts if isinstance(receipt.get("omitted_transition_recovery"), dict)]
@@ -660,6 +666,12 @@ def _relationship_paged_enrichment(governed_asset: dict[str, Any], *, client: An
         "initial_omitted_transition_count": sum(int(row.get("initial_omitted_transition_count") or 0) for row in omitted_transition_recovery_rows),
         "recovered_transition_assessment_count": sum(int(row.get("recovered_transition_assessment_count") or 0) for row in omitted_transition_recovery_rows),
         "remaining_omitted_transition_count": sum(int(row.get("remaining_omitted_transition_count") or 0) for row in omitted_transition_recovery_rows),
+        "recovered_transition_ids": sorted({
+            str(transition_id).strip()
+            for row in omitted_transition_recovery_rows
+            for transition_id in (row.get("recovered_transition_ids") or [])
+            if str(transition_id).strip()
+        }),
         "reason_code": "PROVIDER_OMITTED_TRANSITION_REASSESSED_IN_TARGETED_UNIT",
     }
     merged_receipt["recovered_low_confidence_count"] = int(merged_receipt["confidence_recovery"]["recovered_low_confidence_count"])

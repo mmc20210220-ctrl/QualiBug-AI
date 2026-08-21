@@ -40,7 +40,7 @@ Linking is a three-tier pipeline, all three tiers deterministic except tier 2:
 * Tier 3 - deterministic contract validation: every model output (fresh or
   cached) passes the same exact-identity/evidence/confidence validation used
   before. A model link to an interface that was not in the rule's candidate
-  shortlist is receipted as ``NON_CANDIDATE_INTERFACE`` and rejected; invented
+  shortlist is receipted as ``CANDIDATE_RECALL_MISS`` and rejected; invented
   identities stay rejected as ``UNKNOWN_INTERFACE_ID``.
 
 Content-addressed cache
@@ -1984,7 +1984,7 @@ def enrich_knowledge_asset_with_agent_relationships(
                     assessment_index,
                     relationship_index,
                     raw,
-                    "NON_CANDIDATE_INTERFACE",
+                    "CANDIDATE_RECALL_MISS",
                 )
                 continue
             try:

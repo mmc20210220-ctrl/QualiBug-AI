@@ -729,7 +729,7 @@ def test_non_candidate_interface_is_rejected_visibly() -> None:
 
     assert enriched["relationships"] == []
     assert receipt["rejected_non_candidate_count"] == 1
-    assert receipt["rejections"][0]["reason_code"] == "NON_CANDIDATE_INTERFACE"
+    assert receipt["rejections"][0]["reason_code"] == "CANDIDATE_RECALL_MISS"
     assert receipt["status"] == "VERIFIED_WITH_REJECTIONS"
 
 

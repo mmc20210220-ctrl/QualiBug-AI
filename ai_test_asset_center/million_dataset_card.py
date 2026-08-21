@@ -1,11 +1,18 @@
+"""
+[DEPRECATED] Million Dataset Card generator (Phase13)
+Status: ZOMBIE MODULE -- 0 active cross-references in the mainline.
+  Its dependency enterprise_bug_factory.tools.generate_million_dataset was
+  removed from the repository, so dataset cards cannot be built.
+Roadmap: fold dataset-card generation back into enterprise_bug_factory if the
+  million-bug dataset tooling is revived; otherwise leave deprecated.
+See DEPRECATED.md for architecture decisions.
+"""
 from __future__ import annotations
 
 import argparse
 import json
 from pathlib import Path
 from typing import Any
-
-from enterprise_bug_factory.tools.generate_million_dataset import build_dataset_card, build_dataset_card_html
 
 DEFAULT_INDEX = Path("enterprise_bug_factory/bug_sets/million_bug_index.json")
 DEFAULT_OUT = Path("benchmark_outputs/million_dataset")
@@ -16,6 +23,16 @@ def read_json(path: Path) -> dict[str, Any]:
 
 
 def write_dataset_card(index_path: Path = DEFAULT_INDEX, out_dir: Path = DEFAULT_OUT) -> dict[str, Any]:
+    try:
+        from enterprise_bug_factory.tools.generate_million_dataset import (  # [DEPRECATED] see DEPRECATED.md
+            build_dataset_card,
+            build_dataset_card_html,
+        )
+    except ImportError as exc:
+        raise RuntimeError(
+            "million_dataset_card is deprecated: "
+            "enterprise_bug_factory.tools.generate_million_dataset was removed."
+        ) from exc
     index = read_json(index_path)
     out_dir.mkdir(parents=True, exist_ok=True)
     card = build_dataset_card(index)
