@@ -147,7 +147,9 @@ def test_http_failure_recorded():
     assert o["kind"] == "chat"
     assert o["success"] is False
     assert o["http_status"] == 429
-    assert o["failure_reason"] == "http_error"
+    # 429 有专属分类（QB-L002/rate_limit），与通用 http_error 区分——
+    # 客户端契约如此，测试断言跟上而非倒退。
+    assert o["failure_reason"] == "rate_limit"
     assert o["failure_code"] == "QB-L002"
     assert o["latency_ms"] >= 0
 
