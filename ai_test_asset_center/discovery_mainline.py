@@ -579,6 +579,19 @@ def run_discovery_mainline(
     obligations_pack = _plan_value(plan, "obligations")
     if isinstance(obligations_pack, dict) and obligations_pack:
         result.setdefault("obligations", _public_planning_pack(obligations_pack))
+    # ── Make It Observable：规划期回执显影（④）───────────────────────────
+    # plan bundle 的关键回执必须进入最终 scan_result，否则规划期的成本与
+    # 阻塞归因（linker 预算、理解权威、绑定闭合）在工件层不可追溯——
+    # 20260821 审计中 linker 烧掉 23M tokens 却在结果里零痕迹即此缺口。
+    for receipt_field in (
+        "agent_semantic_link_receipt",
+        "comprehension_authority_receipt",
+        "binding_closure_receipt",
+        "space_exploration_receipt",
+    ):
+        receipt_payload = _plan_value(plan, receipt_field)
+        if isinstance(receipt_payload, dict) and receipt_payload:
+            result.setdefault(receipt_field, receipt_payload)
     result["mainline_runner_receipt"] = receipt
     known_set = _existing_findings_fingerprints(inputs.existing_findings)
     if known_set:
