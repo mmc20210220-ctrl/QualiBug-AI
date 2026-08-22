@@ -179,6 +179,8 @@ from .source_ui_contract_binding import bind_source_ui_contracts
 from .source_ui_contract_source_guard import install_source_ui_contract_source_guard
 from .source_ui_obligation_binding import install_source_ui_obligation_binding
 from .source_ui_obligation_compat import install_source_ui_family_vector_compat
+from .formal_compatibility_surface import install_formal_compatibility_surface
+from .source_compatibility_obligation_binding import install_source_compatibility_obligation_binding
 
 _INSTALL_MARKER = "_qualibug_semantic_operation_binding_installed"
 _ORIGINAL_MARKER = "_qualibug_original_behavior_ir_builder"
@@ -240,6 +242,12 @@ install_formal_performance_attribution_guard()
 # were structurally unreachable even when a source stability contract existed.
 # Idempotent registration only; activation still requires the source contract.
 install_formal_stability_surface()
+# Cross-surface compatibility (dev/staging/prod or version drift): registers the
+# compatibility family, a read-only two-surface diff observer, the
+# compatibility_response_diff assertion kind and the compatibility_matrix
+# protocol. Idempotent registration only; activation requires the target to
+# declare at least two comparison surfaces.
+install_formal_compatibility_surface()
 # Interface-presence (documentation/implementation drift on declared reads):
 # registers the interface_contract family, interface_presence assertion kind,
 # presence observer and protocol so a framework-level "route not registered" 404
@@ -260,6 +268,7 @@ install_message_chain_obligation_binding()
 install_source_performance_obligation_binding()
 install_source_stability_obligation_binding()
 install_source_interface_presence_obligation_binding()
+install_source_compatibility_obligation_binding()
 # Parameter-bound performance contracts (REPORT-008 class): the parameter-scale
 # surface registers a second protocol on the performance_latency family (one
 # observer, one assertion kind) and the obligation wrapper compiles
