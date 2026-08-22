@@ -635,7 +635,7 @@ def save_document_contract_artifacts(project_id: str, root: Path, compiled: dict
 # These terms are not injected bug patterns.  They define a reusable MES
 # vocabulary used only to select the relevant requirement section before a
 # generic numeric/reference/order mutation is generated.
-_MANUFACTURING_SECTION_TERMS: dict[str, tuple[str, ...]] = {
+_INDUSTRY_SECTION_TERMS: dict[str, tuple[str, ...]] = {
     "/master/materials": ("物料", "material"),
     "/master/boms": ("bom", "物料清单"),
     "/master/routings": ("工艺路线", "routing", "工序"),
@@ -659,10 +659,10 @@ def _prd_sections(text: str) -> list[tuple[str, str]]:
     return rows
 
 
-def _manufacturing_context(prd_text: str, path: str) -> str:
+def _industry_context(prd_text: str, path: str) -> str:
     target = str(path or "")
     terms: tuple[str, ...] = ()
-    for prefix, values in _MANUFACTURING_SECTION_TERMS.items():
+    for prefix, values in _INDUSTRY_SECTION_TERMS.items():
         if prefix in target:
             terms = values
             break
@@ -707,8 +707,8 @@ def _set_dotted(payload: dict[str, Any], dotted: str, value: Any) -> dict[str, A
     return body
 
 
-def _append_manufacturing_contracts(compiled: dict[str, Any], prd_text: str) -> None:
-    """Add generic MES mutations where public requirements supply the oracle."""
+def _append_industry_contracts(compiled: dict[str, Any], prd_text: str) -> None:
+    """Add generic industry-mutation contracts where public requirements supply the oracle."""
     existing = {str(row.get("contract_id")) for row in compiled.get("contracts") or []}
     additions: list[dict[str, Any]] = []
     endpoints = _endpoint_sections(compiled.get("_api_text", ""))
@@ -716,7 +716,7 @@ def _append_manufacturing_contracts(compiled: dict[str, Any], prd_text: str) -> 
         if endpoint["method"] not in _WRITE_METHODS or not endpoint.get("sample_body"):
             continue
         path = str(endpoint["path"])
-        sector = _manufacturing_context(prd_text, path)
+        sector = _industry_context(prd_text, path)
         rule_text = f"{endpoint.get('section_text','')}\n{sector}"
         body = endpoint.get("sample_body") or {}
         leaves = _walk_leaf_paths(body)
@@ -802,7 +802,7 @@ def _append_manufacturing_contracts(compiled: dict[str, Any], prd_text: str) -> 
                 existing.add(cid)
 
     compiled["contracts"].extend(additions)
-    compiled["manufacturing_extension"] = {"added_contract_count": len(additions), "industry_vocabulary": "manufacturing_document_terms_v1"}
+    compiled["industry_extension"] = {"added_contract_count": len(additions), "industry_vocabulary": "document_terms_v1"}
 
 
 # Wrap the generic compiler so existing callers receive the MES extension only
@@ -813,7 +813,7 @@ def compile_document_contracts(prd_text: str, api_text: str) -> dict[str, Any]: 
     result = _compile_document_contracts_generic(prd_text, api_text)
     result["_api_text"] = api_text
     if re.search(r"(?:BOM|生产订单|仓储|库存|工序|质量管理|MES)", f"{prd_text}\n{api_text}", re.I):
-        _append_manufacturing_contracts(result, prd_text)
+        _append_industry_contracts(result, prd_text)
     result.pop("_api_text", None)
     result["contract_count"] = len(result.get("contracts") or [])
     return result

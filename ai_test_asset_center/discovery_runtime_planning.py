@@ -70,7 +70,7 @@ def _text(value: Any) -> str:
     return str(value or "").strip()
 
 
-# Well-known service port mapping for the manufacturing SUT. This maps the
+# Well-known service port mapping for a single-service scan target. This maps the
 # scan target's approved_base_url port to the service deployment name the IR
 # operations carry (scm_trade_service.json → scm_trade). Generic contract
 # identity, not customer business data. Unknown ports yield "" (no filter).
