@@ -579,8 +579,8 @@ def run_discovery_mainline(
     obligations_pack = _plan_value(plan, "obligations")
     if isinstance(obligations_pack, dict) and obligations_pack:
         result.setdefault("obligations", _public_planning_pack(obligations_pack))
-        result["mainline_runner_receipt"] = receipt
-        known_set = _existing_findings_fingerprints(inputs.existing_findings)
-        if known_set:
-            _mark_prior_known(result, known_set)
-        return result
+    result["mainline_runner_receipt"] = receipt
+    known_set = _existing_findings_fingerprints(inputs.existing_findings)
+    if known_set:
+        _mark_prior_known(result, known_set)
+    return result
