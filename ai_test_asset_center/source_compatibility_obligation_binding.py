@@ -64,10 +64,27 @@ def _source_refs(*rows: dict[str, Any]) -> list[dict[str, Any]]:
 
 def _compatibility_scope(behavior_ir: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Return (surfaces, read_only_operations) for compatibility, or ([], []) when not applicable."""
-    surfaces = [
+    declared = [
         row for row in _list(_dict(behavior_ir).get("compatibility_surfaces"))
         if isinstance(row, dict) and _text(_dict(row).get("base_url"))
     ]
+    if len(declared) >= 2:
+        surfaces = declared
+    else:
+        # Auto-derive ONLY from the target's own OpenAPI-declared servers. This
+        # is extraction from the source contract, never hostname inference, and
+        # fires only when >=2 real servers exist — a single-server target stays
+        # an honest NOT_REQUESTED gap (no fabricated second surface).
+        surfaces = []
+        seen: set[str] = set()
+        for server in _list(_dict(behavior_ir).get("openapi_servers")):
+            if not isinstance(server, dict):
+                continue
+            base_url = _text(server.get("base_url"))
+            if not base_url or base_url in seen:
+                continue
+            seen.add(base_url)
+            surfaces.append({"base_url": base_url, "source_kind": "openapi"})
     if len(surfaces) < 2:
         return surfaces, []
     operations = [

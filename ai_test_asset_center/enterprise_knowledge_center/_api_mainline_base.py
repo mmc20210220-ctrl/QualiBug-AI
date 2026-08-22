@@ -1064,6 +1064,11 @@ def build_enterprise_business_knowledge_asset(
         for row in parsed.get("message_chain_contracts") or []
         if isinstance(row, dict)
     ]
+    openapi_servers = [
+        row for _, parsed in parsed_rows
+        for row in parsed.get("servers") or []
+        if isinstance(row, dict) and str(row.get("base_url") or "").strip()
+    ]
     known_tables = {str(row.get("table_id") or "") for row in tables}
     for row in field_dictionary:
         table_id = str(row.get("table_id") or "")
@@ -1365,6 +1370,7 @@ def build_enterprise_business_knowledge_asset(
         "data_tables": tables,
         "ui_design_specs": ui_specs,
         "message_chain_contracts": message_chain_contracts,
+        "openapi_servers": openapi_servers,
         "rule_library": rules,
         "permission_matrix": permissions,
         "data_dependencies": dependencies,

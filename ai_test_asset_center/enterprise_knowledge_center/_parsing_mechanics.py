@@ -398,6 +398,33 @@ def _openapi_operations(openapi: dict[str, Any], source_id: str = "") -> list[di
     return rows
 
 
+def _openapi_servers(openapi: Any, source_id: str = "") -> list[dict[str, Any]]:
+    """Extract declared servers (comparison surfaces) from an OpenAPI document.
+
+    A server entry is the target's own contract declaring a deployment surface.
+    Carrying these into the IR lets the compatibility family auto-build
+    cross-surface probes WITHOUT operator input and WITHOUT inferring any
+    surface from a hostname. Entries without a usable ``url`` are dropped.
+    """
+    servers = openapi.get("servers") if isinstance(openapi, dict) else None
+    if not isinstance(servers, list):
+        return []
+    rows: list[dict[str, Any]] = []
+    for server in servers:
+        if not isinstance(server, dict):
+            continue
+        url = str(server.get("url") or "").strip()
+        if not url:
+            continue
+        rows.append({
+            "source_id": source_id,
+            "source_kind": "openapi",
+            "base_url": url,
+            "description": str(server.get("description") or "").strip(),
+        })
+    return rows
+
+
 def _postman_operations(payload: Any, source_id: str = "") -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     def walk(items: Any) -> None:
@@ -2948,6 +2975,7 @@ def _parse_source(blob: bytes, filename: str, source_type: str, source_id: str) 
         "payload": payload,
         "openapi": openapi,
         "operations": operations,
+        "servers": _openapi_servers(openapi, source_id),
         "tables": tables,
         "field_dictionary": field_dictionary,
         "ui_specs": ui_specs,

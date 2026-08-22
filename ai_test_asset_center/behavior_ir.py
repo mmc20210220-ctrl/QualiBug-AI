@@ -424,6 +424,15 @@ def build_behavior_ir_from_knowledge_asset(
         api_operations=api_operations,
     )
     model["model_id"] = _base._core._content_addressed_id(model)
+    # Surface the target's own OpenAPI-declared servers on the IR so the
+    # compatibility family can auto-build cross-surface comparison obligations
+    # (extraction, never inference, never a fabricated second surface). Added
+    # after model_id so content addressing is unaffected.
+    if isinstance(asset, dict):
+        model["openapi_servers"] = [
+            row for row in (asset.get("openapi_servers") or [])
+            if isinstance(row, dict) and str(row.get("base_url") or "").strip()
+        ]
     return model
 
 _base.build_behavior_ir_from_knowledge_asset = build_behavior_ir_from_knowledge_asset
