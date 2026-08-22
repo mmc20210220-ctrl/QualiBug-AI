@@ -662,6 +662,32 @@ def build_discovery_plan(
         asset, agent_semantic_link_receipt = (
             enrich_knowledge_asset_with_agent_relationships(asset)
         )
+        # ── ⑤下半场：富集结果立即原子落盘 ─────────────────────────────
+        # 否则后续任何崩溃/降级都会让 Tier-0 指纹标记随内存丢失，下一轮
+        # 被迫为同一批规则重复支付全价链接成本（20260823 审计实证：资产
+        # 停在 08-17，多轮链接成果从未落袋）。失败可见但不阻断规划。
+        try:
+            from .enterprise_knowledge_center._utils import (
+                _paths as _ekc_asset_paths,
+            )
+            from .project_runtime_primitives import write_json_artifact
+
+            _enriched_asset_target = _ekc_asset_paths(
+                inputs.project, inputs.root
+            )["asset"]
+            write_json_artifact(_enriched_asset_target, asset)
+            _planning_logger.warning(
+                "enriched_asset_persisted project=%s path=%s",
+                inputs.project,
+                _enriched_asset_target,
+            )
+        except Exception as _enrich_persist_exc:
+            _planning_logger.warning(
+                "enriched_asset_persist_failed project=%s error_type=%s error=%s",
+                inputs.project,
+                type(_enrich_persist_exc).__name__,
+                str(_enrich_persist_exc)[:200],
+            )
     operations = _api_operations(
         inputs.api_spec_text,
         submitted_source_text=_text(
