@@ -26,6 +26,7 @@ from ai_test_asset_center.safe_experiment_prioritizer import (
 )
 from ai_test_asset_center import (
     _experiment_batch_executor_single_finding_mechanics as batch_core,
+    _experiment_batch_executor_single_finding_mechanics_base as batch_exec_body,
 )
 from ai_test_asset_center.small_scale_validation_gate import HARD_BUDGET_CAP
 
@@ -186,11 +187,13 @@ class TestOperationFairPrioritization:
 class TestBatchExecutorWiring:
     def test_executor_uses_operation_coverage_floor(self):
         """The batch executor must wire the floor into its budget resolution."""
-        src = inspect.getsource(batch_core.execute_selected_experiments)
+        # f15a6eab 拆分后 mechanics 符号是 topology 委托壳；接线检查必须
+        # 指向真实函数体所在实现模块，否则守卫永远打在壳上。
+        src = inspect.getsource(batch_exec_body.execute_selected_experiments)
         assert "_operation_coverage_budget(" in src
 
     def test_hard_cap_still_present(self):
         """The executor must consume the budget SSOT, not a stale literal."""
-        src = inspect.getsource(batch_core.execute_selected_experiments)
+        src = inspect.getsource(batch_exec_body.execute_selected_experiments)
         assert "HARD_BUDGET_CAP" in src
         assert "min(_budget, 200)" not in src
