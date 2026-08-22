@@ -14,6 +14,7 @@ import {
 } from '../api/upload-fixtures';
 import { runV12ScanFromRunCenter } from '../api/run-center';
 import { RunPreflightDecisionSnapshot } from '../components/run/RunPreflightDecisionSnapshot';
+import { ContinuousGuardPanel } from '../components/run/ContinuousGuardPanel';
 import {
   RunUploadFixtureSelector,
   type UploadScenarioRunState,
@@ -360,6 +361,8 @@ export function EnterpriseCampaigns() {
         onRefresh={() => void refreshContext()}
         onReview={reviewRunBlocker}
       />
+
+      <ContinuousGuardPanel project={project} />
 
       {!loadingPreflight && !preflightError && !preflightReady && blockers.length > 0 && (
         <section className="card mb-4 status-card status-warning" id="run-blocker-details">
