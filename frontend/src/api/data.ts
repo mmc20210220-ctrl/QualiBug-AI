@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useReducer, useState } from 'react';
 import { getFindings, getKnowledgeAsset, getProjects, type CustomerWorkspace } from './client';
-import type { CommercialAssets, Finding, KnowledgeSource, TestTaskBoard, TestTaskSlice } from '../types';
+import type { CommercialAssets, Finding, KnowledgeSource, TestTaskSlice } from '../types';
 import { toWorkspaceOptions } from '../lib/customer';
 import { asArray, asNum, asRecord, asString } from '../lib/value-guards';
 
@@ -43,13 +43,107 @@ function findingFrom(value: unknown): Finding | null { const record = asRecord(v
 
 export function emitScanCompleted(project: string): void { if (!project || typeof window === 'undefined') return; window.dispatchEvent(new CustomEvent<ScanCompletedDetail>(SCAN_COMPLETED_EVENT, { detail: { project } })); }
 
-export function useScanCompletedRefresh(project: string, refresh: () => void): void {
+// ── 共享 command-center 数据源 ──
+// 同一项目的全部消费者（Topbar/Sidebar/Dashboard/Findings/Release/Settings…）
+// 订阅同一份 command-center 快照：每项目仅一个轮询循环、一次网络往返，
+// 所有视图从同一状态派生，消除多面板各自轮询造成的不一致窗口与重复负载。
+
+type PipelineSnapshot = { raw: JsonRecord | null; error: string; loading: boolean };
+type PipelineEntry = PipelineSnapshot & {
+  fetching: boolean;
+  timer: number | null;
+  intervalMs: number;
+  requests: Map<() => void, number>;
+};
+
+const MIN_PIPELINE_INTERVAL_MS = 5_000;
+const pipelineEntries = new Map<string, PipelineEntry>();
+
+function effectiveIntervalMs(entry: PipelineEntry): number {
+  let min = Number.POSITIVE_INFINITY;
+  entry.requests.forEach((ms) => { if (ms < min) min = ms; });
+  return Number.isFinite(min) ? Math.max(MIN_PIPELINE_INTERVAL_MS, min) : 30_000;
+}
+
+function schedulePipelineLoop(project: string, entry: PipelineEntry): void {
+  const nextInterval = effectiveIntervalMs(entry);
+  if (!entry.requests.size) {
+    if (entry.timer !== null) { window.clearInterval(entry.timer); entry.timer = null; }
+    entry.intervalMs = nextInterval;
+    return;
+  }
+  if (entry.timer !== null && entry.intervalMs === nextInterval) return;
+  if (entry.timer !== null) window.clearInterval(entry.timer);
+  entry.intervalMs = nextInterval;
+  entry.timer = window.setInterval(() => { void fetchPipeline(project, entry); }, entry.intervalMs);
+}
+
+async function fetchPipeline(project: string, entry: PipelineEntry): Promise<void> {
+  if (entry.fetching || !project) return;
+  entry.fetching = true;
+  try {
+    const raw = await getFindings(project);
+    // 失败时置空快照：陈旧成功数据不能在故障期间冒充当前结论。
+    entry.raw = asRecord(raw);
+    entry.error = '';
+  } catch (caught: unknown) {
+    entry.raw = null;
+    entry.error = caught instanceof Error ? caught.message : '项目状态加载失败';
+  } finally {
+    entry.fetching = false;
+    entry.loading = false;
+    entry.requests.forEach((_, notify) => notify());
+  }
+}
+
+function subscribePipeline(project: string, requestedIntervalMs: number, notify: () => void): () => void {
+  let entry = pipelineEntries.get(project);
+  if (!entry) {
+    entry = { raw: null, error: '', loading: true, fetching: false, timer: null, intervalMs: 30_000, requests: new Map() };
+    pipelineEntries.set(project, entry);
+  }
+  entry.requests.set(notify, requestedIntervalMs);
+  schedulePipelineLoop(project, entry);
+  void fetchPipeline(project, entry);
+  return () => {
+    entry.requests.delete(notify);
+    schedulePipelineLoop(project, entry);
+  };
+}
+
+export function useScanCompletedRefresh(project: string): void {
   useEffect(() => {
     if (!project || typeof window === 'undefined') return;
-    const handler = (event: Event) => { const detail = (event as CustomEvent<ScanCompletedDetail>).detail; if (detail?.project === project) refresh(); };
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent<ScanCompletedDetail>).detail;
+      if (detail?.project !== project) return;
+      const entry = pipelineEntries.get(project);
+      if (entry) void fetchPipeline(project, entry);
+    };
     window.addEventListener(SCAN_COMPLETED_EVENT, handler);
     return () => window.removeEventListener(SCAN_COMPLETED_EVENT, handler);
-  }, [project, refresh]);
+  }, [project]);
+}
+
+/** 共享 command-center 快照订阅：外部派生视图（如 onboarding 进度）复用同一份数据。 */
+export function usePipelineSnapshot(project: string, intervalMs = 30_000): PipelineSnapshot & { refetch: () => void } {
+  const [, forceUpdate] = useReducer((count: number) => count + 1, 0);
+  useEffect(() => {
+    if (!project) return undefined;
+    return subscribePipeline(project, intervalMs, forceUpdate);
+  }, [project, intervalMs, forceUpdate]);
+  const refetch = useCallback(() => {
+    if (!project) return;
+    const current = pipelineEntries.get(project);
+    if (current) void fetchPipeline(project, current);
+  }, [project]);
+  const entry = project ? pipelineEntries.get(project) : undefined;
+  return {
+    raw: project ? entry?.raw ?? null : null,
+    error: project ? entry?.error ?? '' : '',
+    loading: Boolean(project) && !entry?.raw && (entry?.loading ?? true),
+    refetch,
+  };
 }
 
 function getResolvedProjectId(raw: unknown): string { const record = asRecord(raw); return (asString(record.resolvedProjectId) || asString(record.projectId)).trim(); }
@@ -125,7 +219,8 @@ export function getCommercialAssets(raw: unknown): CommercialAssets | null {
   };
 }
 function getCompletedAt(raw: unknown): string { const record = asRecord(raw); return (asString(record.updatedAt) || asString(record.updated_at)).trim(); }
-function hasMaterializedFindingData(raw: unknown): boolean { const record = asRecord(raw); const executive = asRecord(record.executive_summary); const contract = asRecord(record.data_contract); return getReportFindings(raw).length > 0 || firstFiniteNumber(contract.materialized_risk_count, executive.materialized_findings, executive.total_findings) > 0 || asNum(field(record.runtime_verification, 'confirmed')) > 0 || asNum(field(record.db_verification, 'confirmed')) > 0; }
+/** 后端已物化真实检测数据的判定：供进度线等外部派生复用，不发明完成条件。 */
+export function hasMaterializedFindingData(raw: unknown): boolean { const record = asRecord(raw); const executive = asRecord(record.executive_summary); const contract = asRecord(record.data_contract); return getReportFindings(raw).length > 0 || firstFiniteNumber(contract.materialized_risk_count, executive.materialized_findings, executive.total_findings) > 0 || asNum(field(record.runtime_verification, 'confirmed')) > 0 || asNum(field(record.db_verification, 'confirmed')) > 0; }
 function campaignFrom(raw: unknown): JsonRecord {
   const record = asRecord(raw);
   const continuous = asRecord(record.continuous_discovery_campaign || record.continuousDiscoveryCampaign);
@@ -256,25 +351,35 @@ export function useWorkspaceDirectory() {
 }
 
 export function useProjectSummary(project: string) {
+  const { raw, error, loading } = usePipelineSnapshot(project, 15_000);
+  useScanCompletedRefresh(project);
   const empty = useCallback((): ProjectSummary => ({ resolvedProjectId: '', projectName: project || '未选择客户', findingsCount: 0, currentDefectCount: 0, clueCount: 0, p0Count: 0 }), [project]);
-  const [summary, setSummary] = useState<ProjectSummary>(empty); const [loading, setLoading] = useState(true); const [error, setError] = useState('');
-  const load = useCallback(() => { if (!project) { setSummary(empty()); setLoading(false); setError(''); return; } setLoading(true); getFindings(project).then((raw) => { setSummary(buildProjectSummary(raw, project)); setError(''); }).catch((caught: unknown) => { setSummary(empty()); setError(caught instanceof Error ? caught.message : '项目状态读取失败'); }).finally(() => setLoading(false)); }, [empty, project]);
-  useEffect(() => { load(); }, [load]); useScanCompletedRefresh(project, load);
+  const summary = raw ? buildProjectSummary(raw, project) : empty();
   return { ...summary, hasResolvedProject: Boolean(summary.resolvedProjectId || project), loading, error };
 }
 
 export function usePipelineData(project: string) {
-  const [data, setData] = useState<unknown>(null); const [loading, setLoading] = useState(true); const [error, setError] = useState('');
-  const load = useCallback(() => { setLoading(true); setError(''); setData(null); getFindings(project).then((raw) => setData(normalizeCampaignSnapshot(raw))).catch((caught: unknown) => setError(caught instanceof Error ? caught.message : '加载失败')).finally(() => setLoading(false)); }, [project]);
-  useEffect(() => { load(); }, [load]); useScanCompletedRefresh(project, load);
-  return { data, loading, error, refetch: load };
+  const { raw, error, loading, refetch } = usePipelineSnapshot(project);
+  useScanCompletedRefresh(project);
+  return { data: raw ? normalizeCampaignSnapshot(raw) : null, loading, error, refetch };
 }
 
 export function useFindingsData(project: string) {
-  const [findings, setFindings] = useState<Finding[]>([]); const [clues, setClues] = useState<Finding[]>([]); const [rejected, setRejected] = useState<Finding[]>([]); const [commercialAssets, setCommercialAssets] = useState<CommercialAssets | null>(null); const [scanMeta, setScanMeta] = useState<JsonRecord>({}); const [obligationProjection, setObligationProjection] = useState<JsonRecord>({}); const [loading, setLoading] = useState(true); const [error, setError] = useState('');
-  const load = useCallback(() => { setLoading(true); setError(''); getFindings(project).then((raw) => { const record = asRecord(raw); const meta = asRecord(record.scan_meta); setFindings(getReportFindings(raw)); setClues(getReportClues(raw)); setRejected(getReportRejected(raw)); setCommercialAssets(getCommercialAssets(raw)); setScanMeta(meta); setObligationProjection(asRecord(record.obligation_execution_projection || meta.obligation_execution_projection)); }).catch((caught: unknown) => { setFindings([]); setClues([]); setRejected([]); setCommercialAssets(null); setScanMeta({}); setObligationProjection({}); setError(caught instanceof Error ? caught.message : '加载失败'); }).finally(() => setLoading(false)); }, [project]);
-  useEffect(() => { load(); }, [load]); useScanCompletedRefresh(project, load);
-  return { findings, clues, rejected, commercialAssets, scanMeta, obligationProjection, loading, error, refetch: load };
+  const { raw, error, loading, refetch } = usePipelineSnapshot(project, 15_000);
+  useScanCompletedRefresh(project);
+  const record = asRecord(raw);
+  const meta = asRecord(record.scan_meta);
+  return {
+    findings: raw ? getReportFindings(raw) : [],
+    clues: raw ? getReportClues(raw) : [],
+    rejected: raw ? getReportRejected(raw) : [],
+    commercialAssets: raw ? getCommercialAssets(raw) : null,
+    scanMeta: meta,
+    obligationProjection: asRecord(record.obligation_execution_projection || meta.obligation_execution_projection),
+    loading,
+    error,
+    refetch,
+  };
 }
 
 function parseKnowledgeSources(raw: unknown): KnowledgeSource[] {
@@ -308,83 +413,86 @@ export function useKnowledgeData(project: string) {
 }
 
 export function useTestTaskBoard(project: string) {
-  const [board, setBoard] = useState<TestTaskBoard | null>(null);
-  const [obligationProjection, setObligationProjection] = useState<JsonRecord>({});
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-  const load = useCallback(() => {
-    if (!project) { setBoard(null); setObligationProjection({}); setLoading(false); return; }
-    setLoading(true); setError('');
-    getFindings(project).then((raw) => {
-      const record = asRecord(raw);
-      const meta = asRecord(record.scan_meta);
-      setObligationProjection(asRecord(record.obligation_execution_projection || meta.obligation_execution_projection));
-      const boardRaw = asRecord(record.test_task_board);
-      if (!boardRaw || (Object.keys(boardRaw).length === 0)) { setBoard(null); setLoading(false); return; }
-      const ledger = asRecord(boardRaw.ledger);
-      const slices = asArray(boardRaw.slices).map((value) => {
-        const record = asRecord(value);
-        const dims = asArray(record._system_behavior_dimensions).map(asString).filter(Boolean);
-        const surfaces = asArray(record._system_behavior_surface_plan).map(asString).filter(Boolean);
-        const routes = asArray(record._system_behavior_api_routes).map((r) => {
-          const route = asRecord(r);
-          return { method: asString(route.method), path: asString(route.path) };
-        }).filter((r) => r.method && r.path);
-        const assets = asArray(record._system_behavior_required_assets).map(asString).filter(Boolean);
-        return {
-          slice_id: asString(record.slice_id),
-          title: asString(record.title),
-          entity: asString(record.entity),
-          kind: asString(record.kind),
-          status: (asString(record.status) || 'pending') as TestTaskSlice['status'],
-          priority: asNum(record.priority),
-          endpoints: asArray(record.endpoints).map(asString).filter(Boolean),
-          evidence_gaps: asArray(record.evidence_gaps).map(asString).filter(Boolean),
-          _system_behavior_dimensions: dims.length > 0 ? dims : undefined,
-          _system_behavior_surface_plan: surfaces.length > 0 ? surfaces : undefined,
-          _system_behavior_api_routes: routes.length > 0 ? routes : undefined,
-          _system_behavior_required_assets: assets.length > 0 ? assets : undefined,
-          _selection_family: asString(record._selection_family) || undefined,
-          _selection_origin: asString(record._selection_origin) || undefined,
-          _coverage_steering_weight: asNum(record._coverage_steering_weight) || undefined,
-          _learning_steering_weight: asNum(record._learning_steering_weight) || undefined,
-          _historical_boundary_boost: asNum(record._historical_boundary_boost) || undefined,
-          _historical_boundary_match: Object.keys(asRecord(record._historical_boundary_match)).length > 0 ? asRecord(record._historical_boundary_match) : undefined,
-          source_refs: asArray(record.source_refs).map((r) => asRecord(r) as { source_type: string; locator: string; quote: string }),
-          family: asString(record.family) || asString(record._selection_family) || undefined,
-          severity: asString(record.severity) || undefined,
-          source: asString(record.source) || '',
-          target: asString(record.target) || '',
-        } as TestTaskSlice;
-      });
-      const execution = asRecord(boardRaw.execution);
-      setBoard({
-        ledger: {
-          campaign_id: asString(ledger.campaign_id),
-          campaign_status: asString(ledger.campaign_status),
-          attempted_slice_ids: asArray(ledger.attempted_slice_ids).map(asString),
-          confirmed_slice_ids: asArray(ledger.confirmed_slice_ids).map(asString),
-          slice_status: asRecord(ledger.slice_status) as Record<string, TestTaskSlice['status'] & string>,
-          source_snapshot_hash: asString(ledger.source_snapshot_hash),
-        },
-        slices,
-        execution: { production_data_blocked: asNum(execution.production_data_blocked) },
-        evidence_chains_saved: asNum(boardRaw.evidence_chains_saved),
-      });
-    }).catch((caught: unknown) => {
-      setBoard(null); setObligationProjection({}); setError(caught instanceof Error ? caught.message : '加载失败');
-    }).finally(() => setLoading(false));
-  }, [project]);
-  useEffect(() => { load(); }, [load]); useScanCompletedRefresh(project, load);
-  return { board, obligationProjection, loading, error, refetch: load };
+  const { raw, error, loading, refetch } = usePipelineSnapshot(project, 15_000);
+  useScanCompletedRefresh(project);
+  const board = useMemo(() => {
+    if (!raw) return null;
+    const record = asRecord(raw);
+    const boardRaw = asRecord(record.test_task_board);
+    if (!boardRaw || (Object.keys(boardRaw).length === 0)) return null;
+    const ledger = asRecord(boardRaw.ledger);
+    const slices = asArray(boardRaw.slices).map((value) => {
+      const sliceRow = asRecord(value);
+      const dims = asArray(sliceRow._system_behavior_dimensions).map(asString).filter(Boolean);
+      const surfaces = asArray(sliceRow._system_behavior_surface_plan).map(asString).filter(Boolean);
+      const routes = asArray(sliceRow._system_behavior_api_routes).map((r) => {
+        const route = asRecord(r);
+        return { method: asString(route.method), path: asString(route.path) };
+      }).filter((r) => r.method && r.path);
+      const assets = asArray(sliceRow._system_behavior_required_assets).map(asString).filter(Boolean);
+      return {
+        slice_id: asString(sliceRow.slice_id),
+        title: asString(sliceRow.title),
+        entity: asString(sliceRow.entity),
+        kind: asString(sliceRow.kind),
+        status: (asString(sliceRow.status) || 'pending') as TestTaskSlice['status'],
+        priority: asNum(sliceRow.priority),
+        endpoints: asArray(sliceRow.endpoints).map(asString).filter(Boolean),
+        evidence_gaps: asArray(sliceRow.evidence_gaps).map(asString).filter(Boolean),
+        _system_behavior_dimensions: dims.length > 0 ? dims : undefined,
+        _system_behavior_surface_plan: surfaces.length > 0 ? surfaces : undefined,
+        _system_behavior_api_routes: routes.length > 0 ? routes : undefined,
+        _system_behavior_required_assets: assets.length > 0 ? assets : undefined,
+        _selection_family: asString(sliceRow._selection_family) || undefined,
+        _selection_origin: asString(sliceRow._selection_origin) || undefined,
+        _coverage_steering_weight: asNum(sliceRow._coverage_steering_weight) || undefined,
+        _learning_steering_weight: asNum(sliceRow._learning_steering_weight) || undefined,
+        _historical_boundary_boost: asNum(sliceRow._historical_boundary_boost) || undefined,
+        _historical_boundary_match: Object.keys(asRecord(sliceRow._historical_boundary_match)).length > 0 ? asRecord(sliceRow._historical_boundary_match) : undefined,
+        source_refs: asArray(sliceRow.source_refs).map((r) => asRecord(r) as { source_type: string; locator: string; quote: string }),
+        family: asString(sliceRow.family) || asString(sliceRow._selection_family) || undefined,
+        severity: asString(sliceRow.severity) || undefined,
+        source: asString(sliceRow.source) || '',
+        target: asString(sliceRow.target) || '',
+      } as TestTaskSlice;
+    });
+    const execution = asRecord(boardRaw.execution);
+    return {
+      ledger: {
+        campaign_id: asString(ledger.campaign_id),
+        campaign_status: asString(ledger.campaign_status),
+        attempted_slice_ids: asArray(ledger.attempted_slice_ids).map(asString),
+        confirmed_slice_ids: asArray(ledger.confirmed_slice_ids).map(asString),
+        slice_status: asRecord(ledger.slice_status) as Record<string, TestTaskSlice['status'] & string>,
+        source_snapshot_hash: asString(ledger.source_snapshot_hash),
+      },
+      slices,
+      execution: { production_data_blocked: asNum(execution.production_data_blocked) },
+      evidence_chains_saved: asNum(boardRaw.evidence_chains_saved),
+    };
+  }, [raw]);
+  const obligationProjection = useMemo(() => {
+    if (!raw) return {};
+    const record = asRecord(raw);
+    return asRecord(record.obligation_execution_projection || asRecord(record.scan_meta).obligation_execution_projection);
+  }, [raw]);
+  return { board, obligationProjection, loading, error, refetch };
 }
 
 export function useLiveStatus(project: string, intervalMs = 30000) {
-  const [lastScanMinutes, setLastScanMinutes] = useState<number | null>(null); const [scanActive, setScanActive] = useState(false); const [hasMaterializedMetrics, setHasMaterializedMetrics] = useState(false); const [hasResolvedProject, setHasResolvedProject] = useState(false); const [continuousActive, setContinuousActive] = useState(false);
-  const check = useCallback(() => {
-    if (!project) { setLastScanMinutes(null); setScanActive(false); setHasMaterializedMetrics(false); setHasResolvedProject(false); setContinuousActive(false); return; }
-    getFindings(project).then((raw) => { const resolved = getResolvedProjectId(raw); const completedAt = getCompletedAt(raw); const record = asRecord(raw); setLastScanMinutes(completedAt ? Math.round((Date.now() - new Date(completedAt).getTime()) / 60000) : null); setHasResolvedProject(Boolean(resolved || project)); setScanActive(asString(record.status) === 'running' || asString(field(record.live_map, 'status')) === 'running'); setHasMaterializedMetrics(Boolean(resolved || project) && hasMaterializedFindingData(raw)); setContinuousActive(isContinuousDiscoveryActive(raw)); }).catch(() => { setLastScanMinutes(null); setScanActive(false); setHasMaterializedMetrics(false); setHasResolvedProject(false); setContinuousActive(false); });
-  }, [project]);
-  useEffect(() => { check(); const timer = setInterval(check, intervalMs); return () => clearInterval(timer); }, [check, intervalMs]); useScanCompletedRefresh(project, check);
-  return { lastScanMinutes, scanActive, hasMaterializedMetrics, hasResolvedProject, continuousActive };
+  const { raw, error } = usePipelineSnapshot(project, intervalMs);
+  useScanCompletedRefresh(project);
+  if (!project || !raw || error) {
+    return { lastScanMinutes: null, scanActive: false, hasMaterializedMetrics: false, hasResolvedProject: Boolean(project && raw), continuousActive: false };
+  }
+  const resolved = getResolvedProjectId(raw);
+  const completedAt = getCompletedAt(raw);
+  const record = asRecord(raw);
+  return {
+    lastScanMinutes: completedAt ? Math.round((Date.now() - new Date(completedAt).getTime()) / 60000) : null,
+    scanActive: asString(record.status) === 'running' || asString(field(record.live_map, 'status')) === 'running',
+    hasMaterializedMetrics: Boolean(resolved || project) && hasMaterializedFindingData(raw),
+    hasResolvedProject: Boolean(resolved || project),
+    continuousActive: isContinuousDiscoveryActive(raw),
+  };
 }

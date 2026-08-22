@@ -95,7 +95,7 @@ export function Dashboard() {
     return (
       <div>
         <StatePanel eyebrow="开始使用" title="选择客户项目，查看检测结论" description="QualiBug 是企业系统的独立行为验证层：用真实执行证据，把软件风险变成可复现、可验收的业务结论。请先在右上角选择客户工作区，或按下面四步完成首次接入。" />
-        <JourneyStrip onNavigate={(path) => navigateToProjectPath(path, '')} />
+        <JourneyStrip project={project} onNavigate={(path) => navigateToProjectPath(path, '')} />
       </div>
     );
   }
@@ -254,19 +254,11 @@ export function Dashboard() {
       tone: !hasDeliveryGuard ? 'neutral' : guardDeliverable ? 'success' : 'warning',
       statusLabel: !hasDeliveryGuard ? '后端暂未提供' : guardDeliverable ? '交付已放行' : '交付未放行',
       description: !hasDeliveryGuard
-        ? '交付守卫判定（customer_delivery_guard）尚未随本轮结果上报。'
+        ? '交付守卫的最终判定尚未随本轮结果上报；放行与否以它为准，不以问题清单为凭。'
         : guardDeliverable
           ? '每个进入交付的问题都通过了正式交付门禁校验。'
           : guardBlockReasons.length > 0 ? `阻塞原因：${guardBlockReasons.join('、')}` : '门禁通过不等于交付放行，需守卫明确确认。',
       unreported: !hasDeliveryGuard,
-    },
-    {
-      key: 'cleanup',
-      title: '受控写入与清理回执',
-      tone: 'neutral',
-      statusLabel: '后端暂未提供',
-      description: '所有写入均经受控沙箱执行并生成清理回执；每轮的写入 / 清理汇总尚未随结果上报，接入后在此展示。',
-      unreported: true,
     },
     {
       key: 'evidence-trust',
@@ -291,7 +283,7 @@ export function Dashboard() {
           summary={knowledgeSummary}
           onOpenMaterials={() => navigateToProjectPath('/materials', project)}
         />
-        <JourneyStrip onNavigate={(path) => navigateToProjectPath(path, project)} />
+        <JourneyStrip project={project} onNavigate={(path) => navigateToProjectPath(path, project)} />
         <section className="empty-value-promise">
           <h2>运行首次检测后，您将看到：</h2>
           <div className="empty-value-grid">

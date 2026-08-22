@@ -60,7 +60,7 @@ function fallbackGates(summary: JsonRecord): GateView[] {
     },
     {
       key: 'scenario_ir',
-      label: 'Scenario IR',
+      label: '正式场景构建',
       status: asText(summary.scenario_ir_status) || 'NOT_BUILT',
       ready: asBoolean(summary.scenario_ir_ready),
     },
@@ -72,7 +72,7 @@ function fallbackGates(summary: JsonRecord): GateView[] {
     },
     {
       key: 'runtime_plan',
-      label: 'Runtime Plan',
+      label: '运行计划',
       status: asText(summary.runtime_plan_status) || 'NOT_BUILT',
       ready: asBoolean(summary.runtime_plan_ready),
     },
@@ -178,7 +178,7 @@ export function EnterpriseUnderstandingPanel({ summary: value, onOpenMaterials }
       ? '企业理解已闭合，运行准备链待完善'
       : '企业理解尚未闭合';
   const statusDetail = chainReady
-    ? '企业理解、场景规划、Scenario IR、执行合同、Runtime Plan 和运行实例化均已通过现有门禁。真实执行仍由现有 Experiment Executor 继续检查现场凭据、动态值、观察回执和清理恢复；当前草案本身仍不可直接发送或执行。'
+    ? '从企业资料理解到可执行验证的准备链已全部通过门禁。真实执行时系统仍会继续检查现场凭据、动态值、观察回执与清理恢复；当前草案本身不会直接发送或执行。'
     : firstBlocked
       ? `当前停在“${firstBlocked.label}”：${firstBlocked.status}。下方只读回执展示现有资产已经记录的资料来源或接入缺口；没有证据的条目不会被系统猜测补齐。`
       : '现有知识资产尚未形成完整的运行准备链。';
@@ -220,15 +220,6 @@ export function EnterpriseUnderstandingPanel({ summary: value, onOpenMaterials }
         </article>
       </div>
 
-      <div className="settings-info-list settings-mt-10">
-        {gates.map((gate) => (
-          <div key={gate.key} className="settings-info-row">
-            <span>{gate.label}</span>
-            <strong>{gate.ready ? 'PASS' : gate.status}</strong>
-          </div>
-        ))}
-      </div>
-
       <div className="settings-card-note settings-mt-10">
         <strong>{statusTitle}</strong>
         <p>{statusDetail}</p>
@@ -237,13 +228,28 @@ export function EnterpriseUnderstandingPanel({ summary: value, onOpenMaterials }
             {residualBlockers.map((blocker) => <li key={blocker}>{blocker}</li>)}
           </ul>
         )}
-        <small className="muted">
-          状态来源：现有 enterprise business knowledge asset。系统不会通过人工点击“确认正确”、常识补全或旧 Probe 回退绕过门禁。
-        </small>
       </div>
 
+      <details className="settings-auth-section settings-mt-10">
+        <summary>
+          <strong>运行准备链详情</strong>
+          <span className="muted">{gates.filter((gate) => gate.ready).length}/{gates.length} 步已通过（内部口径）</span>
+        </summary>
+        <div className="settings-info-list settings-mt-10">
+          {gates.map((gate) => (
+            <div key={gate.key} className="settings-info-row">
+              <span>{gate.label}</span>
+              <strong>{gate.ready ? '通过' : gate.status}</strong>
+            </div>
+          ))}
+        </div>
+        <small className="muted settings-mt-10" style={{ display: 'block' }}>
+          状态来源：现有 enterprise business knowledge asset。系统不会通过人工点击“确认正确”、常识补全或旧 Probe 回退绕过门禁。
+        </small>
+      </details>
+
       {!chainReady && receipts.length > 0 && (
-        <details className="settings-auth-section settings-mt-10" open>
+        <details className="settings-auth-section settings-mt-10">
           <summary>
             <strong>查看缺口与原始资料回执</strong>
             <span className="muted">{receipts.length} 条现有回执</span>

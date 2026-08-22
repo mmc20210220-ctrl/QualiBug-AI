@@ -168,14 +168,18 @@ assert(uploadSection > onlineSection, 'file upload must remain after the online 
 assert(materials.includes('<span className="settings-hero-kicker">补充方式</span>'), 'file upload must be explicitly framed as a supplement');
 assert(materials.includes('接入在线资料'), 'materials page primary CTA must remain online-source connection');
 
-assert(journey.includes("title: '接入被测系统'"), 'first-run journey must start from real system setup');
-assert(journey.includes("title: '连接企业资料'"), 'first-run journey must use online-first enterprise materials wording');
-assert(journey.includes('优先连接企业在线文档或知识库持续同步，缺失资料再用文件上传补充'), 'journey must explain online-first and upload-second materials strategy');
-assert(journey.includes("path: '/materials', action: '连接资料源'"), 'journey materials action must enter the canonical connection surface');
-assert(journey.includes("title: '运行前检查并检测'"), 'first-run journey must describe the preflight boundary before scanning');
-assert(journey.includes("path: '/campaigns', action: '检查并运行'"), 'first-run run step must enter the real run center');
-assert(journey.includes("title: '查看结果与发布建议'"), 'first-run journey must be result-first after scanning');
-assert(journey.includes("path: '/dashboard', action: '查看价值总览'"), 'first-run result step must lead to dashboard instead of assuming findings exist');
+// 进度主线已收敛到 lib/onboarding-progress 的单一口径（P1-4）：
+// 步骤定义与完成判定在共享构建器中，JourneyStrip 只消费不另算。
+const progressLib = read('src/lib/onboarding-progress.ts');
+assert(progressLib.includes("title: '接入被测系统'"), 'first-run journey must start from real system setup');
+assert(progressLib.includes("title: '补充测试身份'"), 'first-run journey must track real test identities');
+assert(progressLib.includes("title: '连接企业资料'"), 'first-run journey must use online-first enterprise materials wording');
+assert(progressLib.includes('优先连接企业在线文档持续同步，缺失资料再用文件上传补充'), 'journey must explain online-first and upload-second materials strategy');
+assert(progressLib.includes("path: '/materials',") && progressLib.includes("actionLabel: '连接资料源',"), 'journey materials action must enter the canonical connection surface');
+assert(progressLib.includes("title: '运行前检查并检测'"), 'first-run journey must describe the preflight boundary before scanning');
+assert(progressLib.includes("path: '/campaigns',"), 'first-run run step must enter the real run center');
+assert(progressLib.includes('done: doneByKey[definition.key]'), 'step completion must come from backend-derived facts, never invented locally');
+assert(journey.includes('useOnboardingProgress(project)'), 'journey strip must render the single canonical progress line');
 
 const mainNavStart = sidebar.indexOf("label: '主导航'");
 assert(mainNavStart >= 0, 'sidebar navigation must converge to a single customer navigation section');

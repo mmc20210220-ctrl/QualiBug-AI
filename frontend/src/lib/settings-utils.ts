@@ -190,3 +190,47 @@ export function findMatchingServiceConfig(connector: ConnectorRecord, services: 
     || services.find((service) => normalizeKey(asString(service.name)) === systemName)
     || null;
 }
+
+// ─── Shared onboarding extractors（单一进度口径的数据提取 SSOT）──────────────
+
+/** 从 /v1/services/credentials 响应中提取服务配置列表。 */
+export function extractServiceConfigs(payload: unknown): SavedServiceConfig[] {
+  const root = asRecord(payload);
+  return Array.isArray(root.services)
+    ? root.services.map((item) => asRecord(item) as SavedServiceConfig)
+    : [];
+}
+
+export type MaterialCounts = {
+  materialCount: number;
+  onlineMaterialCount: number;
+  uploadedMaterialCount: number;
+};
+
+/** 从 knowledge asset 响应中统计真实可读资料（deleted 不计入）。 */
+export function extractMaterialCounts(payload: unknown): MaterialCounts {
+  const root = asRecord(payload);
+  const asset = asRecord(root.knowledge_asset || root.data || root);
+  const inventory = Array.isArray(asset.sources)
+    ? asset.sources
+    : Array.isArray(asset.source_inventory)
+      ? asset.source_inventory
+      : [];
+  const sources = inventory
+    .map(asRecord)
+    .filter((source) => String(source.status || 'active').toLowerCase() !== 'deleted');
+  const activeSources = sources.filter((source) => String(source.status || 'active').toLowerCase() === 'active');
+  const onlineMaterialCount = activeSources.filter(isOnlineMaterialSource).length;
+
+  return {
+    materialCount: activeSources.length,
+    onlineMaterialCount,
+    uploadedMaterialCount: Math.max(0, activeSources.length - onlineMaterialCount),
+  };
+}
+
+/** 在线资料判定：后端 source_origin 或 connector 引用，前端不设白名单。 */
+export function isOnlineMaterialSource(source: Record<string, unknown>): boolean {
+  return String(source.source_origin || '').toUpperCase() === 'ONLINE_CONNECTOR'
+    || String(source.source_ref || '').startsWith('connector://');
+}

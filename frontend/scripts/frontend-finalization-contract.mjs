@@ -9,8 +9,11 @@ const assert = (condition, message) => {
 };
 
 const journey = read('src/components/dashboard/JourneyStrip.tsx');
+const onboardingLib = read('src/lib/onboarding-progress.ts');
 assert(
-  journey.includes("title: '连接企业资料'") && journey.includes("path: '/materials'"),
+  journey.includes('useOnboardingProgress(project)')
+  && onboardingLib.includes("title: '连接企业资料'")
+  && onboardingLib.includes("path: '/materials',"),
   '首次接入的企业资料步骤必须以在线连接为主并进入 /materials',
 );
 
