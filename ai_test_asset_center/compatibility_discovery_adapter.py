@@ -68,18 +68,14 @@ def collect_compatibility_issues(
     cfg: dict[str, Any],
     *,
     openapi: dict[str, Any] | None = None,
-    project_id: str = "real_project_demo",
+    project_id: str = "",
     root: Path | None = None,
-    scenario: str = "manufacturing",
+    scenario: str = "",
 ) -> list[dict[str, Any]]:
-    root = root or ROOT
-    paths = config_paths(project_id, root)
-    project_output_root = root / "platform_outputs" / project_id
-    bundle_dir = project_output_root / "phase105_frontend_preview_bundle"
-    output_dir = project_output_root / "phase105_frontend_preview_acceptance"
-    if paths["output_dir"].exists():
-        bundle_dir = paths["output_dir"] / "phase105_frontend_preview_bundle"
-        output_dir = paths["output_dir"] / "phase105_frontend_preview_acceptance"
+    # Industry-agnostic compatibility checks — driven only by the declared target
+    # configuration and source material, never by a hardcoded industry scenario.
+    # The demo-harness frontend-preview branch below runs only when a concrete
+    # project bundle is explicitly declared; it is never assumed.
     issues: list[dict[str, Any]] = []
     version = str((openapi or {}).get("openapi") or "")
     if version and version not in {"3.0.0", "3.0.3"}:
@@ -122,6 +118,16 @@ def collect_compatibility_issues(
                 default_source="compatibility_adapter",
             )
         )
+    if not project_id:
+        return issues  # no declared demo bundle; generic checks already recorded
+    root = root or ROOT
+    paths = config_paths(project_id, root)
+    project_output_root = root / "platform_outputs" / project_id
+    bundle_dir = project_output_root / "phase105_frontend_preview_bundle"
+    output_dir = project_output_root / "phase105_frontend_preview_acceptance"
+    if paths["output_dir"].exists():
+        bundle_dir = paths["output_dir"] / "phase105_frontend_preview_bundle"
+        output_dir = paths["output_dir"] / "phase105_frontend_preview_acceptance"
     try:
         report = run_frontend_preview_acceptance(
             bundle_dir=bundle_dir,
