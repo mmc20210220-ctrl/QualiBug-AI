@@ -13,8 +13,11 @@ Schema: qualibug.binding-conflict-resolver.v1
 """
 from __future__ import annotations
 
+import logging
 import time
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from .binding_ledger import (
     BindingLedger,
@@ -244,8 +247,8 @@ def detect_and_resolve_all(
                             e.get("target_key") for e in conflict.get("conflicting_bindings", [])
                         ],
                     })
-                except ValueError:
-                    pass
+                except ValueError as exc:
+                    logger.warning("binding transition failed bid=%s: %s", bid, exc)
 
     return {
         "schema_version": SCHEMA_VERSION,

@@ -168,6 +168,7 @@ class OracleResult:
     oracle_tier: str = ""
     customer_deliverable: bool | None = None
     demotion_reason: str = ""
+    is_finding: bool = True  # False marks diagnostic-only results (e.g. oracle crash) that must never count as a confirmed finding
 
     def to_dict(self) -> dict:
         payload = {
@@ -176,6 +177,7 @@ class OracleResult:
             "violated_rule": self.violated_rule, "expected": self.expected,
             "actual": self.actual, "severity": self.severity,
             "confidence": self.confidence, "explanation": self.explanation,
+            "is_finding": self.is_finding,
         }
         if self.oracle_tier:
             payload["oracle_tier"] = self.oracle_tier
@@ -1474,11 +1476,13 @@ class OracleEngine:
                 # Generate a failed result so the crash is visible in the output
                 results.append(OracleResult(
                     passed=False, oracle_name=oracle.name, layer=oracle.layer,
-                    violated_rule="oracle_crash",
-                    expected="Oracle正常执行",
-                    actual=f"Oracle崩溃: {type(e).__name__}: {str(e)[:200]}",
-                    severity="P2", confidence=0.30,
-                    explanation=f"Oracle内部异常，判定降级为P2低置信度"))
+                    violated_rule="",
+                    expected="Oracle 正常执行",
+                    actual=f"Oracle 崩溃: {type(e).__name__}: {str(e)[:200]}",
+                    severity="", confidence=0.0,
+                    explanation="Oracle 执行崩溃：属诊断引擎内部错误，不是业务违规发现；is_finding=False，不应计入已确认 finding",
+                    is_finding=False,
+                ))
         if _ORACLE_EVALUATE_HOOK is not None:
             results = list(_ORACLE_EVALUATE_HOOK(self, scenario, trace, snapshots, results) or results)
         return results
@@ -1516,11 +1520,13 @@ class OracleEngine:
                         oracle.name, e)
                     results.append(OracleResult(
                         passed=False, oracle_name=oracle.name, layer=oracle.layer,
-                        violated_rule="oracle_crash",
-                        expected="Oracle正常执行",
-                        actual=f"Oracle崩溃: {type(e).__name__}: {str(e)[:200]}",
-                        severity="P2", confidence=0.30,
-                        explanation=f"Oracle内部异常，判定降级为P2低置信度"))
+                        violated_rule="",
+                        expected="Oracle 正常执行",
+                        actual=f"Oracle 崩溃: {type(e).__name__}: {str(e)[:200]}",
+                        severity="", confidence=0.0,
+                        explanation="Oracle 执行崩溃：属诊断引擎内部错误，不是业务违规发现；is_finding=False，不应计入已确认 finding",
+                        is_finding=False,
+                    ))
         return self._standard_output(results)
 
     def _standard_output(self, results: list[OracleResult]) -> dict:

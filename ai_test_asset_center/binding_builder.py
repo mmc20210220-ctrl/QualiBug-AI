@@ -11,8 +11,11 @@ Schema: qualibug.binding-builder.v1
 """
 from __future__ import annotations
 
+import logging
 import re
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from .binding_ledger import (
     BindingLedger,
@@ -963,8 +966,8 @@ def _auto_promote(
                         else "auto_promote:very_high_confidence"
                     ),
                 )
-        except ValueError:
-            pass
+        except ValueError as exc:
+            logger.warning("auto_promote skipped (illegal transition) binding=%s: %s", binding_id, exc)
     elif confidence >= 0.70:
         try:
             ledger.promote(
@@ -977,8 +980,8 @@ def _auto_promote(
                     binding_id, BindingStatus.EXECUTABLE,
                     reason="auto_promote:source_or_runtime_confirmed",
                 )
-        except ValueError:
-            pass
+        except ValueError as exc:
+            logger.warning("auto_promote skipped (illegal transition) binding=%s: %s", binding_id, exc)
 
 
 def _find_entity_create_operation(
