@@ -237,7 +237,7 @@ def _role_requirements_from_demo(demo: Mapping[str, Any], scenario: str) -> list
         "saas": ["tenant_owner", "workspace_admin", "member_user", "billing_user", "readonly_auditor"],
     }
     if len(role_names) < 3:
-        for role in fallback_roles.get(scenario, fallback_roles["manufacturing"]):
+        for role in fallback_roles.get(scenario) or []:
             if role not in role_names:
                 role_names.append(role)
 
@@ -295,7 +295,7 @@ def collect_customer_intake_experience_data(
     test_plan = demo.get("test_plan") if isinstance(demo.get("test_plan"), Mapping) else {}
 
     required_customer_inputs = _as_list(environment.get("required_customer_inputs"))
-    source_templates = list(SCENARIO_INTAKE_SOURCES.get(scenario, SCENARIO_INTAKE_SOURCES["manufacturing"]))
+    source_templates = list(SCENARIO_INTAKE_SOURCES.get(scenario) or [])
     completion_total = len(source_templates) + 4
     completed = sum(1 for item in source_templates if item.get("status") == "已解析") + 3
     if not required_customer_inputs:
@@ -336,7 +336,7 @@ def collect_customer_intake_experience_data(
     ai_analysis_preview = {
         "industry_identification": {
             "detected_industry": project.get("industry") or scenario,
-            "confidence": 0.88 if scenario == "manufacturing" else 0.84,
+            "confidence": 0.84,
             "reason": "根据系统名称、业务链路、接口摘要和角色矩阵生成行业初判。",
         },
         "coverage_hint": {
@@ -386,7 +386,7 @@ def collect_customer_intake_experience_data(
                 "suggested_actions": _as_list(environment.get("suggested_actions")),
             },
             "required_customer_inputs": required_customer_inputs,
-            "safety_boundaries": list(SCENARIO_SAFETY_BOUNDARIES.get(scenario, SCENARIO_SAFETY_BOUNDARIES["manufacturing"])),
+            "safety_boundaries": list(SCENARIO_SAFETY_BOUNDARIES.get(scenario) or []),
             "phase104_handoff_payload": phase104_payload,
             "next_actions": next_actions,
             "display_principles": [
