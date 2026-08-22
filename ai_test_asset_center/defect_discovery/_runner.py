@@ -285,23 +285,58 @@ class DefectDiscoveryRunner:
             index, item = index_item
             local_client = HttpClient(client.base_url)
             start = time.time()
+            # Fail-fast / observable: distinguish environment setup failures
+            # (missing /reset endpoint, login failure) from actual probe
+            # execution errors. Previously all three were swallowed into one
+            # generic "probe execution error", masking the real root cause.
+            setup_failed = False
             try:
                 local_client.request("POST", "/reset")
-                tokens = login_accounts(local_client, accounts)
-                result = execute_probe(local_client, tokens, item)
-                result["execution_status"] = "completed"
-            except Exception as exc:
+            except Exception as reset_exc:
                 result = {
                     "probe": item,
-                    "request": {"method": item.get("method"), "path": item.get("path")},
-                    "response": {"status_code": 0, "body": {"error": str(exc)[:500]}, "duration_ms": 0},
+                    "request": {"method": "POST", "path": "/reset"},
+                    "response": {"status_code": 0, "body": {"error": str(reset_exc)[:500]}, "duration_ms": 0},
                     "expected": item.get("expected"),
-                    "actual": str(exc)[:500],
-                    "assertion_result": "error",
-                    "bug_signal": "probe execution error",
+                    "actual": f"reset endpoint unavailable: {reset_exc!r}"[:500],
+                    "assertion_result": "setup_error",
+                    "bug_signal": "environment_reset_endpoint_unavailable",
                     "confidence": 0.0,
-                    "execution_status": "error",
+                    "execution_status": "setup_error",
                 }
+                setup_failed = True
+            if not setup_failed:
+                try:
+                    tokens = login_accounts(local_client, accounts)
+                except Exception as login_exc:
+                    result = {
+                        "probe": item,
+                        "request": {"method": "LOGIN", "path": "test_accounts"},
+                        "response": {"status_code": 0, "body": {"error": str(login_exc)[:500]}, "duration_ms": 0},
+                        "expected": item.get("expected"),
+                        "actual": f"account login failed: {login_exc!r}"[:500],
+                        "assertion_result": "setup_error",
+                        "bug_signal": "account_login_failed",
+                        "confidence": 0.0,
+                        "execution_status": "setup_error",
+                    }
+                    setup_failed = True
+            if not setup_failed:
+                try:
+                    result = execute_probe(local_client, tokens, item)
+                    result["execution_status"] = "completed"
+                except Exception as exc:
+                    result = {
+                        "probe": item,
+                        "request": {"method": item.get("method"), "path": item.get("path")},
+                        "response": {"status_code": 0, "body": {"error": str(exc)[:500]}, "duration_ms": 0},
+                        "expected": item.get("expected"),
+                        "actual": str(exc)[:500],
+                        "assertion_result": "error",
+                        "bug_signal": "probe execution error",
+                        "confidence": 0.0,
+                        "execution_status": "error",
+                    }
             result["execution_duration_ms"] = round((time.time() - start) * 1000, 2)
             result["execution_worker_mode"] = "parallel" if max_workers > 1 else "sequential"
             result["execution_timeout_ms"] = timeout_ms
