@@ -9,6 +9,7 @@ import { asArray, asRecord, asString } from '../lib/value-guards';
 import {
   API_BASE,
   API_V1_BASE,
+  ApiError,
   asBoolean,
   fetchJSON,
   fetchPublicJSON,
@@ -26,6 +27,7 @@ import type {
 // 对外再导出（保持原 api/client 的 import 路径不变）
 export { API_BASE } from './session';
 export {
+  ApiError,
   authStorageEvent,
   clearDevToken,
   currentToken,
@@ -87,8 +89,11 @@ export async function getFindings(projectId: string): Promise<JsonRecord> {
       const envelope = await fetchJSON<unknown>(`${API_V1_BASE}/projects/${encodeURIComponent(resolvedProjectId)}/command-center`);
       return { resolvedProjectId, projectId: resolvedProjectId, ...asRecord(asRecord(envelope).data) };
     } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (message.includes('404')) return emptyFindingsSnapshot(resolvedProjectId);
+      // 404 = 后端确认该项目尚无 command-center 快照：诚实空态，不是故障。
+      // 其余任何失败（网络/5xx/解析）必须原样上抛，禁止吞掉或误判为空态。
+      if (error instanceof ApiError && error.status === 404) {
+        return emptyFindingsSnapshot(resolvedProjectId);
+      }
       throw error;
     } finally {
       _findingsInflight.delete(resolvedProjectId);

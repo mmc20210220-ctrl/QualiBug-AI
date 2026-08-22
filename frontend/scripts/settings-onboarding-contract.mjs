@@ -190,7 +190,12 @@ for (const internal of ["to: 'release'", "to: 'coverage'", "to: 'jobs'", "to: 'c
 assert(sidebar.includes("import { useLiveStatus, useProjectSummary } from '../api/data';"), 'sidebar status must consume real scan materialization state');
 assert(sidebar.includes('const { scanActive, hasMaterializedMetrics } = useLiveStatus(project, 15_000);'), 'sidebar must distinguish an active or completed scan from a never-run project');
 assert(sidebar.includes("? '检测进行中'"), 'sidebar must expose an active scan before defect summary states');
-assert(sidebar.includes("? '本轮暂无已确认问题'\n              : '等待首次验证';"), 'clean materialized scans must not be mislabeled as never verified');
+// 语义断言（缩进不敏感）：hasMaterializedMetrics 守卫的干净扫描必须显示
+// 「本轮暂无已确认问题」，而不是落入「等待首次验证」。
+assert(
+  /hasMaterializedMetrics\s*\n\s*\?\s*'本轮暂无已确认问题'\s*\n\s*:\s*'等待首次验证';/.test(sidebar),
+  'clean materialized scans must not be mislabeled as never verified',
+);
 
 assert(runCenter.includes('const preflightReady = Boolean(preflight?.ready);'), 'run center must keep backend preflight as execution authority');
 assert(runCenter.includes('if (!preflightReady) {'), 'run center handler must remain fail-closed after frontend onboarding completion');

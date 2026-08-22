@@ -42,22 +42,28 @@ type SidebarProps = {
 export function Sidebar({ mobileOpen = false, onClose }: SidebarProps) {
   const [params] = useSearchParams();
   const project = params.get('project')?.trim() || '';
-  const { projectName, currentDefectCount, clueCount, p0Count } = useProjectSummary(project);
+  const { projectName, currentDefectCount, clueCount, p0Count, error: summaryError } = useProjectSummary(project);
   const { scanActive, hasMaterializedMetrics } = useLiveStatus(project, 15_000);
+
+  // 后端故障时显式呈现失败状态；绝不把「读不到」渲染成健康的零值结论。
+  const summaryFaulted = Boolean(project && summaryError);
+  const countText = (value: number | null | undefined): string => (summaryFaulted ? '—' : String(value ?? 0));
 
   const riskStateLabel = !project
     ? '请选择客户'
-    : scanActive
-      ? '检测进行中'
-      : p0Count > 0
-        ? '需先处理阻断'
-        : (currentDefectCount || 0) > 0
-          ? '可进入整改'
-          : (clueCount || 0) > 0
-            ? '后台补证中'
-            : hasMaterializedMetrics
-              ? '本轮暂无已确认问题'
-              : '等待首次验证';
+    : summaryFaulted
+      ? '状态读取失败'
+      : scanActive
+        ? '检测进行中'
+        : p0Count > 0
+          ? '需先处理阻断'
+          : (currentDefectCount || 0) > 0
+            ? '可进入整改'
+            : (clueCount || 0) > 0
+              ? '后台补证中'
+              : hasMaterializedMetrics
+                ? '本轮暂无已确认问题'
+                : '等待首次验证';
 
   return (
     <>
@@ -77,18 +83,23 @@ export function Sidebar({ mobileOpen = false, onClose }: SidebarProps) {
         <div className="side-project">
           <span className="side-project-label">当前客户</span>
           <b>{projectName}</b>
+          {summaryFaulted && (
+            <p className="side-project-error" role="alert" title={summaryError}>
+              项目状态读取失败：{summaryError}
+            </p>
+          )}
           <div className="side-project-metrics">
             <div className="side-project-metric">
               <span>状态</span>
               <strong>{riskStateLabel}</strong>
             </div>
-            <div className="side-project-metric">
+            <div className="side-project-metric" title={summaryFaulted ? '后端状态不可读取，计数未上报' : undefined}>
               <span>已确认</span>
-              <strong>{currentDefectCount ?? 0}</strong>
+              <strong>{countText(currentDefectCount)}</strong>
             </div>
-            <div className="side-project-metric">
+            <div className="side-project-metric" title={summaryFaulted ? '后端状态不可读取，计数未上报' : undefined}>
               <span>后台补证</span>
-              <strong>{clueCount ?? 0}</strong>
+              <strong>{countText(clueCount)}</strong>
             </div>
           </div>
         </div>

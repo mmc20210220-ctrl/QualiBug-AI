@@ -13,6 +13,20 @@ export const API_V1_BASE = '/api/v1';
 const DEV_TOKEN_KEY = 'qualibug_dev_token';
 const SESSION_MARKER_KEY = 'qualibug_validated_session';
 
+/**
+ * 传输层错误：携带真实 HTTP 状态码。调用方必须按状态码分支（如 404=资源不存在），
+ * 禁止对 error.message 做子串匹配来推断状态。
+ */
+export class ApiError extends Error {
+  readonly status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+  }
+}
+
 const devTokenEnabled = (): boolean => import.meta.env.DEV && import.meta.env.VITE_QUALIBUG_ENABLE_DEV_TOKEN === 'true';
 
 export function asBoolean(value: unknown, fallback = false): boolean {
@@ -119,7 +133,7 @@ export async function getSession(options?: { force?: boolean }): Promise<Session
         return null;
       }
       const { data, rawText } = await readResponsePayload(response);
-      if (!response.ok) throw new Error(parseApiErrorMessage(response.status, rawText));
+      if (!response.ok) throw new ApiError(response.status, parseApiErrorMessage(response.status, rawText));
       if (!asBoolean(data.authenticated)) {
         markValidatedSession(false);
         return null;
@@ -299,7 +313,7 @@ export async function fetchWithTenant(url: string, init?: RequestInit): Promise<
     markValidatedSession(false);
     authStorageEvent();
   }
-  if (!response.ok) throw new Error(parseApiErrorMessage(response.status, await response.text()));
+  if (!response.ok) throw new ApiError(response.status, parseApiErrorMessage(response.status, await response.text()));
   return response.json() as Promise<unknown>;
 }
 
@@ -330,7 +344,7 @@ export function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
 
 export async function fetchPublicJSON<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, { ...init, credentials: 'include', cache: init?.cache || 'no-store' });
-  if (!response.ok) throw new Error(parseApiErrorMessage(response.status, await response.text()));
+  if (!response.ok) throw new ApiError(response.status, parseApiErrorMessage(response.status, await response.text()));
   return response.json() as Promise<T>;
 }
 

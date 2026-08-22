@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { getFindings, getKnowledgeAsset, getProjects, type CustomerWorkspace } from './client';
-import type { CommercialAssets, Finding, KnowledgeSource, ReleaseCheck, TestTaskBoard, TestTaskSlice } from '../types';
+import type { CommercialAssets, Finding, KnowledgeSource, TestTaskBoard, TestTaskSlice } from '../types';
 import { toWorkspaceOptions } from '../lib/customer';
 import { asArray, asNum, asRecord, asString } from '../lib/value-guards';
 
@@ -9,7 +9,6 @@ const SCAN_COMPLETED_EVENT = 'qualibug:scan-completed';
 type JsonRecord = Record<string, unknown>;
 type ScanCompletedDetail = { project: string };
 type ProjectSummary = { resolvedProjectId: string; projectName: string; findingsCount: number; currentDefectCount: number; clueCount: number; p0Count: number };
-type ReleaseOverall = 'pass' | 'fail' | 'pending';
 
 function asBoolean(value: unknown): boolean {
   if (typeof value === 'boolean') return value;
@@ -204,12 +203,6 @@ function normalizeCampaignSnapshot(raw: unknown): JsonRecord {
     },
   };
 }
-function campaignBlocksRelease(raw: unknown): { blocked: boolean; status: string; reason: string } {
-  const campaign = campaignFrom(raw);
-  const status = asString(campaign.campaign_status || campaign.campaign_state).toLowerCase();
-  const blocked = status === 'blocked' || status === 'coverage_deferred';
-  return { blocked, status, reason: asString(campaign.coverage_deferred_reason) || asString(campaign.next_campaign_reason) };
-}
 function buildProjectSummary(raw: unknown, project: string): ProjectSummary {
   const normalized = normalizeCampaignSnapshot(raw);
   const record = asRecord(normalized);
@@ -264,10 +257,10 @@ export function useWorkspaceDirectory() {
 
 export function useProjectSummary(project: string) {
   const empty = useCallback((): ProjectSummary => ({ resolvedProjectId: '', projectName: project || '未选择客户', findingsCount: 0, currentDefectCount: 0, clueCount: 0, p0Count: 0 }), [project]);
-  const [summary, setSummary] = useState<ProjectSummary>(empty); const [loading, setLoading] = useState(true);
-  const load = useCallback(() => { if (!project) { setSummary(empty()); setLoading(false); return; } setLoading(true); getFindings(project).then((raw) => setSummary(buildProjectSummary(raw, project))).catch(() => setSummary(empty())).finally(() => setLoading(false)); }, [empty, project]);
+  const [summary, setSummary] = useState<ProjectSummary>(empty); const [loading, setLoading] = useState(true); const [error, setError] = useState('');
+  const load = useCallback(() => { if (!project) { setSummary(empty()); setLoading(false); setError(''); return; } setLoading(true); getFindings(project).then((raw) => { setSummary(buildProjectSummary(raw, project)); setError(''); }).catch((caught: unknown) => { setSummary(empty()); setError(caught instanceof Error ? caught.message : '项目状态读取失败'); }).finally(() => setLoading(false)); }, [empty, project]);
   useEffect(() => { load(); }, [load]); useScanCompletedRefresh(project, load);
-  return { ...summary, hasResolvedProject: Boolean(summary.resolvedProjectId || project), loading };
+  return { ...summary, hasResolvedProject: Boolean(summary.resolvedProjectId || project), loading, error };
 }
 
 export function usePipelineData(project: string) {
@@ -312,105 +305,6 @@ export function useKnowledgeData(project: string) {
   const load = useCallback(() => { setLoading(true); setSources([]); setError(''); getKnowledgeAsset(project).then((raw) => setSources(parseKnowledgeSources(raw))).catch((caught: unknown) => setError(caught instanceof Error ? caught.message : '资料列表加载失败')).finally(() => setLoading(false)); }, [project]);
   useEffect(() => { load(); }, [load]);
   return { sources, loading, error, refetch: load };
-}
-
-function releaseCheckFrom(value: unknown): ReleaseCheck | null {
-  const row = asRecord(value);
-  const name = asString(row.name);
-  const status = asString(row.status) as ReleaseCheck['status'];
-  if (!name || !['pass', 'fail', 'pending'].includes(status)) return null;
-  return { name, status, detail: asString(row.detail) || '后端发布门禁合同未提供详情。' };
-}
-
-function backendReleaseGateChecks(raw: unknown): ReleaseCheck[] {
-  const gate = asRecord(field(raw, 'release_gate'));
-  return asArray(gate.checks).map(releaseCheckFrom).filter((value): value is ReleaseCheck => value !== null);
-}
-
-function dedupeChecks(checks: ReleaseCheck[]): ReleaseCheck[] {
-  const seen = new Set<string>();
-  return checks.filter((item) => {
-    const key = item.name.trim();
-    if (!key || seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-}
-
-function regressionReleaseGate(raw: unknown): ReleaseCheck | null {
-  const record = asRecord(raw);
-  const regressionRun = asRecord(record.regression_run);
-  const regressionSummary = asRecord(record.regression_summary);
-  const latestRun = asRecord(regressionSummary.latest_run);
-  const regressionRefresh = asRecord(record.regression_suite_refresh);
-  const regressionSuite = asRecord(record.regression_suite);
-  const refreshSummary = asRecord(regressionRefresh.summary);
-  const gateStatus = asString(regressionRun.gate_status) || asString(latestRun.gate_status);
-  const hasLatestRun = Boolean(gateStatus || asString(regressionRun.status) || asString(latestRun.generated_at));
-  const obligationCount = firstFiniteNumber(regressionSuite.total_probe_count, refreshSummary.total_probe_count);
-  const confirmedLedgerProbeCount = firstFiniteNumber(regressionSuite.confirmed_ledger_probe_count, refreshSummary.confirmed_ledger_probe_count);
-  const failed = firstFiniteNumber(regressionRun.failed_count, regressionSummary.failed_defect_count);
-  const needsReview = firstFiniteNumber(regressionRun.needs_review_count, regressionSummary.pending_defect_count);
-  const passed = firstFiniteNumber(regressionRun.passed_count, regressionSummary.passed_defect_count);
-  if (gateStatus === 'failed') {
-    return { name: '修复后回归 Gate', status: 'fail', detail: `最近一次回归失败：${failed} 个探针失败，${needsReview} 个需复核。发布前必须先修复或复核失败项。` };
-  }
-  if (gateStatus === 'manual_approval_required') {
-    return { name: '修复后回归 Gate', status: 'pending', detail: `最近一次回归仍需人工复核：${needsReview} 个探针缺少强自动判定，不能直接放行发布。` };
-  }
-  if (gateStatus === 'passed') {
-    return { name: '修复后回归 Gate', status: 'pass', detail: `最近一次回归通过：${passed} 个探针通过。该结论仅代表最近一次持久化回归结果，不扩大到未覆盖范围。` };
-  }
-  if (!hasLatestRun && asString(regressionRefresh.status) === 'refreshed' && obligationCount > 0) {
-    return { name: '修复后回归 Gate', status: 'pending', detail: `已自动生成 ${obligationCount} 个回归探针，其中 ${confirmedLedgerProbeCount} 个来自 confirmed bug ledger；发布前必须先执行 Smoke 或 Release 回归。` };
-  }
-  return null;
-}
-
-function parseReleaseChecks(raw: unknown): { overall: ReleaseOverall; checks: ReleaseCheck[] } {
-  const normalized = normalizeCampaignSnapshot(raw);
-  const findings = getReportFindings(normalized).filter(isCustomerReadyFinding);
-  const p0 = findings.filter((finding) => finding.severity === 'P0').length;
-  const security = findings.filter((finding) => finding.defect_family === 'security_boundary' || finding.defect_family === 'privacy_compliance').length;
-  const integrity = findings.filter((finding) => finding.defect_family === 'data_integrity').length;
-  const dbConfirmed = asNum(field(field(normalized, 'db_verification'), 'confirmed'));
-  const campaignGate = campaignBlocksRelease(normalized);
-  const campaignDetail = campaignGate.reason || (campaignGate.status === 'blocked' ? 'Campaign 缺少进入执行的必要合同' : campaignGate.status === 'coverage_deferred' ? '自动覆盖已递延到后续 Campaign' : 'Campaign 未报告阻断');
-  const localChecks: ReleaseCheck[] = [
-    { name: 'Campaign 治理状态', status: campaignGate.blocked ? 'fail' : 'pass', detail: campaignGate.blocked ? campaignDetail : 'Campaign 未阻塞或递延覆盖' },
-    { name: 'P0 缺陷阻塞', status: p0 === 0 ? 'pass' : 'fail', detail: p0 === 0 ? '无 P0 缺陷' : `${p0} 个 P0 缺陷未修复` },
-    { name: '认证授权检测', status: security === 0 ? 'pass' : 'fail', detail: security === 0 ? '未发现认证授权类缺陷' : `${security} 个安全类缺陷待修复` },
-    { name: '数据完整性校验', status: integrity === 0 ? 'pass' : 'fail', detail: integrity === 0 ? '未发现数据一致性缺陷' : `${integrity} 个数据完整性缺陷待修复` },
-    { name: 'DB 验证', status: dbConfirmed === 0 ? 'pass' : 'fail', detail: dbConfirmed === 0 ? 'DB 一致性检查通过' : `${dbConfirmed} 个 DB 不一致` },
-  ];
-  const contractChecks = backendReleaseGateChecks(normalized);
-  const regressionGate = contractChecks.length > 0 ? null : regressionReleaseGate(normalized);
-  const checks = dedupeChecks([...(contractChecks.length > 0 ? contractChecks : []), ...(regressionGate ? [regressionGate] : []), ...localChecks]);
-  const overall: ReleaseOverall = checks.some((item) => item.status === 'fail') ? 'fail' : checks.some((item) => item.status === 'pending') ? 'pending' : 'pass';
-  return { overall, checks };
-}
-
-function hasReleaseDecisionData(raw: unknown): boolean {
-  const normalized = normalizeCampaignSnapshot(raw);
-  const record = asRecord(normalized);
-  const status = asString(record.status) || asString(field(record.live_map, 'status'));
-  if (status && status !== 'idle') return true;
-  if (backendReleaseGateChecks(normalized).length > 0 || regressionReleaseGate(normalized)) return true;
-  const regressionRefresh = asRecord(record.regression_suite_refresh);
-  const regressionSuite = asRecord(record.regression_suite);
-  const refreshSummary = asRecord(regressionRefresh.summary);
-  if (asString(regressionRefresh.status) || firstFiniteNumber(regressionSuite.total_probe_count, refreshSummary.total_probe_count) > 0) return true;
-  if (getReportFindings(normalized).length > 0 || getReportClues(normalized).length > 0) return true;
-  const campaign = campaignFrom(normalized);
-  if (asString(campaign.campaign_status || campaign.campaign_state)) return true;
-  return Object.keys(asRecord(record.runtime_verification)).length > 0 || Object.keys(asRecord(record.db_verification)).length > 0;
-}
-
-export function useReleaseData(project: string) {
-  const [data, setData] = useState<{ overall: ReleaseOverall; checks: ReleaseCheck[] } | null>(null); const [loading, setLoading] = useState(true);
-  const load = useCallback(() => { if (!project) { setData(null); setLoading(false); return; } setLoading(true); getFindings(project).then((raw) => { const resolved = getResolvedProjectId(raw) || project; setData(resolved && hasReleaseDecisionData(raw) ? parseReleaseChecks(raw) : null); }).catch(() => setData(null)).finally(() => setLoading(false)); }, [project]);
-  useEffect(() => { load(); }, [load]); useScanCompletedRefresh(project, load);
-  return { data, loading, refetch: load };
 }
 
 export function useTestTaskBoard(project: string) {

@@ -1181,6 +1181,17 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 }
 .side-project b { display: block; color: #f8fafc; font-size: 14px; margin-top: 10px; font-weight: 700; letter-spacing: -.01em }
 .side-project small { display: block; margin-top: 8px; color: #94a3b8; line-height: 1.6; font-size: 11px; }
+.side-project-error {
+  margin: 8px 0 0;
+  padding: 7px 9px;
+  border-radius: 10px;
+  background: rgba(127, 29, 29, .28);
+  border: 1px solid rgba(248, 113, 113, .35);
+  color: #fecaca;
+  font-size: 10.5px;
+  line-height: 1.5;
+  word-break: break-word;
+}
 .side-project-metrics {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
