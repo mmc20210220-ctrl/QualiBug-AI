@@ -47,6 +47,7 @@ treated as event surfaces.
 from __future__ import annotations
 
 import copy
+import hashlib
 from typing import Any
 
 from .contract_auto_derivation import _event_row
@@ -57,6 +58,18 @@ DERIVATION_SCHEMA = "qualibug.runtime-probe-event-contract-derivation.v1"
 _EVENT_EXPECTED_MIN_COUNT = 1
 _EVENT_EXPECTED_MAX_COUNT = 50          # formal_event_surface caps at _MAX_EVENTS=200
 _EVENT_OBSERVATION_WINDOW_MS = 10_000   # formal_event_surface caps at _MAX_WINDOW_MS=30000
+
+# Message-chain structural surface uses the same relative bounds. The emitted
+# surface is consumers=[] (structural-only): it lets message_chain_delivery_observer
+# check duplicate delivery / ordering / delivery-count on the observed event
+# stream — distinct defects the single-hop event_delivery_consistency observer
+# does not cover (it only checks correlated count + event_type). No consumer-state
+# assertion is made (we cannot derive expected downstream state for a doc-less
+# target), so fabricating it would violate 原则7. The actor is the runtime
+# observer (anonymous for unfamiliar systems), never a fabricated business actor.
+_MSGCHAIN_EXPECTED_MIN_COUNT = 1
+_MSGCHAIN_EXPECTED_MAX_COUNT = 50
+_MSGCHAIN_OBSERVATION_WINDOW_MS = 10_000
 
 
 def _text(value: Any) -> str:
@@ -153,7 +166,7 @@ def derive_runtime_probe_event_contracts(
     receipt: dict[str, Any] = {
         "schema_version": DERIVATION_SCHEMA,
         "enabled": True if enabled is None else bool(enabled),
-        "derived": {"event": 0},
+        "derived": {"event": 0, "message_chain": 0},
         "skipped": [],
         "methodology_defaults": {
             "event": {
@@ -181,6 +194,7 @@ def derive_runtime_probe_event_contracts(
 
     actor_role = _actor_role_for_probe(runtime_actors)
     accepted: list[dict[str, Any]] = []
+    accepted_surfaces: list[dict[str, Any]] = []
     existing_keys = {
         (_text(r.get("method")).upper(), _text(r.get("operation_path") or r.get("path")))
         for r in merged.get("event_formal_contracts", []) or []
@@ -239,14 +253,57 @@ def derive_runtime_probe_event_contracts(
         }
         row = _event_row(operation, parsed, source_id="runtime_probe", actor_role=actor_role)
         accepted.append(row)
+        # 档位 D (message_chain): the SAME event-shaped listing also seeds a
+        # structural message-chain observation surface. We emit a
+        # runtime_event_surface with NO consumers (structural-only) so the
+        # message_chain_delivery_observer can check duplicate delivery +
+        # ordering + delivery-count on the observed event stream — distinct
+        # defects the single-hop event_delivery_consistency observer does not
+        # cover (it only checks correlated count + event_type). No consumer-state
+        # assertion is made: we cannot derive expected downstream state for a
+        # doc-less target, so fabricating it would violate 原则7. The actor is
+        # the runtime observer (anonymous for unfamiliar systems), never a
+        # fabricated business actor.
+        accepted_surfaces.append({
+            "schema_version": "qualibug.runtime-event-surface.v1",
+            "derivation": "runtime-observed",
+            "surface_id": "rt_msgchain_" + hashlib.sha256(
+                path.encode("utf-8")
+            ).hexdigest()[:20],
+            "method": "GET",
+            "operation_path": path,
+            "actor_role": actor_role,
+            "observer_path": path,
+            "events_path": path,
+            "event_id_field": id_field,
+            "event_type_field": type_field,
+            "correlation_field": correlation_field,
+            "correlation_query_parameter": correlation_field,
+            "correlation_source": {"location": "treatment_response", "path": id_field},
+            "expected_min_count": _MSGCHAIN_EXPECTED_MIN_COUNT,
+            "expected_max_count": _MSGCHAIN_EXPECTED_MAX_COUNT,
+            "observation_window_ms": _MSGCHAIN_OBSERVATION_WINDOW_MS,
+            "consumers": [],
+            "duplicate_mode": "log",
+            "event_name": "",
+        })
         seen.add(key)
 
-    if accepted:
-        merged["event_formal_contracts"] = [
-            *(merged.get("event_formal_contracts", []) or []),
-            *accepted,
-        ]
-        receipt["derived"]["event"] = len(accepted)
+    if accepted or accepted_surfaces:
+        if accepted:
+            merged["event_formal_contracts"] = [
+                *(merged.get("event_formal_contracts", []) or []),
+                *accepted,
+            ]
+        if accepted_surfaces:
+            merged["runtime_event_surfaces"] = [
+                *(merged.get("runtime_event_surfaces", []) or []),
+                *accepted_surfaces,
+            ]
+        receipt["derived"] = {
+            "event": len(accepted),
+            "message_chain": len(accepted_surfaces),
+        }
         receipt["status"] = "CONSUMED"
     else:
         receipt["status"] = "NO_CONTRACTS_DERIVED"
