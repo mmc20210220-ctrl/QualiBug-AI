@@ -61,16 +61,20 @@ python -m ai_test_asset_center.private_pilot_entrypoint
 # 或
 qualibug-server
 
-# 6. 启动前端（固定端口 5174）
+# 6a. 生产口径：构建 SPA 后由后端 8088 同端口托管（推荐）
+cd frontend && npm ci && npm run build && cd ..
+# 以生产方式启动（QUALIBUG_FRONTEND_DIST 指向构建产物）：
+QUALIBUG_FRONTEND_DIST=frontend/dist python -m ai_test_asset_center.private_pilot_entrypoint
+
+# 6b. 开发模式（可选，仅本地开发：Vite dev server 固定端口 5174）
 cd frontend
-npm ci
-cp .env.example .env.local
 npm run dev
 ```
 
 访问：
 
-- 前端控制台：`http://127.0.0.1:5174`
+- 生产/容器部署：`http://127.0.0.1:8088`（UI + API 同端口）
+- 本机开发模式前端控制台：`http://127.0.0.1:5174`（`/api` 代理到 8088）
 - 后端健康检查：`http://127.0.0.1:8088/api/health`
 
 ### 一键自检
