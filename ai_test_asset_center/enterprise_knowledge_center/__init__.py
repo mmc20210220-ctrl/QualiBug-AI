@@ -118,8 +118,10 @@ execute_non_barrier_job_adapter = None
 from .composition import (  # noqa: E402,F401
     build_enterprise_business_knowledge_asset,
     configure_source_parser_extensions,
+    detect_understanding_source_changes,
     generate_enterprise_business_knowledge_probes,
     load_enterprise_business_knowledge_asset,
+    load_enterprise_business_knowledge_asset_ensuring_current,
     refresh_enterprise_business_knowledge_asset_incremental,
 )
 

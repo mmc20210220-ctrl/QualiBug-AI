@@ -64,6 +64,7 @@ def _empty_parse_result(
         "tables": [],
         "field_dictionary": [],
         "ui_specs": [],
+        "message_chain_contracts": [],
         "permissions": [],
         "tickets": [],
         "har_errors": [],

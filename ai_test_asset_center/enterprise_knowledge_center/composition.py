@@ -12,9 +12,13 @@ admission -> source-occurrence evidence views -> one final persistence receipt.
 from __future__ import annotations
 
 import copy
+import hashlib
+import logging
 import os
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from . import _api as _base_api
 from . import _chinese_business_downstream as _downstream
@@ -2605,6 +2609,285 @@ def load_enterprise_business_knowledge_asset(
     return _base_api.load_enterprise_business_knowledge_asset(project_id, root)
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Run-start understanding freshness gate (AGENTS.md principle 16).
+#
+# The enterprise understanding is a persistent, versioned knowledge asset. A Run
+# must only consume a pinned snapshot and never re-understand the full corpus.
+# But when source material is re-uploaded via manual/API (outside the connector
+# sync path, which already drives incremental refresh through
+# connector_semantic_refresh), the persisted understanding can silently lag
+# behind the current source revisions. This gate detects that drift and drives
+# an EVENT-SCOPED incremental refresh instead of a full re-parse.
+# ─────────────────────────────────────────────────────────────────────────────
+_SOURCE_CHANGE_REFRESH_SCHEMA = "qualibug.source-change-refresh.v1"
+
+
+def _understanding_source_revision_index(inventory: Any) -> dict[str, dict[str, str]]:
+    """Map source_ref -> recorded (content_hash, remote_revision) from an inventory."""
+    index: dict[str, dict[str, str]] = {}
+    for row in inventory or []:
+        if not isinstance(row, dict):
+            continue
+        ref = _incremental_source_ref(row)
+        if not ref:
+            continue
+        metadata = row.get("metadata")
+        metadata = metadata if isinstance(metadata, dict) else {}
+        index[ref] = {
+            "content_hash": _incremental_text(row.get("content_hash"), 128),
+            "remote_revision": _incremental_text(
+                row.get("remote_revision") or metadata.get("remote_revision"), 240
+            ),
+        }
+    return index
+
+
+def _source_change_event(
+    event_type: str,
+    row: Mapping[str, Any],
+    *,
+    previous: Mapping[str, Any] | None = None,
+    reason_code: str,
+) -> dict[str, Any]:
+    metadata = row.get("metadata")
+    metadata = metadata if isinstance(metadata, dict) else {}
+    previous_metadata = (previous or {}).get("metadata")
+    previous_metadata = previous_metadata if isinstance(previous_metadata, dict) else {}
+    return {
+        "event_id": "source-event:"
+        + hashlib.sha256(
+            _incremental_text(
+                {
+                    "event": event_type,
+                    "source_ref": _incremental_source_ref(row),
+                    "previous_content_hash": (previous or {}).get("content_hash") or "",
+                    "content_hash": row.get("content_hash") or "",
+                    "reason_code": reason_code,
+                }
+            ).encode("utf-8")
+        ).hexdigest()[:32],
+        "event": event_type,
+        "source_ref": _incremental_source_ref(row),
+        "source_occurrence_id": _incremental_text(row.get("source_occurrence_id"), 300),
+        "reason_code": reason_code,
+        "source_label": _incremental_text(
+            row.get("display_title") or row.get("filename"), 300
+        ),
+        "previous_content_hash": _incremental_text(
+            (previous or {}).get("content_hash"), 128
+        ),
+        "content_hash": _incremental_text(row.get("content_hash"), 128),
+        "previous_remote_revision": _incremental_text(
+            (previous or {}).get("remote_revision")
+            or previous_metadata.get("remote_revision"),
+            240,
+        ),
+        "remote_revision": _incremental_text(
+            row.get("remote_revision") or metadata.get("remote_revision"), 240
+        ),
+        "source_content_returned": False,
+    }
+
+
+def _build_source_change_refresh_receipt(
+    project_id: str,
+    events: list[dict[str, Any]],
+    changed_refs: set[str],
+) -> dict[str, Any]:
+    return {
+        "schema": _SOURCE_CHANGE_REFRESH_SCHEMA,
+        "status": "PENDING_VALIDATION",
+        "project_id": _safe_project_id(project_id),
+        "source_occurrence_diff": {
+            "status": "COMPLETE",
+            "event_count": len(events),
+            "changed_source_count": len(changed_refs),
+            "events": events,
+        },
+        "artifact_diff": {
+            "status": "COMPLETE",
+            "changed_source_count": len(changed_refs),
+        },
+        "affected_content_blocks": 0,
+        "affected_facts": 0,
+        "affected_entities": 0,
+        "affected_behaviors": 0,
+        "affected_scenarios": 0,
+        "affected_regression_items": 0,
+        "downstream": [],
+        "llm_reanalysis_scheduled_count": 0,
+        "unchanged_materials_reanalyzed": False,
+        "full_project_recompute_requested": False,
+        "incremental_executor_installed": False,
+        "completion_reason": "SOURCE_CHANGE_DETECTED_AT_RUN_START",
+        "source_content_returned": False,
+    }
+
+
+def detect_understanding_source_changes(
+    project_id: str,
+    root: Path | None = None,
+) -> dict[str, Any]:
+    """Compare the active source material revisions against the understanding
+    snapshot's recorded source inventory.
+
+    Returns ``{"stale": bool, "events": [...], "changed_refs": set, "reason": ...}``.
+    A missing asset or a missing recorded baseline yields ``stale=False`` so the
+    caller falls through to a normal build without surprising re-parses.
+    """
+    resolved_root = root or ROOT
+    project = _safe_project_id(project_id)
+    asset = load_enterprise_business_knowledge_asset(project, resolved_root)
+    if asset is None:
+        return {
+            "stale": False,
+            "events": [],
+            "changed_refs": set(),
+            "reason": "NO_ASSET",
+        }
+    baseline = _understanding_source_revision_index(asset.get("source_inventory"))
+    if not baseline:
+        # No recorded fingerprint baseline (e.g. a pre-baked asset): cannot assert
+        # staleness without risking spurious full re-parses. Leave as-is.
+        return {
+            "stale": False,
+            "events": [],
+            "changed_refs": set(),
+            "reason": "NO_BASELINE",
+        }
+    active = _incremental_active_sources(project, resolved_root)
+    active_index = _understanding_source_revision_index(active)
+    events: list[dict[str, Any]] = []
+    changed_refs: set[str] = set()
+    for row in active:
+        ref = _incremental_source_ref(row)
+        if not ref:
+            continue
+        cur = active_index.get(ref)
+        base = baseline.get(ref)
+        if base is None:
+            events.append(
+                _source_change_event(
+                    "SOURCE_REVISION_CHANGED",
+                    row,
+                    previous=None,
+                    reason_code="SOURCE_ADDED_AFTER_BUILD",
+                )
+            )
+            changed_refs.add(ref)
+            continue
+        content_changed = bool(
+            cur["content_hash"] and base["content_hash"] and cur["content_hash"] != base["content_hash"]
+        )
+        revision_changed = bool(
+            cur["remote_revision"]
+            and base["remote_revision"]
+            and cur["remote_revision"] != base["remote_revision"]
+        )
+        if content_changed or revision_changed:
+            events.append(
+                _source_change_event(
+                    "SOURCE_REVISION_CHANGED",
+                    row,
+                    previous={"content_hash": base["content_hash"], "remote_revision": base["remote_revision"]},
+                    reason_code="CONTENT_HASH_CHANGED" if content_changed else "REMOTE_REVISION_CHANGED",
+                )
+            )
+            changed_refs.add(ref)
+    # Baseline sources that are no longer active: the understanding may still
+    # carry rows derived from a source that has since been removed/retired.
+    for ref, base in baseline.items():
+        if ref not in active_index:
+            events.append(
+                {
+                    "event": "SOURCE_REVISION_CHANGED",
+                    "source_ref": ref,
+                    "reason_code": "SOURCE_REMOVED_AFTER_BUILD",
+                    "content_hash": "",
+                    "previous_content_hash": base["content_hash"],
+                    "source_content_returned": False,
+                }
+            )
+            changed_refs.add(ref)
+    stale = bool(events)
+    return {
+        "stale": stale,
+        "events": events,
+        "changed_refs": changed_refs,
+        "reason": "CHANGED" if stale else "CURRENT",
+    }
+
+
+def load_enterprise_business_knowledge_asset_ensuring_current(
+    project_id: str = "real_project_demo",
+    root: Path | None = None,
+    options: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Load the understanding snapshot, auto-triggering an event-driven incremental
+    refresh when the active source material has changed since the snapshot was built.
+
+    This is the Run-start entry point that satisfies AGENTS.md principle 16: the
+    understanding is a persistent, versioned asset; a Run only consumes a pinned
+    snapshot and never re-understands the full corpus. A fresh Run that detects a
+    source revision change drives a SOURCE-scoped incremental refresh (not a full
+    re-parse), then consumes the refreshed snapshot. When nothing changed, this is
+    a cheap load + fingerprint compare with no LLM and no re-parse.
+
+    Reset via ``QUALIBUG_UNDERSTANDING_AUTOREFRESH_DISABLED=1`` (matching the
+    existing ``QUALIBUG_SEMANTIC_EXTRACTION_DISABLED`` test kill-switch pattern);
+    the default is refresh ENABLED.
+    """
+    autorefresh_disabled = (
+        str(os.environ.get("QUALIBUG_UNDERSTANDING_AUTOREFRESH_DISABLED") or "")
+        .strip()
+        .lower()
+        in {"1", "true", "yes"}
+    )
+    if autorefresh_disabled:
+        logger.info(
+            "understanding_autorefresh status=SKIPPED reason=KILL_SWITCH "
+            "project=%s",
+            _safe_project_id(project_id),
+        )
+        return load_enterprise_business_knowledge_asset(project_id, root)
+
+    detection = detect_understanding_source_changes(project_id, root)
+    if not detection["stale"]:
+        logger.info(
+            "understanding_freshness_gate status=CURRENT reason=%s project=%s",
+            detection["reason"],
+            _safe_project_id(project_id),
+        )
+        return load_enterprise_business_knowledge_asset(project_id, root)
+
+    logger.info(
+        "understanding_freshness_gate status=STALE reason=%s "
+        "changed_source_count=%s project=%s",
+        detection["reason"],
+        len(detection["changed_refs"]),
+        _safe_project_id(project_id),
+    )
+    receipt = _build_source_change_refresh_receipt(
+        project_id, detection["events"], detection["changed_refs"]
+    )
+    result = refresh_enterprise_business_knowledge_asset_incremental(
+        project_id,
+        receipt,
+        root=root,
+        options=dict(options or {}),
+    )
+    refreshed = result.get("asset")
+    logger.info(
+        "understanding_freshness_gate status=REFRESHED mode=%s "
+        "parsed_source_count=%s project=%s",
+        result.get("mode"),
+        result.get("parsed_source_count"),
+        _safe_project_id(project_id),
+    )
+    return refreshed
+
+
 def generate_enterprise_business_knowledge_probes(
     openapi: dict[str, Any],
     cfg: dict[str, Any] | None = None,
@@ -2641,5 +2924,7 @@ __all__ = [
     "build_enterprise_business_knowledge_asset",
     "refresh_enterprise_business_knowledge_asset_incremental",
     "load_enterprise_business_knowledge_asset",
+    "load_enterprise_business_knowledge_asset_ensuring_current",
+    "detect_understanding_source_changes",
     "generate_enterprise_business_knowledge_probes",
 ]

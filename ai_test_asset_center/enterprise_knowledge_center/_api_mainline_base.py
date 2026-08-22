@@ -1059,6 +1059,11 @@ def build_enterprise_business_knowledge_asset(
     tables = _merge_table_identities([row for _, parsed in parsed_rows for row in parsed.get("tables") or []])
     field_dictionary = _dedupe_by_id([row for _, parsed in parsed_rows for row in parsed.get("field_dictionary") or []], "field_id")
     ui_specs = _dedupe_by_id([row for _, parsed in parsed_rows for row in parsed.get("ui_specs") or []], "ui_spec_id")
+    message_chain_contracts = [
+        row for _, parsed in parsed_rows
+        for row in parsed.get("message_chain_contracts") or []
+        if isinstance(row, dict)
+    ]
     known_tables = {str(row.get("table_id") or "") for row in tables}
     for row in field_dictionary:
         table_id = str(row.get("table_id") or "")
@@ -1359,6 +1364,7 @@ def build_enterprise_business_knowledge_asset(
         "field_dictionary": field_dictionary,
         "data_tables": tables,
         "ui_design_specs": ui_specs,
+        "message_chain_contracts": message_chain_contracts,
         "rule_library": rules,
         "permission_matrix": permissions,
         "data_dependencies": dependencies,

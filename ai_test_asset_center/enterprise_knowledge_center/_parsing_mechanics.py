@@ -2479,6 +2479,142 @@ def _state_machines_from_text(text: str, source_id: str) -> list[dict[str, Any]]
     return out
 
 
+def _message_chain_contracts_from_state_machines(
+    state_machines: list[dict[str, Any]],
+    operations: list[dict[str, Any]],
+    source_id: str,
+    filename: str,
+    evidence_text: str,
+) -> list[dict[str, Any]]:
+    """Derive message-chain contract *candidates* from extracted state machines.
+
+    A state transition (``from`` -> ``to``) on a business object is a
+    grounded, source-anchored statement that a write on that object should
+    move its state and the new state is observable. That is exactly the
+    message-chain / state-readback semantics the formal surface compiles.
+
+    Pairing discipline (extraction, never inference):
+    - For each transition we pair the object's write operation (POST/PUT/PATCH)
+      and its readback operation (GET) using the operation's *summary /
+      description text* (which carries the source language, e.g. Chinese
+      "创建订单") against the state-machine object name — not the URL path
+      segment (which is often English and would never match a Chinese object).
+    - ``event_name`` is the target state name taken verbatim from the source.
+    - ``trigger`` / ``observer_path`` / ``correlation_field`` are filled only
+      when a structurally matching operation exists. Missing coordinates are
+      left empty and the downstream normalizer marks an explicit gap — never
+      guessed.
+    - The delivery window (1..1) is a methodology default, marked as such.
+    """
+    contracts: list[dict[str, Any]] = []
+
+    def _text(v: Any) -> str:
+        return str(v or "").strip()
+
+    def _list(v: Any) -> list[Any]:
+        return v if isinstance(v, list) else []
+
+    if not state_machines:
+        return contracts
+    write_ops = [
+        op for op in operations
+        if str(op.get("method", "")).upper() in {"POST", "PUT", "PATCH"}
+    ]
+    read_ops = [
+        op for op in operations
+        if str(op.get("method", "")).upper() == "GET"
+    ]
+
+    def _matches_object(op: dict[str, Any], obj: str) -> bool:
+        obj_l = _text(obj).strip().lower()
+        if not obj_l:
+            return False
+        hay = " ".join(
+            _text(op.get(k)) for k in ("summary", "description", "operation_id")
+        ).lower()
+        if obj_l in hay:
+            return True
+        # last non-parameter path segment containment (English fallback)
+        segs = [
+            s.lower() for s in str(op.get("path") or "").split("/")
+            if s and "{" not in s
+        ]
+        return any((obj_l in seg or seg in obj_l) for seg in segs)
+
+    def _id_param(op: dict[str, Any]) -> str:
+        for p in _list(op.get("parameters")):
+            if isinstance(p, dict) and str(p.get("in")) == "path":
+                return _text(p.get("name") or p.get("parameter_name"))
+        seg = str(op.get("path") or "").rstrip("/").split("/")[-1]
+        if seg.startswith("{") and seg.endswith("}"):
+            return seg[1:-1]
+        return ""
+
+    for sm in state_machines:
+        if not isinstance(sm, dict):
+            continue
+        obj = _text(sm.get("object"))
+        if not obj:
+            continue
+        sm_refs = [
+            {
+                "source_id": source_id,
+                "locator": filename,
+                "quote": _redact_text(_text(sm.get("evidence")) or evidence_text, 240),
+            }
+        ]
+        for tr in _list(sm.get("transitions")):
+            if not isinstance(tr, dict):
+                continue
+            src = _text(tr.get("from"))
+            dst = _text(tr.get("to"))
+            if not dst:
+                continue
+            matched_writes = [op for op in write_ops if _matches_object(op, obj)]
+            matched_reads = [op for op in read_ops if _matches_object(op, obj)]
+            trigger_op = matched_writes[0] if matched_writes else None
+            observer_op = matched_reads[0] if matched_reads else None
+            contract_id = f"mc:{source_id}:{_short_hash({'sm': sm.get('state_machine_id'), 'from': src, 'to': dst})}"
+            row: dict[str, Any] = {
+                "contract_id": contract_id,
+                "source_refs": sm_refs,
+                "source_id": source_id,
+                "object": obj,
+                "from_state": src,
+                "to_state": dst,
+                "event_name": dst,
+                "expected_min_count": 1,
+                "expected_max_count": 1,
+                "observation_window_ms": 30_000,
+                "duplicate_mode": "log",
+                "derivation": "state_machine_transition",
+                "channel": "source_contract",
+                "methodology_default": {
+                    "delivery_window": "1..1 (one write should move state once)",
+                },
+            }
+            if trigger_op is not None:
+                row["method"] = str(trigger_op.get("method", "")).upper()
+                row["operation_path"] = _text(trigger_op.get("path"))
+                # Actor role, if the source material declares one on the
+                # operation (e.g. role-tagged API). Never invented.
+                _ar = _text(trigger_op.get("actor_role") or trigger_op.get("actor_id"))
+                if _ar:
+                    row["actor_role"] = _ar
+            if observer_op is not None:
+                row["observer_path"] = _text(observer_op.get("path"))
+            # Correlation id used to read the object back after the write; taken
+            # from whichever operation carries a path id parameter.
+            _cid = (trigger_op and _id_param(trigger_op)) or (
+                observer_op and _id_param(observer_op)
+            )
+            if _cid:
+                row["correlation_field"] = _cid
+                row["correlation_source"] = {"location": "path", "path": _cid}
+            contracts.append(row)
+    return contracts
+
+
 def _parse_source(blob: bytes, filename: str, source_type: str, source_id: str) -> dict[str, Any]:
     started_at_utc = _now()
     parse_errors: list[dict[str, Any]] = []
@@ -2824,6 +2960,13 @@ def _parse_source(blob: bytes, filename: str, source_type: str, source_id: str) 
         else _rules_from_text(text, source_id, source_type),
         "roles": _roles_from_text(text, source_id),
         "state_machines": _state_machines_from_text(text, source_id),
+        "message_chain_contracts": _message_chain_contracts_from_state_machines(
+            _state_machines_from_text(text, source_id),
+            operations,
+            source_id,
+            filename,
+            text,
+        ),
         "parse_status": parse_status,
         "parser": parser,
         "text_hash": text_hash,
