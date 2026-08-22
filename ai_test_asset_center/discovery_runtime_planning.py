@@ -1113,6 +1113,49 @@ def build_discovery_plan(
             "credential_boundary_error": f"{type(exc).__name__}: {str(exc)[:200]}",
         }
 
+    # ── Doc-less authorization obligations (档位 D runtime-probe derivation) ──
+    # Consume ``authorization_formal_contracts`` emitted by the runtime probe
+    # derivation for an unfamiliar, doc-less system: an anonymous read-only
+    # endpoint whose repeated samples returned BOTH a 2xx and a 401/403. Each
+    # contract becomes a single-arm authorization obligation on the
+    # runtime_auth_decision_consistency protocol; the binder synthesizes the
+    # read-only operation and the anonymous actor in the IR so a stranger system
+    # (empty IR) still compiles and executes (原则 10). The obligation RE-VERIFIES
+    # the inconsistency under a controlled repeat — it never carries the probe's
+    # raw samples as the verdict, and asserts ONLY inconsistency, not what the
+    # endpoint "should" be (原则 6/7). Same append-and-dedup shape as the guards.
+    runtime_auth_report: dict[str, Any] = {}
+    try:
+        from .runtime_auth_contract_binding import (
+            build_runtime_auth_decision_obligations,
+        )
+
+        runtime_auth_obligations = build_runtime_auth_decision_obligations(
+            behavior_ir, asset
+        )
+        if runtime_auth_obligations:
+            existing_sigs = {
+                _text(o.get("obligation_id"))
+                for o in obligations
+                if isinstance(o, dict)
+            }
+            new_runtime_auth = [
+                ao
+                for ao in runtime_auth_obligations
+                if _text(ao.get("obligation_id")) not in existing_sigs
+            ]
+            obligations.extend(new_runtime_auth)
+            runtime_auth_report = {
+                "runtime_auth_obligations_generated": len(runtime_auth_obligations),
+                "runtime_auth_obligations_added": len(new_runtime_auth),
+                "total_obligations_after_runtime_auth": len(obligations),
+            }
+    except Exception as exc:
+        runtime_auth_report = {
+            "runtime_auth_obligations_added": 0,
+            "runtime_auth_error": f"{type(exc).__name__}: {str(exc)[:200]}",
+        }
+
     # ── Cross-document conflict obligations ──
     # Consume conflicts detected by enterprise_knowledge_center between
     # different source documents. Each conflict becomes a test obligation
@@ -2429,6 +2472,7 @@ def build_discovery_plan(
             "account_enumeration_report": account_enumeration_report,
             "credential_gated_write_report": credential_gated_write_report,
             "credential_boundary_report": credential_boundary_report,
+            "runtime_auth_report": runtime_auth_report,
             "conflict_report": conflict_report,
             "mainline_reasoner_report": mainline_reasoner_report,
             "fact_ref_attach_receipt": _fact_ref_attach_receipt,

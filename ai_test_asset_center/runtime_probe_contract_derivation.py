@@ -161,6 +161,38 @@ def _stability_signal(samples: list[dict[str, Any]]) -> tuple[bool, list[int]]:
     return has_defect, [c for c in statuses if c >= 500 or (400 <= c < 500 and c not in {401, 403, 404})]
 
 
+def _auth_inconsistency(samples: list[dict[str, Any]]) -> tuple[bool, list[int]]:
+    """Doc-less authorization signal: non-deterministic auth enforcement.
+
+    A read-only endpoint probed as the *anonymous* actor that returns BOTH a
+    2xx (access granted) AND a 401/403 (access denied) across repeated samples
+    enforces its auth decision non-deterministically. That is a genuine,
+    observable access-control defect (an attacker can exploit the flaky
+    decision; legitimate callers get inconsistent access) and — critically — it
+    asserts ONLY the *inconsistency*, never that the endpoint "should" be
+    protected or public. No business/industry semantics are invented (原则6);
+    the signal is purely the observed variance in auth outcome.
+
+    Deliberately distinct from stability: ``_stability_signal`` excludes
+    401/403 from its inconsistency check (a protected endpoint's 403 is
+    correct behavior, not a reliability defect), so 2xx-vs-403 mixing is NOT
+    caught by stability and remains an authorization-family signal.
+    """
+    statuses: list[int] = []
+    for s in samples:
+        if isinstance(s, dict):
+            try:
+                statuses.append(int(s.get("status_code") or -1))
+            except (TypeError, ValueError):
+                continue
+    if len(statuses) < _RUNTIME_STABILITY_MIN_SAMPLES:
+        return False, []
+    granted = [c for c in statuses if 200 <= c < 300]
+    denied = [c for c in statuses if c in {401, 403}]
+    inconsistent = bool(granted) and bool(denied)
+    return inconsistent, statuses
+
+
 def derive_runtime_probe_contracts(
     asset: dict[str, Any] | None,
     *,
@@ -178,7 +210,7 @@ def derive_runtime_probe_contracts(
     receipt: dict[str, Any] = {
         "schema_version": DERIVATION_SCHEMA,
         "enabled": True,
-        "derived": {"performance": 0, "stability": 0},
+        "derived": {"performance": 0, "stability": 0, "authorization": 0},
         "skipped": [],
         "methodology_defaults": {
             "performance": {
@@ -215,8 +247,10 @@ def derive_runtime_probe_contracts(
     actors = _list(runtime_actors)
     existing_perf = _existing_operation_keys(merged, "performance_formal_contracts")
     existing_stab = _existing_operation_keys(merged, "stability_formal_contracts")
+    existing_auth = _existing_operation_keys(merged, "authorization_formal_contracts")
     perf_rows: list[dict[str, Any]] = []
     stab_rows: list[dict[str, Any]] = []
+    auth_rows: list[dict[str, Any]] = []
 
     for obs in _list(runtime_observations):
         if not isinstance(obs, dict):
@@ -323,6 +357,38 @@ def derive_runtime_probe_contracts(
                 perf_rows.append(row)
                 existing_perf.add(key)
 
+        # ── Authorization: non-deterministic auth enforcement (doc-less) ──
+        # Observed 2xx AND 401/403 across repeated anonymous samples on the
+        # same read-only endpoint. Asserts ONLY the inconsistency (原则6: no
+        # invented business semantics about what "should" be protected/public).
+        inconsistent, observed = _auth_inconsistency(samples)
+        if inconsistent and key not in existing_auth:
+            row = {
+                "contract_id": "rtprobe_auth_" + _digest(method, path, "runtime_probe", "authorization", len(observed)),
+                "schema_version": "qualibug.runtime-auth-surface.v1",
+                "method": method,
+                "operation_path": path,
+                "actor_role": "anonymous",
+                "observed_statuses": list(observed),
+                "status_classes_observed": sorted({
+                    "2xx" if 200 <= c < 300 else "4xx_auth" if c in {401, 403} else str(c // 100) + "xx"
+                    for c in observed
+                }),
+                "inconsistency": "auth_decision_non_deterministic",
+                "origin": "runtime_probe_contract_derivation",
+                "derivation": "observed_runtime_probe",
+                "sample_count": len(observed),
+                "confidence": 0.8,
+                "source_refs": [{
+                    "source_id": "runtime_probe",
+                    "kind": "runtime_probe_observation",
+                    "locator": f"{method}:{path}",
+                    "quote": "",
+                }],
+            }
+            auth_rows.append(row)
+            existing_auth.add(key)
+
     if perf_rows:
         merged["performance_formal_contracts"] = [
             *merged.get("performance_formal_contracts", []),
@@ -335,6 +401,12 @@ def derive_runtime_probe_contracts(
             *stab_rows,
         ]
         receipt["derived"]["stability"] = len(stab_rows)
+    if auth_rows:
+        merged["authorization_formal_contracts"] = [
+            *merged.get("authorization_formal_contracts", []),
+            *auth_rows,
+        ]
+        receipt["derived"]["authorization"] = len(auth_rows)
 
     receipt["status"] = (
         "CONSUMED"

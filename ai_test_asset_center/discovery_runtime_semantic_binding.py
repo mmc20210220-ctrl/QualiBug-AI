@@ -51,6 +51,7 @@ from .formal_performance_attribution_guard import (
 )
 from .formal_performance_surface import install_formal_performance_surface
 from .formal_stability_surface import install_formal_stability_surface
+from .runtime_auth_decision_surface import install_runtime_auth_decision_surface
 from .formal_ui_surface import install_formal_ui_surface
 from .formal_ui_surface_guard import install_formal_ui_read_only_guard
 from .job_async_protocol import register_job_async_protocol
@@ -242,6 +243,13 @@ install_formal_performance_attribution_guard()
 # were structurally unreachable even when a source stability contract existed.
 # Idempotent registration only; activation still requires the source contract.
 install_formal_stability_surface()
+# Doc-less authorization signal (档位 D runtime-probe contract derivation):
+# registers the runtime_auth_decision reader observer, the
+# runtime_auth_decision_consistency assertion kind and the
+# runtime_auth_decision_consistency protocol on the existing authorization
+# family. Idempotent registration only; activation requires a
+# authorization_formal_contracts row from the runtime probe.
+install_runtime_auth_decision_surface()
 # Cross-surface compatibility (dev/staging/prod or version drift): registers the
 # compatibility family, a read-only two-surface diff observer, the
 # compatibility_response_diff assertion kind and the compatibility_matrix
