@@ -815,7 +815,7 @@ def collect_browser_ui_replay_issues(
     root: Path | None = None,
     *,
     cfg: dict[str, Any] | None = None,
-    scenario: str = "manufacturing",
+    scenario: str = "",
 ) -> list[dict[str, Any]]:
     cfg = cfg if isinstance(cfg, dict) else {}
     _apply_playwright_offline_env(cfg)

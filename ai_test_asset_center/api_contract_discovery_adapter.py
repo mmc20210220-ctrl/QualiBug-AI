@@ -101,7 +101,7 @@ def collect_api_contract_issues(
     project_id: str,
     root: Path | None = None,
     *,
-    scenario: str = "manufacturing",
+    scenario: str = "",
 ) -> list[dict[str, Any]]:
     root = root or ROOT
     issues: list[dict[str, Any]] = []

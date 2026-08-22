@@ -191,7 +191,7 @@ def _envelope_ok(status: int, payload: Mapping[str, Any], *, expected_status: in
     return status == expected_status and payload.get("success") is True and "data" in payload and "meta" in payload
 
 
-def validate_contract_artifacts(contract_dir: str | Path, *, scenario: str = "manufacturing", live_smoke: bool = True) -> ContractAcceptanceReport:
+def validate_contract_artifacts(contract_dir: str | Path, *, scenario: str = "", live_smoke: bool = True) -> ContractAcceptanceReport:
     """Validate an exported Phase104B contract directory and local runtime flow."""
     root = Path(contract_dir)
     report = ContractAcceptanceReport(contract_dir=str(root), scenario=scenario)
