@@ -210,7 +210,7 @@ def derive_runtime_probe_contracts(
     receipt: dict[str, Any] = {
         "schema_version": DERIVATION_SCHEMA,
         "enabled": True,
-        "derived": {"performance": 0, "stability": 0, "authorization": 0},
+        "derived": {"performance": 0, "stability": 0, "authorization": 0, "visibility": 0},
         "skipped": [],
         "methodology_defaults": {
             "performance": {
@@ -248,9 +248,11 @@ def derive_runtime_probe_contracts(
     existing_perf = _existing_operation_keys(merged, "performance_formal_contracts")
     existing_stab = _existing_operation_keys(merged, "stability_formal_contracts")
     existing_auth = _existing_operation_keys(merged, "authorization_formal_contracts")
+    existing_vis = _existing_operation_keys(merged, "visibility_formal_contracts")
     perf_rows: list[dict[str, Any]] = []
     stab_rows: list[dict[str, Any]] = []
     auth_rows: list[dict[str, Any]] = []
+    vis_rows: list[dict[str, Any]] = []
 
     for obs in _list(runtime_observations):
         if not isinstance(obs, dict):
@@ -389,6 +391,42 @@ def derive_runtime_probe_contracts(
             auth_rows.append(row)
             existing_auth.add(key)
 
+        # ── Visibility (同源 with authorization, doc-less) ──
+        # The SAME anonymous 2xx+401/403 mix is ALSO an inconsistent-exposure
+        # signal: the endpoint sometimes returns data to anonymous (2xx) and
+        # sometimes denies it (401/403). That is a genuine visibility defect
+        # (data is intermittently exposed to unauthenticated callers) and — like
+        # authorization — it asserts ONLY the *inconsistency*, never what "should"
+        # be visible (原则6).  同源: both families consume the identical runtime
+        # observation; only the risk lens differs.  No new probe request is
+        # issued — the observation already exists from the repeated GETs.
+        if inconsistent and key not in existing_vis:
+            row = {
+                "contract_id": "rtprobe_vis_" + _digest(method, path, "runtime_probe", "visibility", len(observed)),
+                "schema_version": "qualibug.runtime-visibility-surface.v1",
+                "method": method,
+                "operation_path": path,
+                "actor_role": "anonymous",
+                "observed_statuses": list(observed),
+                "status_classes_observed": sorted({
+                    "2xx" if 200 <= c < 300 else "4xx_auth" if c in {401, 403} else str(c // 100) + "xx"
+                    for c in observed
+                }),
+                "inconsistency": "anonymous_exposure_non_deterministic",
+                "origin": "runtime_probe_contract_derivation",
+                "derivation": "observed_runtime_probe",
+                "sample_count": len(observed),
+                "confidence": 0.8,
+                "source_refs": [{
+                    "source_id": "runtime_probe",
+                    "kind": "runtime_probe_observation",
+                    "locator": f"{method}:{path}",
+                    "quote": "",
+                }],
+            }
+            vis_rows.append(row)
+            existing_vis.add(key)
+
     if perf_rows:
         merged["performance_formal_contracts"] = [
             *merged.get("performance_formal_contracts", []),
@@ -407,6 +445,12 @@ def derive_runtime_probe_contracts(
             *auth_rows,
         ]
         receipt["derived"]["authorization"] = len(auth_rows)
+    if vis_rows:
+        merged["visibility_formal_contracts"] = [
+            *merged.get("visibility_formal_contracts", []),
+            *vis_rows,
+        ]
+        receipt["derived"]["visibility"] = len(vis_rows)
 
     receipt["status"] = (
         "CONSUMED"

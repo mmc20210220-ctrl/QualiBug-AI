@@ -26,9 +26,16 @@ _DERIVATION_FAMILY_MAP: dict[str, tuple[str, ...]] = {
     ),
     "derive_runtime_probe_contracts": (
         "performance_latency", "stability_reliability",
+        "authorization", "visibility",
     ),
     "derive_runtime_probe_event_contracts": (
         "event_delivery_consistency",
+    ),
+    "build_runtime_auth_decision_obligations": (
+        "authorization",
+    ),
+    "build_runtime_visibility_exposure_obligations": (
+        "visibility",
     ),
 }
 
@@ -1155,6 +1162,47 @@ def build_discovery_plan(
             "runtime_auth_obligations_added": 0,
             "runtime_auth_error": f"{type(exc).__name__}: {str(exc)[:200]}",
         }
+        _record_derivation_failure(derivation_failures, "build_runtime_auth_decision_obligations", exc)
+
+    # ── Doc-less visibility obligations (同源 with authorization, 档位 D) ──
+    # Consume ``visibility_formal_contracts`` — emitted by the SAME runtime-probe
+    # observation (anonymous repeated GET returning BOTH 2xx and 401/403) that
+    # feeds authorization, but under the *visibility* risk lens (intermittent
+    # anonymous exposure). Same append-and-dedup shape as the authorization block;
+    # the binder synthesizes the op + anonymous actor for stranger systems (原则10)
+    # and asserts ONLY the inconsistency, not what "should" be visible (原则6/7).
+    runtime_visibility_report: dict[str, Any] = {}
+    try:
+        from .runtime_visibility_contract_binding import (
+            build_runtime_visibility_exposure_obligations,
+        )
+
+        runtime_visibility_obligations = build_runtime_visibility_exposure_obligations(
+            behavior_ir, asset
+        )
+        if runtime_visibility_obligations:
+            existing_sigs = {
+                _text(o.get("obligation_id"))
+                for o in obligations
+                if isinstance(o, dict)
+            }
+            new_runtime_visibility = [
+                vo
+                for vo in runtime_visibility_obligations
+                if _text(vo.get("obligation_id")) not in existing_sigs
+            ]
+            obligations.extend(new_runtime_visibility)
+            runtime_visibility_report = {
+                "runtime_visibility_obligations_generated": len(runtime_visibility_obligations),
+                "runtime_visibility_obligations_added": len(new_runtime_visibility),
+                "total_obligations_after_runtime_visibility": len(obligations),
+            }
+    except Exception as exc:
+        runtime_visibility_report = {
+            "runtime_visibility_obligations_added": 0,
+            "runtime_visibility_error": f"{type(exc).__name__}: {str(exc)[:200]}",
+        }
+        _record_derivation_failure(derivation_failures, "build_runtime_visibility_exposure_obligations", exc)
 
     # ── Cross-document conflict obligations ──
     # Consume conflicts detected by enterprise_knowledge_center between
@@ -2473,6 +2521,7 @@ def build_discovery_plan(
             "credential_gated_write_report": credential_gated_write_report,
             "credential_boundary_report": credential_boundary_report,
             "runtime_auth_report": runtime_auth_report,
+            "runtime_visibility_report": runtime_visibility_report,
             "conflict_report": conflict_report,
             "mainline_reasoner_report": mainline_reasoner_report,
             "fact_ref_attach_receipt": _fact_ref_attach_receipt,

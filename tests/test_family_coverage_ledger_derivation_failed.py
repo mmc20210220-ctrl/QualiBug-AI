@@ -39,6 +39,22 @@ def test_derivation_failure_marks_family() -> None:
     assert "coverage_unit" in ledger["summary"]
 
 
+def test_docless_auth_and_visibility_derivation_failure() -> None:
+    # The 档位 D runtime-probe derivation also feeds authorization/visibility
+    # (non-deterministic anonymous auth/exposure). A crash there must surface as
+    # DERIVATION_FAILED, not a false NOT_REQUESTED ("no source contract").
+    ledger = build_family_coverage_ledger(
+        {"obligations": []},
+        derivation_failures={"authorization": "RuntimeError: probe boom"},
+    )
+    entries = {e["risk_family"]: e for e in ledger["entries"]}
+    assert entries["authorization"]["status"] == "DERIVATION_FAILED"
+    assert "probe boom" in entries["authorization"]["gap_reason"]
+    # visibility not in the failure map -> honest NOT_REQUESTED
+    assert entries["visibility"]["status"] == "NOT_REQUESTED"
+    assert ledger["families_derivation_failed"] == 1
+
+
 def test_applicability_overrides_derivation_failure() -> None:
     ledger = build_family_coverage_ledger(
         {"obligations": [{"risk_family": "performance_latency"}]},
