@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 import logging
+from pathlib import Path
 from typing import Any
 
 from . import _experiment_batch_executor_single_finding_mechanics as _core
@@ -497,7 +498,7 @@ def execute_selected_experiments(
         experiment_budget=experiment_budget,
         validation_phase=validation_phase,
     )
-    return _apply_fanout(
+    output = _apply_fanout(
         _dict(batch),
         selected=selected,
         experiments_by_obligation=experiments_by_obligation,
@@ -505,6 +506,31 @@ def execute_selected_experiments(
         mainline_run=mainline_run,
         campaign_id=campaign_id,
     )
+    # ── Operator-cancel single consume point ──
+    # All parallel groups observed the same pending marker read-only; this
+    # entry consumes it exactly once so a stale request can never leak into a
+    # later scan. Lease-directory removal remains the failure-safe cleanup.
+    if int(_dict(output).get("operator_cancelled_count") or 0) > 0:
+        try:
+            from .scan_cancellation import consume_scan_cancel_request
+
+            consumed = consume_scan_cancel_request(Path(root), project)
+            receipt = dict(_dict(output).get("operator_cancelled_receipt") or {})
+            if not receipt and consumed:
+                receipt = {
+                    "schema": "qualibug.scan-cancel-request.v1",
+                    "requested_at_utc": _text(consumed.get("requested_at_utc")),
+                    "requester": dict(consumed.get("requester") or {}),
+                }
+            if receipt:
+                output["operator_cancelled_receipt"] = receipt
+        except Exception as exc:  # pragma: no cover - observability path
+            logger.warning(
+                "scan_cancel_consume_failed error_type=%s error=%s",
+                type(exc).__name__,
+                str(exc)[:200],
+            )
+    return output
 
 
 __all__ = sorted(

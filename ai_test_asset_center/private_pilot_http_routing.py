@@ -830,6 +830,8 @@ class HttpRoutingMixin:
                 return self._json(result)
             if parsed.path == "/api/v1/scan":
                 return self._handle_v12_scan(project, root, actor, body)
+            if parsed.path == "/api/v1/scan/cancel":
+                return self._handle_v12_scan_cancel(project, root, actor)
             if parsed.path == "/api/v1/scan/preflight":
                 return self._handle_scan_preflight(project, root, body)
             if parsed.path == "/api/v1/continuous/status":

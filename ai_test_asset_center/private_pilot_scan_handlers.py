@@ -587,6 +587,34 @@ class ScanHandlersMixin:
         finally:
             _finalization_event("", "lease_released", detail={"project": project})
 
+    def _handle_v12_scan_cancel(
+        self,
+        project: str,
+        root: Path,
+        actor: dict[str, str],
+    ) -> None:
+        """Register a cooperative cancel request against the live scan lease."""
+
+        if not self._require_role(actor, _SCAN_ROLES, "scan cancellation"):
+            return None
+        from .scan_cancellation import request_scan_cancel
+
+        result = request_scan_cancel(
+            root,
+            project,
+            requester={
+                "name": str(actor.get("name") or "")[:120],
+                "role": str(actor.get("role") or "")[:64],
+            },
+        )
+        requested = bool(result.get("requested"))
+        payload = {"ok": requested, **result}
+        if requested:
+            return self._json(payload)
+        if result.get("reason_code") == "NO_ACTIVE_SCAN":
+            return self._json(payload, 409)
+        return self._json(payload, 500)
+
     def _execute_v12_scan(
         self,
         project: str,

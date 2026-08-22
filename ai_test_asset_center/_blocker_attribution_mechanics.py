@@ -163,6 +163,9 @@ REASON_CODE_REGISTRY.update({
     "OBLIGATION_BUDGET_REACHED": _reason_definition("EXECUTION_BUDGET", recoverability="RECOVERABLE"),
     "OBLIGATION_NOT_IN_PLAN": _reason_definition("PLANNING_DEFERRED", recoverability="RECOVERABLE"),
     "DEFERRED": _reason_definition("PLANNING_DEFERRED", recoverability="RECOVERABLE"),
+    "OPERATOR_CANCELLED": _reason_definition(
+        "OPERATOR_INTERVENTION", recoverability="NOT_APPLICABLE", is_blocking=False,
+    ),
     "CLEANUP_COMPENSATION_FAILED": _reason_definition("CLEANUP_CAPABILITY_GAP", recoverability="RECOVERABLE"),
     "CLEANUP_EVIDENCE_INCOMPLETE": _reason_definition("CLEANUP_CAPABILITY_GAP", recoverability="RECOVERABLE"),
     "CLEANUP_WRITE_COVERAGE_MISMATCH": _reason_definition("CLEANUP_CAPABILITY_GAP", recoverability="RECOVERABLE"),

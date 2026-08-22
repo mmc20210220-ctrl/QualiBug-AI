@@ -330,6 +330,24 @@ def _family_coverage_budget(
     return max(int(budget), min(union_floor, int(hard_cap)))
 
 
+def _pending_scan_cancel(root: Path, project: str) -> dict[str, Any]:
+    """Read-only view of a pending operator cancel request for this scan lease.
+
+    Cancellation is cooperative observability: a failed check never aborts or
+    fakes a cancellation — the scan continues and the failure stays logged.
+    The marker is consumed once by the mainline executor entry, never here, so
+    parallel serial groups all observe the same pending request.
+    """
+
+    try:
+        from .scan_cancellation import read_scan_cancel_request
+
+        return read_scan_cancel_request(Path(root), project)
+    except Exception as exc:
+        logger.warning("scan_cancel_check_failed error_type=%s error=%s", type(exc).__name__, str(exc)[:200])
+        return {}
+
+
 def execute_selected_experiments(
     selected: list[Any],
     *,
@@ -409,6 +427,8 @@ def execute_selected_experiments(
     executed = 0
     harness = 0
     cleanup_failures = 0
+    operator_cancelled_count = 0
+    operator_cancel_request: dict[str, Any] = {}
     compile_results: dict[str, dict[str, Any]] = {}
     execution_results: dict[str, dict[str, Any]] = {}
     gate_results: dict[str, dict[str, Any]] = {}
@@ -554,6 +574,60 @@ def execute_selected_experiments(
         selected = _service_filtered
     for index, item in enumerate(selected):
         row = _dict(item)
+        # ── Cooperative operator-cancel checkpoint ──
+        # Checked before every experiment boundary. The in-flight experiment is
+        # never killed mid-transport; everything not yet started receives a
+        # terminal DEFERRED receipt (never budget_deferred, which would
+        # auto-continue the cancelled work in a later round of this scan).
+        if root and project:
+            _cancel_payload = _pending_scan_cancel(Path(root), project)
+            if _cancel_payload:
+                operator_cancel_request = dict(_cancel_payload)
+                for _defer_index in range(index, len(selected)):
+                    _defer_row = _dict(selected[_defer_index])
+                    _oid = _text(_defer_row.get("obligation_id"))
+                    _eid = _text(_defer_row.get("experiment_id"))
+                    if not _oid or _oid in execution_results:
+                        continue
+                    execution_results[_oid] = {
+                        "status": "DEFERRED",
+                        "reason_code": "OPERATOR_CANCELLED",
+                        "detail": "scan_cancelled_by_operator_before_execution",
+                        "experiment_id": _eid,
+                        "cost_coverage_status": "UNKNOWN",
+                    }
+                    results.append({
+                        "schema_version": "qualibug.experiment-execution.v1",
+                        "candidate_id": _text(_defer_row.get("candidate_id")),
+                        "slice_id": _text(
+                            _defer_row.get("slice_id")
+                            or _defer_row.get("behavior_slice_id")
+                        ),
+                        "obligation_id": _oid,
+                        "experiment_id": _eid,
+                        "campaign_id": campaign_id,
+                        "status": "DEFERRED",
+                        "reason_code": "OPERATOR_CANCELLED",
+                        "detail": "scan_cancelled_by_operator_before_execution",
+                        "finding": None,
+                        "execution_receipt": {
+                            "status": "DEFERRED",
+                            "reason_code": "OPERATOR_CANCELLED",
+                            "obligation_id": _oid,
+                            "experiment_id": _eid,
+                            "campaign_id": campaign_id,
+                        },
+                    })
+                    operator_cancelled_count += 1
+                logger.warning(
+                    "batch execution stopped by operator cancel: project=%s "
+                    "campaign=%s deferred_before_execution=%d requested_by=%s",
+                    project,
+                    campaign_id,
+                    operator_cancelled_count,
+                    str(operator_cancel_request.get("requester") or {}),
+                )
+                break
         oid = _text(row.get("obligation_id"))
         eid = _text(row.get("experiment_id"))
         candidate_id = _text(row.get("candidate_id")) or _stable_id("cand", project, oid or index)
@@ -1093,6 +1167,11 @@ def execute_selected_experiments(
                 if dedupe_key:
                     delivered_finding_ids[dedupe_key] = finding
                 findings.append(finding)
+    # ── Operator cancel closure ──
+    # The marker itself is consumed once by the outer mainline entry
+    # (experiment_batch_executor_base) after ALL parallel groups stopped;
+    # consuming here would race other groups' boundary checks. The lease
+    # directory removal still guarantees cleanup when no mainline entry ran.
     # ── Build validation gate summary ──
     from .small_scale_validation_gate import check_validation_gate
     _batch_result = {
@@ -1108,6 +1187,7 @@ def execute_selected_experiments(
         "family_execution_quota": _family_quota,
         "duplicate_delivery_count": duplicate_delivery_count,
         "validation_phase": _phase,
+        "operator_cancelled_count": operator_cancelled_count,
         "findings": findings,
         "results": results,
         "compile_results": compile_results,
@@ -1125,6 +1205,13 @@ def execute_selected_experiments(
         phase=_phase,
     )
     _batch_result["validation_gate"] = _validation_gate
+    if operator_cancel_request:
+        _batch_result["operator_cancelled_receipt"] = {
+            "schema": "qualibug.scan-cancel-request.v1",
+            "requested_at_utc": _text(operator_cancel_request.get("requested_at_utc")),
+            "requester": dict(operator_cancel_request.get("requester") or {}),
+            "deferred_count": operator_cancelled_count,
+        }
 
     # ── SPEC v1.2.2 §12: Attach funnel, attribution, and priority receipts ──
     # Failure is NOT silent — campaign_validation_status must reflect it.

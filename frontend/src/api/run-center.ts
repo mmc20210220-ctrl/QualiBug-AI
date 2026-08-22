@@ -124,6 +124,46 @@ function evidenceCountOf(result: JsonRecord): number {
   return Array.isArray(har.entries) ? har.entries.length : 0;
 }
 
+export type RunCenterCancelResult = {
+  requested: boolean;
+  reason_code: string;
+  message: string;
+};
+
+/**
+ * Request cooperative cancellation of the project's live scan lease. The
+ * backend registers the request against the current lease; honoring happens
+ * at experiment boundaries and is reflected in the final scan receipt — the
+ * response only confirms registration, never a completed stop.
+ */
+export async function cancelActiveScan(projectId: string): Promise<RunCenterCancelResult> {
+  const project = projectId.trim();
+  if (!project) {
+    return { requested: false, reason_code: 'NO_PROJECT', message: '未选择有效项目。' };
+  }
+  const response = await fetchWithAuth('/api/v1/scan/cancel', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ project_id: project }),
+  });
+  let payload: unknown = {};
+  try {
+    payload = await response.json();
+  } catch {
+    payload = {};
+  }
+  const record = recordOf(payload);
+  const message = textOf(record.message);
+  if (!response.ok && !message) {
+    throw new Error(`取消请求失败：HTTP ${response.status}`);
+  }
+  return {
+    requested: record.requested === true,
+    reason_code: textOf(record.reason_code),
+    message: message || (record.requested === true ? '取消请求已登记。' : '当前没有正在运行的检测任务。'),
+  };
+}
+
 export async function runV12ScanFromRunCenter(
   projectId: string,
   options: RunCenterScanOptions = {},

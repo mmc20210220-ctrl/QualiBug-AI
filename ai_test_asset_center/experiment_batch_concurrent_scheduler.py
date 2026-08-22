@@ -532,6 +532,8 @@ def _merge_group_batches(
     flat_execution: dict[str, dict[str, Any]] = {}
     flat_gate: dict[str, dict[str, Any]] = {}
     executed = blocked = harness = cleanup_failures = 0
+    operator_cancelled_count = 0
+    operator_cancelled_receipt: dict[str, Any] = {}
     group_errors: list[str] = []
     group_validation_notes: list[str] = []
     for batch, rows in zip(group_batches, group_selected):
@@ -571,6 +573,13 @@ def _merge_group_batches(
         blocked += int(batch.get("blocked_count") or 0)
         harness += int(batch.get("harness_failure_count") or 0)
         cleanup_failures += int(batch.get("cleanup_failures") or 0)
+        operator_cancelled_count += int(
+            batch.get("operator_cancelled_count") or 0
+        )
+        if not operator_cancelled_receipt and isinstance(
+            batch.get("operator_cancelled_receipt"), dict
+        ):
+            operator_cancelled_receipt = dict(batch["operator_cancelled_receipt"])
     flat_results.sort(key=lambda pair: pair[0])
     results = [row for _, row in flat_results]
 
@@ -616,6 +625,7 @@ def _merge_group_batches(
         "family_execution_quota": family_quota,
         "duplicate_delivery_count": duplicate_delivery_count,
         "validation_phase": phase,
+        "operator_cancelled_count": operator_cancelled_count,
         "findings": findings,
         "results": results,
         "compile_results": flat_compile,
@@ -635,6 +645,8 @@ def _merge_group_batches(
             "group_validation_notes": group_validation_notes,
         },
     }
+    if operator_cancelled_receipt:
+        batch_result["operator_cancelled_receipt"] = operator_cancelled_receipt
     if prioritization_receipt:
         batch_result["prioritization_receipt"] = prioritization_receipt
 
