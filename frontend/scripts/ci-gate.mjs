@@ -42,6 +42,7 @@ async function waitForFrontend(url, server) {
 for (const script of [
   "typecheck",
   "lint",
+  "test",
   "brand:check",
   "test:brand-mark",
   "test:autonomous-ux",

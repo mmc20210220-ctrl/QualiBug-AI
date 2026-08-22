@@ -45,7 +45,7 @@ export type OnboardingProgress = {
   warning: string;
 };
 
-type OnboardingFacts = {
+export type OnboardingFacts = {
   enabledServiceCount: number;
   authCount: number;
   materialActiveCount: number;

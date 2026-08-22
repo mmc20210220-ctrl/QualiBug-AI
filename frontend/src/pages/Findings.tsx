@@ -63,6 +63,7 @@ export function Findings() {
     { label: `待修复 (${failedRegression.length})`, value: 'verify:still_failing' },
     { label: `待回归 (${pendingRegression.length})`, value: 'verify:pending' },
     { label: `已修复 (${passedRegression.length})`, value: 'verify:verified_fixed' },
+    { label: `无法确认 (${inconclusiveRegression.length})`, value: 'verify:inconclusive' },
   ];
 
   const display = [...confirmed]
