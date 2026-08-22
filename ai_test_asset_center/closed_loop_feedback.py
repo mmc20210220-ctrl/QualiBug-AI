@@ -11,10 +11,13 @@ for enterprise-grade storage and cross-round knowledge transfer.
 from __future__ import annotations
 
 import json
+import logging
 import time
 from collections import Counter
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from .customer_delivery_gate import is_customer_deliverable_defect
 from .learning_pattern_bridge import LearningPatternBridge
@@ -69,6 +72,7 @@ def build_closed_loop_context(
             confirmed, project=project, root=root
         )
     except Exception as exc:
+        logger.warning("engine attribution learning failed (closed loop continues): %s", exc)
         engine_attention = {
             "status": "FAILED",
             "reason": f"{type(exc).__name__}:{str(exc)[:120]}",
