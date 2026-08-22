@@ -8,9 +8,6 @@
     "build": "vite build",
     "start": "vite preview --host",
     "lint": "eslint \"src/**/*.{ts,tsx}\" \"vite.config.ts\" \"eslint.config.mjs\" --max-warnings=0",
-    "openapi:export": "cd .. && python -m ai_test_asset_center.phase104_api_contract_exporter --output-dir frontend/openapi/phase104_api_contract",
-    "openapi:gen": "node scripts/openapi/generate.mjs",
-    "openapi:check": "node scripts/openapi/check.mjs",
     "typecheck": "tsc --noEmit",
     "redaction:scan": "node scripts/security/redaction-scan.mjs",
     "audit:check": "node scripts/security/npm-audit-baseline.mjs",
@@ -59,7 +56,6 @@
     "eslint-plugin-react-hooks": "^5.2.0",
     "eslint-plugin-react-refresh": "^0.4.20",
     "globals": "^15.15.0",
-    "openapi-typescript": "7.13.0",
     "typescript": "^5",
     "typescript-eslint": "^8.35.1",
     "vite": "^8.1.1"

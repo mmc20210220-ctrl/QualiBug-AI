@@ -11,7 +11,6 @@ export default tseslint.config(
       "build/**",
       "node_modules/**",
       "e2e/**",
-      "openapi/**",
       "security/**",
       "scripts/**",
       "lint-report.json",
