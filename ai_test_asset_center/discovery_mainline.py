@@ -438,6 +438,66 @@ def assert_result_matches_authority(
         raise MainlineContractError("mainline_result_authority_mismatch")
 
 
+def _existing_findings_fingerprints(items: Any) -> set[str]:
+    """Fingerprint prior findings so the mainline can mark known discoveries.
+
+    Cross-round stability comes from content (title + expected + actual), not a
+    per-run id that changes every execution.  A stable finding_id is preferred
+    when present.
+    """
+    if not items:
+        return set()
+    out: set[str] = set()
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        fid = it.get("finding_id") or it.get("id")
+        if fid:
+            out.add(f"id:{fid}")
+            continue
+        title = str(it.get("title") or "")
+        expected = str(it.get("expected") or (it.get("evidence") or {}).get("expected", ""))
+        actual = str(it.get("actual") or (it.get("evidence") or {}).get("actual", ""))
+        digest = hashlib.sha256(f"{title}|{expected}|{actual}".encode("utf-8")).hexdigest()
+        out.add(f"h:{digest}")
+    return out
+
+
+def _mark_prior_known(result: dict[str, Any], known: set[str]) -> None:
+    """Mark delivery/candidate findings that match a prior round (closed loop).
+
+    This never removes or downgrades a finding: a reproduced bug stays a bug.
+    It only adds an observable prior_known flag plus a closed-loop count so the
+    self-improving loop can tell new from already-known discoveries.
+    """
+    prior = 0
+    new = 0
+    for bucket in ("delivery_occurrences", "candidate_findings"):
+        items = result.get(bucket)
+        if not isinstance(items, list):
+            continue
+        for it in items:
+            if not isinstance(it, dict):
+                continue
+            fid = it.get("finding_id") or it.get("id")
+            if fid and f"id:{fid}" in known:
+                it["prior_known"] = True
+                prior += 1
+                continue
+            title = str(it.get("title") or "")
+            expected = str(it.get("expected") or (it.get("evidence") or {}).get("expected", ""))
+            actual = str(it.get("actual") or (it.get("evidence") or {}).get("actual", ""))
+            digest = hashlib.sha256(f"{title}|{expected}|{actual}".encode("utf-8")).hexdigest()
+            if f"h:{digest}" in known:
+                it["prior_known"] = True
+                prior += 1
+            else:
+                it["prior_known"] = False
+                new += 1
+    result["prior_known_count"] = prior
+    result["new_finding_count"] = new
+
+
 def run_discovery_mainline(
     inputs: DiscoveryMainlineInputs,
     *,
@@ -519,5 +579,8 @@ def run_discovery_mainline(
     obligations_pack = _plan_value(plan, "obligations")
     if isinstance(obligations_pack, dict) and obligations_pack:
         result.setdefault("obligations", _public_planning_pack(obligations_pack))
-    result["mainline_runner_receipt"] = receipt
-    return result
+        result["mainline_runner_receipt"] = receipt
+        known_set = _existing_findings_fingerprints(inputs.existing_findings)
+        if known_set:
+            _mark_prior_known(result, known_set)
+        return result

@@ -184,7 +184,7 @@ class SelfImprovingSweep:
         except Exception:
             return {}
 
-    def _observe(self) -> tuple[list[dict], int, float]:
+    def _observe(self, existing_findings: list[dict] | None = None) -> tuple[list[dict], int, float]:
         _tick("observe", "Starting unified mainline discovery...")
         last_error: Exception | None = None
         result: dict[str, Any] | None = None
@@ -217,7 +217,7 @@ class SelfImprovingSweep:
                     self.api,
                     base_url=self.base_url,
                     campaign_context=ctx,
-                    # existing_findings omitted -> closed-loop NOT activated (G1)
+                    existing_findings=list(existing_findings or []),
                 )
                 if not isinstance(result, dict):
                     raise DiscoveryRunError("run_v12_pipeline returned a non-dict result")
@@ -467,7 +467,7 @@ class SelfImprovingSweep:
         rd = min(start_round, self.MAX_ROUNDS)
         _tick("round_start", f"Round {rd}", rd)
 
-        findings, bugs, inconclusive_rate = self._observe()
+        findings, bugs, inconclusive_rate = self._observe(existing_findings=self._prior_findings)
         _tick("observed", f"Round {rd}: {bugs} bugs, {inconclusive_rate:.0%} inconclusive", rd)
         actions = self._diagnose(findings)
         applied = self._improve(actions) if actions else 0
@@ -475,7 +475,7 @@ class SelfImprovingSweep:
         if applied > 0:
             _console(f"\n  [RUN] Re-running after {applied} improvements...")
             _tick("re_observe", f"Re-running after {applied} improvements", rd)
-            findings2, bugs2, rate2 = self._observe()
+            findings2, bugs2, rate2 = self._observe(existing_findings=self._prior_findings)
             verdict = self._verify_improvement(inconclusive_rate, rate2, bugs, bugs2)
             _tick("verified", f"Before: {inconclusive_rate:.0%} → After: {rate2:.0%}, Verdict: {verdict}", rd)
             _console(f"  [STATS] {inconclusive_rate:.0%} -> {rate2:.0%} inconclusive | {bugs} -> {bugs2} bugs | {verdict}")
@@ -493,6 +493,9 @@ class SelfImprovingSweep:
             final_rate = inconclusive_rate
 
         self._save_progress()
+        # G1 closed loop: carry this round's confirmed findings into the next
+        # round so the mainline can mark them prior_known instead of rediscovering.
+        self._accumulate_prior(findings)
         # Do not sum the same rediscovered findings across local rounds.
         # A run's business value is the unique/latest validated candidate count,
         # while repeated rounds are only attempts to improve evidence quality.
@@ -533,6 +536,7 @@ class SelfImprovingSweep:
     def run(self) -> dict:
         global _ACTIVE_RUNTIME
         runtime = LoopRuntimeSession(self.project_id, self.output_dir)
+        self._prior_findings: list[dict] = []
         try:
             runtime.acquire()
         except LoopBusyError as exc:
@@ -605,6 +609,27 @@ class SelfImprovingSweep:
         finally:
             _ACTIVE_RUNTIME = None
             runtime.release()
+
+
+def _finding_fingerprint(f: dict) -> str:
+    fid = f.get("finding_id") or f.get("id")
+    if fid:
+        return f"id:{fid}"
+    title = str(f.get("title") or "")
+    expected = str(f.get("expected") or (f.get("evidence") or {}).get("expected", ""))
+    actual = str(f.get("actual") or (f.get("evidence") or {}).get("actual", ""))
+    return "h:" + hashlib.sha256(f"{title}|{expected}|{actual}".encode("utf-8")).hexdigest()
+
+
+def _accumulate_prior(self, findings) -> None:
+    seen = {_finding_fingerprint(f) for f in self._prior_findings}
+    for f in findings:
+        if not isinstance(f, dict):
+            continue
+        fp = _finding_fingerprint(f)
+        if fp not in seen:
+            seen.add(fp)
+            self._prior_findings.append(dict(f))
 
 
 def _save_to_memory(result: dict, actions: list, output_dir: Path | str | None = None):
