@@ -102,14 +102,29 @@ def apply_scan_post_hooks(
         return result
     _install_builtin_scan_post_hooks()
     payload = result
+    # P1 性能打点：逐钩子计时入 scan_phase_timings，收尾热点分布可追溯。
+    import time as _time
+
+    phase_timings = dict(payload.get("scan_phase_timings") or {})
+    hook_timings: dict[str, float] = {}
     for name, hook in list(_SCAN_POST_HOOKS.items()):
         if not callable(hook):
             continue
+        _hook_start = _time.perf_counter()
         try:
             next_payload = hook(payload, project=project, root=root)
         except Exception:
             # A post-hook must never mask the original scan result.
+            hook_timings[name] = round(_time.perf_counter() - _hook_start, 3)
             continue
+        hook_timings[name] = round(_time.perf_counter() - _hook_start, 3)
         if isinstance(next_payload, dict):
             payload = next_payload
+    try:
+        existing = payload.get("scan_phase_timings")
+        merged = dict(existing) if isinstance(existing, dict) else {}
+        merged["post_hooks"] = hook_timings
+        payload["scan_phase_timings"] = merged
+    except Exception:
+        pass
     return payload

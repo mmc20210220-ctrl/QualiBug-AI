@@ -185,6 +185,18 @@ from .scan_impl_prepare import prepare_scan_before_pipeline  # noqa: F401
 from .scan_result_store import write_scan_result  # noqa: F401
 
 
+def _phase_time(result: dict[str, Any], key: str, started: float) -> None:
+    """P1 收尾打点：段耗时并入 scan_phase_timings（纯观测，绝不影响结果）。"""
+    try:
+        timings = result.get("scan_phase_timings")
+        if not isinstance(timings, dict):
+            timings = {}
+            result["scan_phase_timings"] = timings
+        timings[key] = int((time.perf_counter() - started) * 1000)
+    except Exception:
+        pass
+
+
 def _verified_archive_chain(
     project: str,
     root: Optional[Path],
@@ -407,6 +419,7 @@ def _scan_impl(project: str, root: Optional[Path] = None, *, prd_text: str = "",
     # 本 run 新交付 ∪ 档案中未退休的历史发现（archive_entry 标记）。只有
     # 「目标已修复」信号（连续多 run 确认）才退休——届时没发现才是正常的。
     # 无论 save_report 与否都执行；失败时 receipt 为 FAILED（带原因，绝不静默）。
+    _t_archive = time.perf_counter()
     confirmed, verified_archive_receipt = _verified_archive_chain(
         project,
         root,
@@ -414,6 +427,7 @@ def _scan_impl(project: str, root: Optional[Path] = None, *, prd_text: str = "",
         campaign=campaign,
         findings=confirmed,
     )
+    _phase_time(result, "archive_merge_ms", _t_archive)
     # ── Report split: current formal / archive / candidate ──
     # Score, coverage, the headline findings count and the grade may only
     # reflect THIS run's formal deliveries. Verified-archive hold-overs
@@ -652,6 +666,7 @@ def _scan_impl(project: str, root: Optional[Path] = None, *, prd_text: str = "",
     # (permission/isolation/money/concurrency) slices were silently unexecuted. ──
     coverage_honesty, grade = _apply_coverage_honesty_guard(v12, grade, execution_status)
     duration_ms = int((time.time() - started) * 1000)
+    _phase_time(result, "planning_execution_ms", started)
     # ── Honest data-layer verification summary aggregated from real findings ──
     _db_backed = [f for f in confirmed if isinstance(f, dict) and isinstance(f.get("db_evidence"), dict) and f["db_evidence"].get("status") == "captured"]
     _db_changed = [f for f in _db_backed if f["db_evidence"].get("any_change")]
@@ -1009,7 +1024,9 @@ def _scan_impl(project: str, root: Optional[Path] = None, *, prd_text: str = "",
     try:
         from .chain_positioning import build_chain_positioning
 
+        _t_chain = time.perf_counter()
         result["discovery_chain_positioning"] = build_chain_positioning(result)
+        _phase_time(result, "chain_positioning_ms", _t_chain)
     except Exception as _chain_exc:
         result["discovery_chain_positioning"] = {
             "schema_version": "qualibug.discovery-chain-positioning.v1",
@@ -1076,14 +1093,19 @@ def _scan_impl(project: str, root: Optional[Path] = None, *, prd_text: str = "",
         # redact_and_validate rewrites them, reseals the ledger fingerprint
         # and re-derives the fingerprint-bound authority artifacts so the
         # persisted envelope stays self-consistent.
+        _t_redact = time.perf_counter()
         _report_payload, _redaction_receipt = _redact_payload(_report_payload)
+        _phase_time(result, "report_redact_ms", _t_redact)
+        _t_report_write = time.perf_counter()
         result["report_artifactization"] = write_intelligence_report(
             report_path,
             _report_payload,
             root=root,
             bundle_manifest_ref=_report_bundle_ref,
         )
+        _phase_time(result, "report_write_ms", _t_report_write)
         result["report_path"] = str(report_path)
+        _t_aux = time.perf_counter()
         result["discovery_funnel_report_paths"] = write_funnel_report_files(
             result,
             output,
@@ -1105,6 +1127,8 @@ def _scan_impl(project: str, root: Optional[Path] = None, *, prd_text: str = "",
             result.setdefault("stage_failures", []).append(
                 f"FACT_TRACKING_REPORT_FAILED:{type(exc).__name__}"
             )
+        finally:
+            _phase_time(result, "aux_reports_ms", _t_aux)
     # LLM call observability: aggregated per-call stats mounted on the scan
     # result (qualibug.llm-observability.v1). Metadata only — never prompt or
     # model-output content. Fail-soft: an observability failure must never
@@ -1141,15 +1165,22 @@ def _scan_impl(project: str, root: Optional[Path] = None, *, prd_text: str = "",
         int((time.time() - _persist_started) * 1000),
         _persist_timing,
     )
+    result.setdefault("scan_phase_timings", {})["persist_result_ms"] = int(
+        (time.time() - _persist_started) * 1000
+    )
     increment_scan_counter(output_root / "scan_counter.json")
+    _t_customer = time.perf_counter()
     _persist_customer_ready_static_artifacts(project, root, result)
+    _phase_time(result, "customer_static_artifacts_ms", _t_customer)
 
     # ── Phase 108R: Auto-generate Issue Lifecycle Center after scan ──
     # Acceptance Criterion 12: lifecycle center aggregates discovery + regression
     # states and auto-migrates bug status based on evidence.
     try:
         from .issue_lifecycle_center import build_issue_lifecycle_center
+        _t_lifecycle = time.perf_counter()
         lifecycle = build_issue_lifecycle_center(project, root, options={"auto_generate_missing": False})
+        _phase_time(result, "issue_lifecycle_ms", _t_lifecycle)
         result["lifecycle_center"] = {
             "ref": f"platform_outputs/{_safe_project(project)}/issue_lifecycle/issue_lifecycle.json",
             "summary": lifecycle.get("summary", {}),
@@ -1422,8 +1453,20 @@ def scan(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_d
         campaign_context=campaign_context,
     )
     resolved_root = Path(root or Path.cwd())
+    _t_hooks_total = time.perf_counter()
     applied = apply_scan_post_hooks(
         result, project=str(project or "").strip(), root=resolved_root
+    )
+    _hooks_total_ms = int((time.perf_counter() - _t_hooks_total) * 1000)
+    if isinstance(applied, dict):
+        applied.setdefault("scan_phase_timings", {})[
+            "post_hooks_total_ms"
+        ] = _hooks_total_ms
+    # WARNING 级汇总：post-hooks 在持久化之后运行，其耗时必须走日志留痕
+    _LOGGER.warning(
+        "scan_tail_timing project=%s post_hooks_total_ms=%s",
+        project,
+        _hooks_total_ms,
     )
     if applied_scratch_receipt is not None:
         applied["scratch_ttl_receipt"] = applied_scratch_receipt
