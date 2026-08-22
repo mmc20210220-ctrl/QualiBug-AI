@@ -547,3 +547,70 @@ class TestLinkerInputBudget:
             if req.get("max_input_tokens") == 5000
         ]
         assert budgeted_requests, "rule batches must carry the declared budget"
+
+
+# ---------------------------------------------------------------------------
+# 链接结果资产化（Tier-0 资产原生复用）：指纹未变零 LLM，变更仅重链该规则
+# ---------------------------------------------------------------------------
+
+class TestLinkAssetReuse:
+    def test_second_run_reuses_asset_links_with_zero_llm_calls(self):
+        client = FakeAgentClient(_linked_response())
+        asset = _asset()
+        asset.pop("state_machines", None)
+        enriched, first = enrich_knowledge_asset_with_agent_relationships(
+            asset, client=client,
+        )
+        assert first["asset_reuse"]["hit_rule_count"] == 0
+        assert len(client.requests) >= 1
+
+        counting = _CountingAgentClient(_linked_response())
+        _, second = enrich_knowledge_asset_with_agent_relationships(
+            enriched, client=counting,
+        )
+        # 指纹未变：零 provider 调用，命中资产权威链接
+        assert counting.complete_json_calls == 0
+        assert second["asset_reuse"]["hit_rule_count"] == 1
+        assert second["asset_reuse"]["miss_rule_count"] == 0
+        assert second["asset_reuse"]["reused_rule_ids"] == ["rule-conservation"]
+        # 权威边仍在富集结果中
+        edges = [
+            row for row in enriched.get("relationships", [])
+            if row.get("source_id") == "agent_semantic_linker"
+            and row.get("status") == "accepted"
+        ]
+        assert edges
+
+    def test_rule_text_change_invalidates_only_that_rule(self):
+        client = FakeAgentClient(_linked_response())
+        asset = _asset()
+        asset.pop("state_machines", None)
+        enriched, _ = enrich_knowledge_asset_with_agent_relationships(
+            asset, client=client,
+        )
+        mutated = dict(enriched)
+        rules = [dict(row) for row in mutated["rule_library"]]
+        rules[0]["semantic_frame"] = dict(rules[0]["semantic_frame"])
+        rules[0]["semantic_frame"]["behavior"] = (
+            "已变更的行为语义：库存扣减必须与出库单联动。"
+        )
+        mutated["rule_library"] = rules
+
+        counting = _CountingAgentClient(_linked_response())
+        _, receipt = enrich_knowledge_asset_with_agent_relationships(
+            mutated, client=counting,
+        )
+        # 仅该规则重链；无其它规则可重链
+        assert receipt["asset_reuse"]["hit_rule_count"] == 0
+        assert receipt["asset_reuse"]["miss_rule_count"] == 1
+
+
+class _CountingAgentClient(FakeAgentClient):
+    def __init__(self, response: dict) -> None:
+        super().__init__(response)
+        self.complete_json_calls = 0
+
+    def complete_json(self, **kwargs: object) -> dict:
+        self.complete_json_calls += 1
+        self.requests.append(dict(kwargs))
+        return self.response

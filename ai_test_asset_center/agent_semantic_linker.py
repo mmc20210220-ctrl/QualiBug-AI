@@ -1675,6 +1675,30 @@ def enrich_knowledge_asset_with_agent_relationships(
     cache_miss_count = 0
     responses_by_rule: dict[str, dict[str, Any]] = {}
     pending: list[dict[str, Any]] = []
+    # ── Tier-0：资产原生复用（链接结果资产化）───────────────────────────
+    # 已接受的 linker 边随知识资产持久化，并携带其单元指纹。规则/接口/
+    # 事实/模型任一未变时，本轮直接复用资产中的权威边，零 LLM 消耗——
+    # 与《企业理解生命周期契约》一致：输入未变的理解产物绝不重算。
+    authoritative_unit_keys_by_rule: dict[str, set[str]] = {}
+    for row in _list(knowledge_asset.get("relationships")):
+        if not isinstance(row, dict):
+            continue
+        stored_key = _text(row.get("link_unit_fingerprint"))
+        if not stored_key:
+            continue
+        if (
+            _text(row.get("source_id")) != "agent_semantic_linker"
+            or _text(row.get("status")) != "accepted"
+        ):
+            continue
+        rule_key = _text(row.get("from"))
+        if rule_key:
+            authoritative_unit_keys_by_rule.setdefault(rule_key, set()).add(
+                stored_key
+            )
+    asset_reuse_hit_count = 0
+    asset_reuse_miss_count = 0
+    asset_reuse_rule_ids: list[str] = []
     for unit in units:
         key = _unit_cache_key(
             unit["fingerprint"],
@@ -1683,6 +1707,12 @@ def enrich_knowledge_asset_with_agent_relationships(
             model_fingerprint,
         )
         unit["_cache_key"] = key
+        if key in authoritative_unit_keys_by_rule.get(unit["rule_id"], ()):
+            # 资产中已有同指纹的权威链接：复用，不进任何 LLM 队列。
+            asset_reuse_hit_count += 1
+            asset_reuse_rule_ids.append(unit["rule_id"])
+            continue
+        asset_reuse_miss_count += 1
         cached = cache.get(key)
         if cached is not None:
             responses_by_rule[unit["rule_id"]] = cached
@@ -1690,6 +1720,9 @@ def enrich_knowledge_asset_with_agent_relationships(
         else:
             pending.append(unit)
             cache_miss_count += 1
+    unit_key_by_rule = {
+        unit["rule_id"]: unit.get("_cache_key") for unit in units
+    }
 
     # --- Tier 2: LLM for pending units, batched and independently failing ---
     failed_units: list[dict[str, Any]] = []
@@ -2148,6 +2181,13 @@ def enrich_knowledge_asset_with_agent_relationships(
                     "interface": interface_id,
                     "derivation": "agent_semantic_mapping",
                 })[:20],
+                # 链接结果资产化：边携带生成时的单元指纹，供下一轮 Tier-0
+                # 资产原生复用判定（指纹未变 → 复用，零 LLM）。
+                "link_unit_fingerprint": (
+                    unit_key_by_rule.get(subject_id)
+                    if subject_kind == "rule"
+                    else None
+                ),
                 "from": subject_id,
                 "to": interface_id,
                 "relation": relation,
@@ -2457,6 +2497,13 @@ def enrich_knowledge_asset_with_agent_relationships(
                 "supporting_fact_fingerprints",
                 "model_config_fingerprint",
             ],
+        },
+        "asset_reuse": {
+            # Tier-0 资产原生复用：命中即本轮零 LLM 的规则数
+            "hit_rule_count": asset_reuse_hit_count,
+            "miss_rule_count": asset_reuse_miss_count,
+            "reused_rule_ids": asset_reuse_rule_ids,
+            "invalidation_key": "link_unit_fingerprint",
         },
         "input_budget": {
             "budget_tokens": input_budget,
