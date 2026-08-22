@@ -1041,7 +1041,12 @@ class AutonomousDiscoveryEngine:
         real_ids = {}
         for key in sorted(vm.keys()):
             value = str(vm[key])
-            matches = re.findall(r'(GET|POST|PUT|DELETE)\s+(/(?:api|master|production|inventory|quality|planning|sales|purchase|warehouse|report|system|admin)/[\w\-\/{}]+)', value, re.IGNORECASE)
+            # Industry-neutral path extraction: match any method + path-like
+            # token, then let ``_resolve_call`` validate against the real
+            # route_map. No hardcoded business prefixes (manufacturing/ERP
+            # vocabulary) — the previous regex baked in master/production/
+            # inventory/quality/planning/sales/purchase/warehouse.
+            matches = re.findall(r'(GET|POST|PUT|DELETE)\s+(/[\w\-/{}]+)', value, re.IGNORECASE)
             for method, llm_path in matches:
                 resolved = self._resolve_call(llm_path, method.upper(), route_map)
                 if resolved:
@@ -1307,9 +1312,19 @@ class AutonomousDiscoveryEngine:
                             if method in key and any(kw in key_lower for kw in keywords[:10] if len(kw) >= 2):
                                 vm = {"step1": key}
                                 break
-                    # Last resort: try any GET on a common entity
+                    # Last resort: pick a GET route whose path segment looks
+                    # like a collection entity. Candidates are derived from the
+                    # target's own route_map (no hardcoded industry vocabulary
+                    # such as material/bom/order/inventory/routing/work).
                     if not vm.get("step1"):
-                        for entity_name in ("material", "bom", "order", "inventory", "routing", "work"):
+                        _entity_segments = []
+                        for _key in (route_map or {}):
+                            if "GET" in _key:
+                                _segs = _key.split(" ", 1)[-1].strip("/").split("/")
+                                for _seg in _segs:
+                                    if _seg and "{" not in _seg:
+                                        _entity_segments.append(_seg)
+                        for entity_name in _entity_segments:
                             for key in (route_map or {}):
                                 if entity_name in key.lower() and "GET" in key:
                                     vm = {"step1": key}
@@ -1392,7 +1407,10 @@ class AutonomousDiscoveryEngine:
                                     fields={},
                                     source="auto_constructed",
                                 )
-                                for fname in ["name", "code", "id", "status", "materialCode"]:
+                                # Neutral, industry-agnostic fallback fields
+                                # only — materialCode (and other trade-specific
+                                # field names) must never be hardcoded.
+                                for fname in ["name", "code", "id", "status"]:
                                     fname_in_h = h.get(fname) or h.get(f"{entity_type}_{fname}")
                                     if fname_in_h:
                                         fixture_obj.fields[fname] = fname_in_h

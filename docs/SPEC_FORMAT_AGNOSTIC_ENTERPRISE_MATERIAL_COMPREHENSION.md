@@ -66,7 +66,7 @@
 2. **Fail loud**:抽取为空必须产出显式 coverage gap,禁止 `except Exception` 吞错后继续(违反 AGENTS.md 第 1 条)。
 3. 每次编辑 Python 文件后立即语法检查:
    `python -c "import ast; ast.parse(open('path','r',encoding='utf-8').read()); print('OK')"`
-4. 关键配置地板不得移动:`discovery_engine.py` `timeout_seconds >= 300`、`max_tokens >= 32768`;`stage_reason_all_v2.py` `MAX_HYPOTHESES = 40`、`max_workers = 4`。
+4. 关键配置地板不得移动:`discovery_engine.py` `timeout_seconds >= 300`、`max_tokens >= 32768`;`stage_reason_all_v2.py` `MAX_HYPOTHESES = 64`、`max_workers = 4`。
 5. 行业中立:列头/关键词识别只允许"字段定义表"的**通用语义词**(field/column/type/description/constraint/required 及中英文常见变体),不得含任何行业业务词汇。
 6. LLM 调用必须走既有 LLM 客户端与预算治理,不得新建旁路调用;prompt 中不得出现行业名、客户名、靶场名、GT 相关内容。
 7. 新增第三方依赖须写入 `requirements.txt`;Excel 解析推荐 `openpyxl`,缺库时必须显式报缺口,不得静默跳过。

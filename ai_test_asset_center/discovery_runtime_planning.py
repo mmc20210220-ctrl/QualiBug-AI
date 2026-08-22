@@ -527,7 +527,7 @@ def build_discovery_plan(
     from .enterprise_knowledge_center import (
         build_enterprise_business_knowledge_asset,
         build_runtime_source_knowledge_overlay,
-        load_enterprise_business_knowledge_asset,
+        load_enterprise_business_knowledge_asset_ensuring_current,
         merge_knowledge_asset_overlay,
         project_knowledge_world_model,
     )
@@ -543,38 +543,44 @@ def build_discovery_plan(
         in {"1", "true", "yes"}
     )
 
-    asset = load_enterprise_business_knowledge_asset(
+    _understanding_options = {
+        # SPEC §12/§13: rule-extraction mode is operator-declared via
+        # campaign context. Default augment (default-ON comprehension):
+        # validated explicit LLM rule candidates are promoted through the
+        # deterministic evidence/no-conflict/traceability gates. An explicit
+        # rule_promotion_gates_met=False is the kill switch → shadow.
+        "semantic_rule_extraction_mode": (
+            "off"
+            if _semantic_recall_disabled
+            else _text(
+                inputs.campaign_context.get("semantic_rule_extraction_mode")
+            )
+            or "augment"
+        ),
+        "rule_promotion_gates_met": inputs.campaign_context.get(
+            "rule_promotion_gates_met"
+        ),
+        "enable_semantic_extraction": (
+            False
+            if _semantic_recall_disabled
+            else inputs.campaign_context.get("enable_semantic_extraction")
+            if inputs.campaign_context.get("enable_semantic_extraction")
+            is not None
+            else True
+        ),
+    }
+    # Run-start freshness gate (AGENTS.md principle 16): consume a pinned
+    # understanding snapshot, but if the active source material has changed
+    # since the snapshot was built, drive an event-scoped incremental refresh
+    # first. A load with no existing asset falls through to a full build.
+    asset = load_enterprise_business_knowledge_asset_ensuring_current(
         inputs.project,
         inputs.root,
+        options=_understanding_options,
     ) or build_enterprise_business_knowledge_asset(
         inputs.project,
         inputs.root,
-        options={
-            # SPEC §12/§13: rule-extraction mode is operator-declared via
-            # campaign context. Default augment (default-ON comprehension):
-            # validated explicit LLM rule candidates are promoted through the
-            # deterministic evidence/no-conflict/traceability gates. An explicit
-            # rule_promotion_gates_met=False is the kill switch → shadow.
-            "semantic_rule_extraction_mode": (
-                "off"
-                if _semantic_recall_disabled
-                else _text(
-                    inputs.campaign_context.get("semantic_rule_extraction_mode")
-                )
-                or "augment"
-            ),
-            "rule_promotion_gates_met": inputs.campaign_context.get(
-                "rule_promotion_gates_met"
-            ),
-            "enable_semantic_extraction": (
-                False
-                if _semantic_recall_disabled
-                else inputs.campaign_context.get("enable_semantic_extraction")
-                if inputs.campaign_context.get("enable_semantic_extraction")
-                is not None
-                else True
-            ),
-        },
+        options=_understanding_options,
     )
     runtime_source_overlay = build_runtime_source_knowledge_overlay(
         prd_text=inputs.prd_text,
@@ -805,7 +811,18 @@ def build_discovery_plan(
             "installed": install_persistence_surface(),
         })
 
-    behavior_ir = build_behavior_ir_from_knowledge_asset(
+    # Plan-time closure: build the canonical IR via the same semantic-binding
+    # wrapper the adaptive/expansion path uses, so source-derived and
+    # runtime-probe-derived contracts (performance/stability/event — 档位 C/D)
+    # written onto ``asset`` by the derivation steps above are actually
+    # compiled into IR invariants here.  Using the bare
+    # ``build_behavior_ir_from_knowledge_asset`` skipped ``bind_source_*_contracts``
+    # and left those open-class obligations unreachable on the plan-time path.
+    # Imported locally to avoid a circular import with discovery_runtime_semantic_binding.
+    from .discovery_runtime_semantic_binding import (
+        build_behavior_ir_with_semantic_operation_bindings,
+    )
+    behavior_ir = build_behavior_ir_with_semantic_operation_bindings(
         asset,
         project_id=inputs.project,
         source_snapshot_hash=_text(

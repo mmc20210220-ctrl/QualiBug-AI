@@ -73,7 +73,7 @@ POST /api/v1/scan → __main__.scan() → run_v12_pipeline → discovery_mainlin
 3. 零义务 / 全 BLOCKED 的运行保持可见 `BLOCKED`,不得被解释为"无缺陷"。
 4. 每次编辑 Python 文件后立即运行语法检查:
    `python -c "import ast; ast.parse(open('path/to/file.py', encoding='utf-8').read()); print('OK')"`
-5. 关键配置地板不得移动:`discovery_engine.py` `timeout_seconds >= 300`、`max_tokens >= 32768`;`stage_reason_all_v2.py` `MAX_HYPOTHESES = 40`、`max_workers = 4`。
+5. 关键配置地板不得移动:`discovery_engine.py` `timeout_seconds >= 300`、`max_tokens >= 32768`;`stage_reason_all_v2.py` `MAX_HYPOTHESES = 64`、`max_workers = 4`。
 6. 运行时绑定解析必须遵守既有合约:占位符只能通过源声明的 `GET`/`HEAD` 解析器 + control actor 物化,发 fingerprint-only binding receipt;禁止发明标识符、禁止隐藏种子读。
 7. 写探针只对显式声明的非生产目标;一切写经 `target_policy` + 治理沙箱(既有路径,不得绕过)。
 8. **发现能力开放性**:Bug 类型(API/UI/性能/权限/守恒/并发/……)只是事后归类标签,发现由不变量 + 系统空间坐标变化驱动。接线实现不得引入按 Bug 类型白名单过滤实验或 finding 的逻辑;算子适用性、组合过滤、配额调度只能基于绑定完备性、来源证据、覆盖缺口与预算,不能基于"预期 Bug 类型"筛选。机制配额(如权限实验占比 ≤30%)是防止单类垄断的下限保护,不是类型上限。
