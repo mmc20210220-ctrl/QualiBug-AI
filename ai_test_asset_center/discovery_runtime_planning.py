@@ -2376,12 +2376,21 @@ def build_discovery_plan(
             "error": f"{type(exc).__name__}: {str(exc)[:200]}",
         }
 
+    # Breadth-loss visibility (原则14): enumerate every known risk family for
+    # this target and record applicable vs honest-GAP-with-reason, so a family
+    # that cannot fire is reported rather than silently dropped. Built from the
+    # fully-enriched obligations list (authoritative set at this point).
+    from .family_coverage_ledger import build_family_coverage_ledger
+
+    family_coverage_ledger = build_family_coverage_ledger({"obligations": obligations})
+
     return DiscoveryPlanningBundle(
         mainline_run=contract,
         behavior_ir=behavior_ir,
         obligations={
             **obligation_pack,
             "obligations": obligations,
+            "family_coverage_ledger": family_coverage_ledger,
             "obligation_identity_receipt": _obligation_identity_receipt,
             "behavior_ir_coverage_report": coverage_report,
             "state_audit_report": state_audit_report,

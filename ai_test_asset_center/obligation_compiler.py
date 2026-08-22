@@ -20,11 +20,16 @@ def compile_obligations_from_behavior_ir(
     compiled = _base.compile_obligations_from_behavior_ir(
         behavior_ir, root=root, project=project, target_service_name=target_service_name
     )
-    return append_operation_schema_validation_seeds(
+    seeded = append_operation_schema_validation_seeds(
         compiled,
         behavior_ir=behavior_ir,
         compiler_base=_base,
     )
+    # Breadth-loss visibility (原则14) is attached downstream in
+    # build_discovery_plan, where the fully-enriched obligations list is the
+    # authoritative set — attaching here would read the obligations before the
+    # schema-seed pass rebuilds them.
+    return seeded
 
 
 def __getattr__(name: str) -> Any:
