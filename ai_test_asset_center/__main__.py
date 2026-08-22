@@ -427,7 +427,9 @@ def _scan_impl(project: str, root: Optional[Path] = None, *, prd_text: str = "",
         campaign=campaign,
         findings=confirmed,
     )
-    _phase_time(result, "archive_merge_ms", _t_archive)
+    # result 在此尚未创建（首个赋值在 v12 汇总之后）——先存局部，
+    # 待 result 诞生后再并入 scan_phase_timings。
+    _archive_merge_ms = int((time.perf_counter() - _t_archive) * 1000)
     # ── Report split: current formal / archive / candidate ──
     # Score, coverage, the headline findings count and the grade may only
     # reflect THIS run's formal deliveries. Verified-archive hold-overs
@@ -666,7 +668,8 @@ def _scan_impl(project: str, root: Optional[Path] = None, *, prd_text: str = "",
     # (permission/isolation/money/concurrency) slices were silently unexecuted. ──
     coverage_honesty, grade = _apply_coverage_honesty_guard(v12, grade, execution_status)
     duration_ms = int((time.time() - started) * 1000)
-    _phase_time(result, "planning_execution_ms", started)
+    # result 尚未创建：先存局部，待 result 诞生后并入 scan_phase_timings。
+    _planning_execution_ms = duration_ms
     # ── Honest data-layer verification summary aggregated from real findings ──
     _db_backed = [f for f in confirmed if isinstance(f, dict) and isinstance(f.get("db_evidence"), dict) and f["db_evidence"].get("status") == "captured"]
     _db_changed = [f for f in _db_backed if f["db_evidence"].get("any_change")]
@@ -1165,6 +1168,8 @@ def _scan_impl(project: str, root: Optional[Path] = None, *, prd_text: str = "",
         int((time.time() - _persist_started) * 1000),
         _persist_timing,
     )
+    result.setdefault("scan_phase_timings", {})["archive_merge_ms"] = _archive_merge_ms
+    result.setdefault("scan_phase_timings", {})["planning_execution_ms"] = _planning_execution_ms
     result.setdefault("scan_phase_timings", {})["persist_result_ms"] = int(
         (time.time() - _persist_started) * 1000
     )
