@@ -50,6 +50,7 @@ The repository root must stay clean: it holds only product code, configuration, 
    **Fail-Fast 硬性禁区（根因修复后登记的禁止模式）：** 以下「吞异常 / 伪信号」模式已实现为禁止项，重构时不得复现：
    - `binding_conflict_resolver.py` / `binding_builder.py` 的 `ledger.promote(...)` / `auto_promote(...)` 不得以 `except ValueError: pass` 吞掉非法状态转换——绑定提升失败必须 `logger.warning` 可见，且 `resolve_conflict` / `detect_and_resolve_all` 以「提升是否实际生效」而非「是否调用过」计数（否则产出假「已解决」）。
    - `oracle_engine.py` 的 Oracle 执行崩溃（任意 `except Exception`）**不得**包装成带 `violated_rule` / `severity` / `confidence` 的「违规」形状结果。`OracleResult` 现已携带 `is_finding: bool = True` 字段，`to_dict()` 暴露它；崩溃路径必须产出 `is_finding=False` 的纯诊断错误（明确非业务违规、不计入已确认 finding），下游消费方应以 `is_finding` 过滤。
+   - `discovery_runtime_planning.py` 的契约/覆盖单元派生（`derive_source_contracts` / `derive_runtime_probe_contracts` / `derive_runtime_probe_event_contracts` / `build_coverage_units`）崩溃时**不得**仅停留在人类可读的 `FAILED` receipt——必须把受影响的 risk family 经 `family_coverage_ledger.build_family_coverage_ledger(..., derivation_failures=, coverage_unit_failed=)` 标记为机器可检查的 `DERIVATION_FAILED`（而非 `NOT_REQUESTED` 假「无源契约」），使「派生崩溃导致的广度损失」与「源确实无契约」可区分。
 2. Fix the Cause, Not the Symptom / Don't Paper Over Bugs：当一个问题出现时，不要用各种 small fix、针对性补丁来掩盖它。必须定位真实根因，彻底修复。在 bug 上糊纸只会让系统积累你不知道的危险暗病。
 3. Make It Observable：即使问题很难定位，也绝不要偷懒做表面修复。应该给项目增加充分的日志和可观测性，保证下次问题再现时你有足够信息去定位。问题无法修复时，只需要诚实告诉我信息不足、需新增日志，不要假装修好了。
 4. Design for Debugging / Traceability：始终注意在关键路径上给自己留足排查日志，确保每一个关键节点都是可追溯的。

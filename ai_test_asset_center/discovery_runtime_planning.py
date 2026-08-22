@@ -16,6 +16,28 @@ from typing import Any
 
 _planning_logger = logging.getLogger("qualibug.discovery_planning")
 
+# Which risk families depend on which derivation step.  When a step crashes
+# (FAILED receipt) those families' breadth loss must be reported as
+# DERIVATION_FAILED (a crash), NOT as "no contract in source" (NOT_REQUESTED).
+# Product-internal coverage metadata only — no business/industry terms (原则6).
+_DERIVATION_FAMILY_MAP: dict[str, tuple[str, ...]] = {
+    "derive_source_contracts": (
+        "performance_latency", "stability_reliability", "event_delivery_consistency",
+    ),
+    "derive_runtime_probe_contracts": (
+        "performance_latency", "stability_reliability",
+    ),
+    "derive_runtime_probe_event_contracts": (
+        "event_delivery_consistency",
+    ),
+}
+
+
+def _record_derivation_failure(store: dict[str, str], step_key: str, exc: Exception) -> None:
+    reason = f"{type(exc).__name__}: {str(exc)[:200]}"
+    for fam in _DERIVATION_FAMILY_MAP.get(step_key, ()):
+        store.setdefault(fam, reason)
+
 from .adaptive_discovery_planner import (
     build_agent_intent_plan,
     plan_obligation_round,
@@ -691,6 +713,7 @@ def build_discovery_plan(
         "status": "SKIPPED",
         "reason": "derivation_not_run",
     }
+    derivation_failures: dict[str, str] = {}
     try:
         from .contract_auto_derivation import derive_source_contracts
 
@@ -709,6 +732,7 @@ def build_discovery_plan(
             "status": "FAILED",
             "reason": f"{type(exc).__name__}:{str(exc)[:160]}",
         }
+        _record_derivation_failure(derivation_failures, "derive_source_contracts", exc)
     # ── Runtime-probe contract derivation (档位 D breadth closure) ──
     # performance_latency / stability_reliability were only reachable from
     # source-declared contracts (档位 C).  For a doc-less unfamiliar system the
@@ -740,6 +764,7 @@ def build_discovery_plan(
             "status": "FAILED",
             "reason": f"{type(exc).__name__}:{str(exc)[:160]}",
         }
+        _record_derivation_failure(derivation_failures, "derive_runtime_probe_contracts", exc)
     # ── 档位 D (event): derive event_formal_contracts from the SAME governed
     # probe observations when the system exposes (but does not declare) an
     # event/audit listing surface.  Reuses contract_auto_derivation._event_row
@@ -773,6 +798,7 @@ def build_discovery_plan(
             "status": "FAILED",
             "reason": f"{type(exc).__name__}:{str(exc)[:160]}",
         }
+        _record_derivation_failure(derivation_failures, "derive_runtime_probe_event_contracts", exc)
     # Resolve adapter capability BEFORE the IR is built, so the IR's observation
     # surfaces and the experiment compiler's adapter set come from one computation.
     # They used to disagree: the IR hardcoded db_snapshot as unavailable while this
@@ -1576,6 +1602,7 @@ def build_discovery_plan(
         obligations = attach_canonical_obligation_keys(
             obligations, behavior_ir=behavior_ir
         )
+        coverage_unit_failed = False
         unit_pack = build_coverage_units(obligations, behavior_ir=behavior_ir)
         units = [
             dict(row)
@@ -1598,6 +1625,7 @@ def build_discovery_plan(
             coverage_unit_receipt["collapsed_variant_count"],
         )
     except Exception as exc:
+        coverage_unit_failed = True
         _planning_logger.error(
             "coverage_unit_build_failed %s: %s",
             type(exc).__name__,
@@ -2382,7 +2410,11 @@ def build_discovery_plan(
     # fully-enriched obligations list (authoritative set at this point).
     from .family_coverage_ledger import build_family_coverage_ledger
 
-    family_coverage_ledger = build_family_coverage_ledger({"obligations": obligations})
+    family_coverage_ledger = build_family_coverage_ledger(
+        {"obligations": obligations},
+        derivation_failures=derivation_failures,
+        coverage_unit_failed=coverage_unit_failed,
+    )
 
     return DiscoveryPlanningBundle(
         mainline_run=contract,

@@ -147,7 +147,11 @@ def _find_receipt_status(compile_result: dict[str, Any], family: str) -> str:
     return ""
 
 
-def build_family_coverage_ledger(compile_result: dict[str, Any] | None) -> dict[str, Any]:
+def build_family_coverage_ledger(
+    compile_result: dict[str, Any] | None,
+    derivation_failures: dict[str, str] | None = None,
+    coverage_unit_failed: bool = False,
+) -> dict[str, Any]:
     """Enumerate every known risk family for a target and record applicable vs
     honest-GAP-with-reason.
 
@@ -202,27 +206,50 @@ def build_family_coverage_ledger(compile_result: dict[str, Any] | None) -> dict[
                 "receipt_status": _find_receipt_status(result, family),
             })
         else:
-            pre = _FAMILY_PRECONDITIONS.get(family, _FALLBACK_GAP)
-            entries.append({
-                "risk_family": family,
-                "applicable": False,
-                "obligation_count": 0,
-                "status": "NOT_REQUESTED",
-                "gap_reason_code": pre["gap_reason_code"],
-                "gap_reason": pre["gap_reason"],
-                "receipt_status": _find_receipt_status(result, family),
-            })
+            fail_reason = (derivation_failures or {}).get(family)
+            if fail_reason:
+                entries.append({
+                    "risk_family": family,
+                    "applicable": False,
+                    "obligation_count": 0,
+                    "status": "DERIVATION_FAILED",
+                    "gap_reason_code": "DERIVATION_FAILED",
+                    "gap_reason": fail_reason,
+                    "receipt_status": _find_receipt_status(result, family),
+                })
+            else:
+                pre = _FAMILY_PRECONDITIONS.get(family, _FALLBACK_GAP)
+                entries.append({
+                    "risk_family": family,
+                    "applicable": False,
+                    "obligation_count": 0,
+                    "status": "NOT_REQUESTED",
+                    "gap_reason_code": pre["gap_reason_code"],
+                    "gap_reason": pre["gap_reason"],
+                    "receipt_status": _find_receipt_status(result, family),
+                })
 
     applicable_count = sum(1 for e in entries if e["applicable"])
     not_applicable_count = len(entries) - applicable_count
+    derivation_failed_count = sum(1 for e in entries if e["status"] == "DERIVATION_FAILED")
+    summary = (
+        f"{applicable_count}/{len(entries)} risk families applicable to this target; "
+        f"{not_applicable_count} honestly not applicable (breadth loss is visible, not dropped)."
+    )
+    if derivation_failed_count:
+        summary += (
+            f" {derivation_failed_count} family(ies) lost to DERIVATION_FAILED "
+            f"(crash during contract/coverage derivation, not source absence)."
+        )
+    if coverage_unit_failed:
+        summary += " coverage_unit derivation FAILED (planning fell back to obligation authority)."
     return {
         "schema_version": "qualibug.family-coverage-ledger.v1",
         "families_total": len(entries),
         "families_applicable": applicable_count,
         "families_not_applicable": not_applicable_count,
+        "families_derivation_failed": derivation_failed_count,
+        "coverage_unit_derivation_failed": bool(coverage_unit_failed),
         "entries": entries,
-        "summary": (
-            f"{applicable_count}/{len(entries)} risk families applicable to this target; "
-            f"{not_applicable_count} honestly not applicable (breadth loss is visible, not dropped)."
-        ),
+        "summary": summary,
     }
