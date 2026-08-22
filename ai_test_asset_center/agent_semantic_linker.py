@@ -75,7 +75,18 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Protocol
 
 from .artifact_redactor import redact_and_validate
+from .llm_reasoning import estimate_input_tokens
 from .observed_product_scan_protocol import find_evaluator_private_context_paths
+
+
+def _linker_input_budget() -> int:
+    """操作员可覆盖的 linker 每调用输入预算（token）。"""
+    raw = os.getenv(LINKER_MAX_INPUT_TOKENS_ENV, "")
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return LINKER_MAX_INPUT_TOKENS_DEFAULT
+    return value if value > 0 else LINKER_MAX_INPUT_TOKENS_DEFAULT
 
 
 RECEIPT_SCHEMA = "qualibug.agent-semantic-link-receipt.v2"
@@ -94,6 +105,16 @@ MIN_CANDIDATES_PER_RULE = 3
 MAX_SUPPORTING_FACTS_PER_RULE = 20
 MAX_TRANSITIONS_PER_REQUEST = 200
 CACHE_DIRECTORY_ENV = "QUALIBUG_SEMANTIC_CACHE_DIR"
+
+# ── 输入预算守卫（20260821 成本事故根因修复）─────────────────────────────
+# 该次运行中 linker 以 ~102K token/请求的巨型 prompt 反复调用，直至供应商
+# 402 Insufficient Balance。全局 LLM_MAX_INPUT_TOKENS 默认 900000 是引擎级
+# 预算，对组装型消费者形同虚设。linker 由此声明自己的每调用输入预算：
+# 组批前用同一 CJK 感知估算器预检，超限逐级二分缩批（保持单规则上下文完整，
+# 不砍召回）；缩到单规则仍超限的 unit 显式 BLOCKED（具名 reason code），
+# 绝不静默发送、绝不静默丢弃。预算可由操作员经 env 覆盖。
+LINKER_MAX_INPUT_TOKENS_DEFAULT = 32768
+LINKER_MAX_INPUT_TOKENS_ENV = "LLM_LINKER_MAX_INPUT_TOKENS"
 
 # The bounded, source-backed semantic frames the linker actually consumes.
 # The private-context guard must cover exactly these collections; product-owned
@@ -520,19 +541,24 @@ def _complete_batch(
     client: AgentJsonClient,
     *,
     prompt: str,
+    max_input_tokens: int | None = None,
 ) -> tuple[dict[str, Any], int, int]:
     retry_count = 0
     last_error: Exception | None = None
     for attempt in range(1, MAX_PROVIDER_ATTEMPTS + 1):
         try:
-            response = client.complete_json(
-                caller="agent_semantic_linker",
-                system_prompt=(
+            kwargs: dict[str, Any] = {
+                "caller": "agent_semantic_linker",
+                "system_prompt": (
                     "You perform source-grounded enterprise business semantic analysis. "
                     "Identifiers and supplied facts are the only authority. Output JSON only."
                 ),
-                user_prompt=prompt,
-            )
+                "user_prompt": prompt,
+            }
+            if max_input_tokens is not None:
+                # 仅显式声明预算的调用才携带该键；未声明 = 全局语义（如 transition 单请求路径）
+                kwargs["max_input_tokens"] = max_input_tokens
+            response = client.complete_json(**kwargs)
             return response, attempt, retry_count
         except Exception as exc:
             last_error = exc
@@ -1674,6 +1700,32 @@ def enrich_knowledge_asset_with_agent_relationships(
         pending[index:index + MAX_RULES_PER_REQUEST]
         for index in range(0, len(pending), MAX_RULES_PER_REQUEST)
     ]
+
+    # ── 输入预算预检：超限批次逐级二分，保持单规则上下文完整 ──
+    # 缩到单规则仍超限的 unit 显式 BLOCKED（具名 reason code），绝不静默
+    # 发送巨型请求、绝不静默丢弃。全部缩减事件计数入回执。
+    input_budget = _linker_input_budget()
+    sized_batches: list[list[dict[str, Any]]] = []
+    input_budget_exhausted_rule_ids: list[str] = []
+    batches_split_count = 0
+    for batch in batches:
+        stack: list[list[dict[str, Any]]] = [list(batch)]
+        while stack:
+            current = stack.pop()
+            estimated = estimate_input_tokens(
+                _build_rule_request_prompt(current)
+            )
+            if estimated <= input_budget:
+                sized_batches.append(current)
+                continue
+            if len(current) <= 1:
+                input_budget_exhausted_rule_ids.extend(
+                    unit["rule_id"] for unit in current
+                )
+                continue
+            mid = max(1, len(current) // 2)
+            batches_split_count += 1
+            stack.extend([current[:mid], current[mid:]])
     # Tier-2 batches run concurrently (bounded): provider calls are the
     # dominant LLM-phase latency (measured 36-217s each; 8 serial batches ≈
     # 30+ minutes). A small worker pool keeps the phase near the longest
@@ -1689,6 +1741,7 @@ def enrich_knowledge_asset_with_agent_relationships(
             response, attempts, retries = _complete_batch(
                 resolved_client,
                 prompt=prompt,
+                max_input_tokens=input_budget,
             )
         except AgentSemanticLinkerError as exc:
             _batch_results[index] = {
@@ -1721,14 +1774,27 @@ def enrich_knowledge_asset_with_agent_relationships(
             },
         }
 
-    if len(batches) > 1:
+    if input_budget_exhausted_rule_ids:
+        failed_units.append(
+            {
+                "unit_kind": "rule_unit",
+                "reason_code": "llm_input_budget_exhausted",
+                "error": (
+                    f"single-rule prompt exceeds linker input budget "
+                    f"({input_budget} tokens); unit blocked visibly, never sent"
+                ),
+                "rule_ids": list(input_budget_exhausted_rule_ids),
+            }
+        )
+
+    if len(sized_batches) > 1:
         with ThreadPoolExecutor(max_workers=_LINKER_BATCH_WORKERS) as _pool:
-            list(_pool.map(lambda b: _run_batch(*b), enumerate(batches)))
+            list(_pool.map(lambda b: _run_batch(*b), enumerate(sized_batches)))
     else:
-        for _i, _b in enumerate(batches):
+        for _i, _b in enumerate(sized_batches):
             _run_batch(_i, _b)
 
-    for index in range(len(batches)):
+    for index in range(len(sized_batches)):
         result = _batch_results.get(index)
         if result is None:
             continue
@@ -1739,7 +1805,7 @@ def enrich_knowledge_asset_with_agent_relationships(
         provider_attempt_count += ok["attempts"]
         provider_retry_count += ok["retries"]
         response = ok["response"]
-        batch_units_by_rule = {unit["rule_id"]: unit for unit in batches[index]}
+        batch_units_by_rule = {unit["rule_id"]: unit for unit in sized_batches[index]}
         for assessment in response["assessments"]:
             batch_assessments_ordered.append(assessment)
             rule_id = _text(assessment.get("rule_id"))
@@ -1775,6 +1841,8 @@ def enrich_knowledge_asset_with_agent_relationships(
             cache_hit_count += 1
         else:
             cache_miss_count += 1
+            # Transition 单元按设计是单次大请求（≤200 条迁移、每扫描一次、
+            # 有独立分页权威契约）：保持全局预算语义，不套用规则批预算。
             prompt = _build_transition_request_prompt(transition_unit)
             try:
                 response, attempts, retries = _complete_batch(
@@ -2389,6 +2457,16 @@ def enrich_knowledge_asset_with_agent_relationships(
                 "supporting_fact_fingerprints",
                 "model_config_fingerprint",
             ],
+        },
+        "input_budget": {
+            "budget_tokens": input_budget,
+            "env_override": LINKER_MAX_INPUT_TOKENS_ENV,
+            "scope": "rule_batches_only",
+            "batches_before_sizing": len(batches),
+            "batches_after_sizing": len(sized_batches),
+            "batches_split_count": batches_split_count,
+            "budget_exhausted_rule_ids": input_budget_exhausted_rule_ids,
+            "budget_exhausted_unit_count": len(input_budget_exhausted_rule_ids),
         },
         "failed_unit_count": len(failed_units),
         "failed_units": failed_units,

@@ -457,3 +457,93 @@ def test_linked_without_relationships_is_isolated_not_whole_batch_abort() -> Non
         for row in receipt["rejections"]
     )
     assert receipt["status"] == "VERIFIED_WITH_REJECTIONS"
+
+
+# ---------------------------------------------------------------------------
+# 输入预算守卫（20260821 成本事故根因修复）：per-call 预算传递 + 超限缩批/显式 BLOCKED
+# ---------------------------------------------------------------------------
+
+class TestLinkerInputBudget:
+    def _long_asset(self, rule_count: int, statement_chars: int) -> dict:
+        asset = _asset()
+        rules = []
+        for index in range(rule_count):
+            rule = dict(asset["rule_library"][0])
+            rule["rule_id"] = f"rule-budget-{index}"
+            # prompt 行取 semantic_frame.behavior（_prompt_safe_text 上限 640 字符），
+            # 单规则约 ~700 token；4 规则默认同批 ≈ 2800+ token。
+            rule["semantic_frame"] = dict(rule["semantic_frame"])
+            rule["semantic_frame"]["behavior"] = (
+                "数量守恒约束必须在转账全流程严格成立，任何一方增减都必须可追溯。"
+                * 40
+            )
+            rules.append(rule)
+        asset["rule_library"] = rules
+        return asset
+
+    def test_budget_passed_to_client(self, monkeypatch):
+        # 纯规则批场景（剔除 transition）：每个请求都必须携带声明的预算
+        monkeypatch.setenv("LLM_LINKER_MAX_INPUT_TOKENS", "500000")
+        client = FakeAgentClient(_linked_response())
+        asset = _asset()
+        asset.pop("state_machines", None)
+        _, receipt = enrich_knowledge_asset_with_agent_relationships(
+            asset, client=client,
+        )
+        assert receipt["input_budget"]["budget_tokens"] == 500000
+        assert client.requests, "expected at least one provider call"
+        assert all(
+            req.get("max_input_tokens") == 500000 for req in client.requests
+        )
+        assert receipt["input_budget"]["budget_exhausted_unit_count"] == 0
+
+    def test_tiny_budget_blocks_all_rule_units_without_any_call(self, monkeypatch):
+        # 剔除 transition（其按设计走全局预算单请求路径），纯规则批场景下
+        # 全部 unit 超限 → 显式 BLOCKED、零 provider 调用、整体 fail-fast。
+        monkeypatch.setenv("LLM_LINKER_MAX_INPUT_TOKENS", "10")
+        client = FakeAgentClient(_linked_response())
+        asset = self._long_asset(rule_count=2, statement_chars=600)
+        asset.pop("state_machines", None)
+        with pytest.raises(AgentSemanticLinkerError) as exc_info:
+            enrich_knowledge_asset_with_agent_relationships(
+                asset, client=client,
+            )
+        assert client.requests == []
+        assert "llm_input_budget_exhausted" in str(exc_info.value)
+
+    def test_transition_path_keeps_global_budget_semantics(self, monkeypatch):
+        # 语义明确化：预算 scope=rule_batches_only；transition 单元按设计是
+        # ≤200 迁移的单次大请求（有独立分页权威契约），不套用规则批预算。
+        monkeypatch.setenv("LLM_LINKER_MAX_INPUT_TOKENS", "10")
+        client = FakeAgentClient(_linked_response())
+        _, receipt = enrich_knowledge_asset_with_agent_relationships(
+            _asset(), client=client,
+        )
+        assert receipt["input_budget"]["scope"] == "rule_batches_only"
+        # 规则批全部被拦截……
+        assert receipt["input_budget"]["budget_exhausted_unit_count"] >= 1
+        # ……而 transition 仍按全局语义发出唯一一次请求
+        assert len(client.requests) == 1
+        assert "max_input_tokens" not in client.requests[0]
+
+    def test_moderate_budget_splits_batch_and_still_executes(self, monkeypatch):
+        # 实测尺寸：4规则批≈9067 / 2规则≈4854 / 单规则≈2747 est tokens
+        monkeypatch.setenv("LLM_LINKER_MAX_INPUT_TOKENS", "5000")
+        client = FakeAgentClient(_linked_response())
+        asset = self._long_asset(rule_count=4, statement_chars=600)
+        enriched, receipt = enrich_knowledge_asset_with_agent_relationships(
+            asset, client=client,
+        )
+        budget_section = receipt["input_budget"]
+        assert budget_section["budget_tokens"] == 5000
+        # 默认 4 规则/批在此预算下必然拆分；拆分后单规则可执行
+        assert budget_section["batches_split_count"] >= 1
+        assert budget_section["batches_after_sizing"] > budget_section["batches_before_sizing"]
+        assert budget_section["budget_exhausted_unit_count"] == 0
+        # 规则批请求必须全部携带声明的预算；transition 请求（如有）按设计
+        # 不携带 per-call 覆盖，走全局语义
+        budgeted_requests = [
+            req for req in client.requests
+            if req.get("max_input_tokens") == 5000
+        ]
+        assert budgeted_requests, "rule batches must carry the declared budget"

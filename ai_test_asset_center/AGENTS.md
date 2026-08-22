@@ -932,6 +932,17 @@ Evolution Contract):
   can always answer "which stage spent these tokens". Engine-level reasoner
   calls keep their existing `engine_type` attribution. New LLM consumers
   without a declared caller are rejected at the boundary.
+- Per-call input budget (2026-08-22 cost-incident root fix): consumers may
+  declare `max_input_tokens=` per call to override the engine-sized global
+  default (`LLM_MAX_INPUT_TOKENS`, 900000). The agent semantic linker
+  declares its own budget (`LLM_LINKER_MAX_INPUT_TOKENS`, default 32768)
+  after the 20260821 incident where ~102K-token link prompts drained the
+  provider balance to HTTP 402 mid-scan. The linker pre-flights every batch
+  with the same CJK-aware estimator, splits oversized batches down
+  (single-rule context stays intact), and blocks single units that still
+  exceed the budget with named reason code `llm_input_budget_exhausted` —
+  never a silent send, never a silent drop. Split/block counters ride in the
+  link receipt under `input_budget`.
 - Side-effect-free import: importing `ai_test_asset_center` must never
   install evaluator scoring, runtime patches, or scenario contracts (see
   Implementation SSOT Registry).

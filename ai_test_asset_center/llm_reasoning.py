@@ -1501,9 +1501,19 @@ class ReasoningClient:
         model: str | None = None,
         call_point: str | None = None,
         caller: str = "",
+        max_input_tokens: int | None = None,
     ) -> str:
         resolved_model = model or self.config.model
         call_point = call_point or "chat"
+        # Per-call budget override: consumers with small-context contracts
+        # (e.g. the semantic linker) declare their own bound instead of
+        # inheriting the engine-sized global default.
+        _input_budget = self.config.max_input_tokens
+        try:
+            if max_input_tokens is not None and int(max_input_tokens) > 0:
+                _input_budget = int(max_input_tokens)
+        except (TypeError, ValueError):
+            pass
         _prompt_len = len(user_prompt)
         _system_len = len(system_prompt or SYSTEM_PROMPT)
         # ── Input-context guard: fail fast before transport when the combined
@@ -1514,7 +1524,7 @@ class ReasoningClient:
         _input_tokens = estimate_input_tokens(user_prompt) + estimate_input_tokens(
             system_prompt or SYSTEM_PROMPT
         )
-        if self.config.max_input_tokens > 0 and _input_tokens > self.config.max_input_tokens:
+        if _input_budget > 0 and _input_tokens > _input_budget:
             _elapsed_ms = 0
             self._record_observation(
                 call_point=call_point,
@@ -1535,19 +1545,19 @@ class ReasoningClient:
                 _prompt_len,
                 _system_len,
                 _input_tokens,
-                self.config.max_input_tokens,
+                _input_budget,
                 extra={"error_code": "QB-L007", "context": {
                     "call_point": call_point,
                     "model": resolved_model,
                     "prompt_chars": _prompt_len,
                     "system_chars": _system_len,
                     "estimated_input_tokens": _input_tokens,
-                    "max_input_tokens": self.config.max_input_tokens,
+                    "max_input_tokens": _input_budget,
                 }},
             )
             raise ReasoningClientError(
                 "LLM input context overflow: "
-                f"estimated {_input_tokens} tokens > budget {self.config.max_input_tokens}"
+                f"estimated {_input_tokens} tokens > budget {_input_budget}"
             )
         payload = {
             "model": resolved_model,
@@ -1744,6 +1754,7 @@ class ReasoningClient:
         model: str,
         call_point: str,
         caller: str = "",
+        max_input_tokens: int | None = None,
     ) -> dict[str, Any]:
         """Run one chat round trip and parse its JSON contract, retrying the
         *identical payload* once when the parse fails.
@@ -1762,6 +1773,7 @@ class ReasoningClient:
             model=model,
             call_point=call_point,
             caller=caller,
+            max_input_tokens=max_input_tokens,
         )
         try:
             return self._parse_json(raw, call_point=call_point, caller=caller)
@@ -1777,6 +1789,7 @@ class ReasoningClient:
                 model=model,
                 call_point=call_point,
                 caller=caller,
+                max_input_tokens=max_input_tokens,
             )
             return self._parse_json(raw, call_point=call_point, caller=caller)
 
@@ -2134,6 +2147,7 @@ class ReasoningClient:
         system_prompt: str | None = None,
         tier: str = DEFAULT_TIER,
         caller: str = "",
+        max_input_tokens: int | None = None,
     ) -> dict[str, Any]:
         """Run one JSON-only advisory request using the shared provider settings.
 
@@ -2147,6 +2161,10 @@ class ReasoningClient:
         stage that spent them. Empty/missing caller fails fast with
         ``llm_caller_attribution_required`` — an unattributed call is treated
         as a defect at the boundary, never silently recorded.
+
+        ``max_input_tokens`` lets a consumer declare its own input budget for
+        this call (overrides the global ``LLM_MAX_INPUT_TOKENS`` default,
+        which is engine-sized). Oversized prompts fail fast with QB-L007.
         """
         if not self.config.enabled:
             raise ReasoningClientError("LLM is not configured")
@@ -2159,6 +2177,7 @@ class ReasoningClient:
             model=model,
             call_point="chat_json",
             caller=str(caller).strip(),
+            max_input_tokens=max_input_tokens,
         )
 
     def complete_json(
@@ -2168,10 +2187,17 @@ class ReasoningClient:
         system_prompt: str | None = None,
         tier: str = DEFAULT_TIER,
         caller: str = "",
+        max_input_tokens: int | None = None,
     ) -> dict[str, Any]:
         """Expose the fail-fast JSON contract used by constrained Agent planners."""
 
-        return self.chat_json(user_prompt, system_prompt=system_prompt, tier=tier, caller=caller)
+        return self.chat_json(
+            user_prompt,
+            system_prompt=system_prompt,
+            tier=tier,
+            caller=caller,
+            max_input_tokens=max_input_tokens,
+        )
 
     def health_check(self) -> dict[str, Any]:
         """Perform a bounded provider check without storing credentials or prompts."""
