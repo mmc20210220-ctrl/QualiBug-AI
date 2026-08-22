@@ -15,6 +15,7 @@ from .private_pilot_scan_coordinator import (
     active_scan_owner,
     project_scan_lease,
 )
+from .scan_cancellation import read_scan_cancel_request
 from .scan_stage_progress import read_scan_stage_progress
 
 
@@ -505,6 +506,7 @@ def _get_continuous_state(root: Path, project: str) -> dict[str, Any]:
         "active_scan_live": bool(live_owner),
         "active_scan_elapsed_seconds": elapsed_seconds,
         "scan_stage_progress": stage_progress,
+        "cancel_requested": bool(read_scan_cancel_request(root, project)) if live_owner else False,
         "message": message,
     }
 

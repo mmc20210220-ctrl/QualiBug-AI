@@ -32,6 +32,7 @@ export type LiveScanStatus = {
   active_scan_live: boolean;
   active_scan_elapsed_seconds: number;
   scan_stage_progress: ScanStageProgress | null;
+  cancel_requested: boolean;
 };
 
 function asStageStatus(value: unknown): ScanStageStatus {
@@ -75,6 +76,7 @@ export async function getLiveScanStatus(projectId: string): Promise<LiveScanStat
       active_scan_live: false,
       active_scan_elapsed_seconds: 0,
       scan_stage_progress: null,
+      cancel_requested: false,
     };
   }
 
@@ -101,5 +103,6 @@ export async function getLiveScanStatus(projectId: string): Promise<LiveScanStat
     active_scan_live: payload.active_scan_live === true,
     active_scan_elapsed_seconds: asStrictNumber(payload.active_scan_elapsed_seconds),
     scan_stage_progress: parseStageProgress(payload.scan_stage_progress),
+    cancel_requested: payload.cancel_requested === true,
   };
 }

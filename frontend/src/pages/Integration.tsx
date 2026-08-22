@@ -9,7 +9,6 @@ import {
   type V12ScanResult,
 } from '../api/client';
 import { runV12ScanFromRunCenter } from '../api/run-center';
-import { getLiveScanStatus, type LiveScanStatus } from '../api/live-scan-status';
 import { useToast } from '../components/useToast';
 import { usePageTitle } from '../lib/page-title';
 import { useProjectNavigation } from '../lib/project-navigation';
@@ -55,7 +54,6 @@ export function Integration() {
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<V12ScanResult | null>(null);
   const [error, setError] = useState('');
-  const [liveStatus, setLiveStatus] = useState<LiveScanStatus | null>(null);
 
   const refreshContext = useCallback(async () => {
     if (!project) {
@@ -98,26 +96,6 @@ export function Integration() {
     [enabledServices],
   );
 
-  // 运行状态轮询：只展示后端真实阶段，不伪造进度百分比或业务流程名。
-  useEffect(() => {
-    if (!project || (!running && !result)) return;
-    let cancelled = false;
-    const poll = async () => {
-      try {
-        const status = await getLiveScanStatus(project);
-        if (!cancelled) setLiveStatus(status);
-      } catch {
-        if (!cancelled) setLiveStatus(null);
-      }
-    };
-    void poll();
-    const timer = window.setInterval(poll, 3000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, [project, running, result]);
-
   const startVerify = useCallback(async () => {
     if (!project) { setError('请先选择客户项目。'); return; }
     if (!preflight?.ready) {
@@ -130,7 +108,6 @@ export function Integration() {
     setRunning(true);
     setResult(null);
     setError('');
-    setLiveStatus(null);
     try {
       const response = await runV12ScanFromRunCenter(project, {});
       setResult(response);
@@ -162,12 +139,6 @@ export function Integration() {
       </section>
     );
   }
-
-  const stages = liveStatus?.scan_stage_progress?.stages || {};
-  const activeStage = Object.entries(stages).find(([, item]) => item.status === 'active');
-  const runningMessage = running
-    ? (activeStage ? `正在验证：${activeStage[0]}` : '正在验证系统')
-    : '';
 
   const confirmTarget = enabledServices[0];
   const confirmLines = [
@@ -223,27 +194,6 @@ export function Integration() {
           </div>
         </article>
       </section>
-
-      {running && (
-        <section className="card mb-4 status-card status-warning" role="status" aria-live="polite">
-          <span className="panel-kicker">运行状态</span>
-          <h2>{runningMessage}</h2>
-          {liveStatus?.active_scan_elapsed_seconds ? (
-            <p className="muted">已运行 {Math.round(liveStatus.active_scan_elapsed_seconds / 60)} 分钟。运行进度以真实执行阶段为准，不显示估算百分比。</p>
-          ) : (
-            <p className="muted">正在验证系统，请稍候。运行进度以真实执行阶段为准。</p>
-          )}
-          {Object.keys(stages).length > 0 && (
-            <ul>
-              {Object.entries(stages).map(([key, item]) => (
-                <li key={key}>
-                  {key} · {item.status}
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
-      )}
 
       {error && (
         <section className="state-panel">

@@ -1,10 +1,16 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   getLiveScanStatus,
   type LiveScanStatus,
   type ScanStageProgressItem,
 } from '../../api/live-scan-status';
-import { RUN_LIFECYCLE_EVENT, type RunLifecycleDetail } from '../../api/run-center';
+import {
+  RUN_LIFECYCLE_EVENT,
+  cancelActiveScan,
+  type RunLifecycleDetail,
+} from '../../api/run-center';
+import { useToast } from '../useToast';
 
 function elapsedSeconds(detail: RunLifecycleDetail, now: number): number {
   const end = detail.phase === 'submitted' ? now : detail.finishedAt;
@@ -47,6 +53,10 @@ const LIVE_STAGE_DEFINITIONS = [
   ['delivery_finalization', '交付门禁与报告'],
 ] as const;
 
+// 页面刷新后可从服务端租约恢复跟踪的运行模式。持续扫描有自己的生命周期
+// 入口，不占用这条操作员发起运行的进度通道。
+const RECOVERABLE_SERVER_MODES = ['manual_scan', 'regression', 'regression_scan'];
+
 function liveStageLabel(item?: ScanStageProgressItem): string {
   if (!item) return '等待服务端阶段上报';
   const detail = item.detail ? ` · ${item.detail}` : '';
@@ -61,10 +71,16 @@ function liveStageLabel(item?: ScanStageProgressItem): string {
 }
 
 export function RunLifecycleBanner() {
+  const [params] = useSearchParams();
+  const urlProject = params.get('project')?.trim() || '';
+  const toast = useToast();
   const [detail, setDetail] = useState<RunLifecycleDetail | null>(null);
   const [now, setNow] = useState(Date.now());
   const [liveStatus, setLiveStatus] = useState<LiveScanStatus | null>(null);
   const [liveStatusError, setLiveStatusError] = useState('');
+  const [recoveredProject, setRecoveredProject] = useState('');
+  const [recoverEndedAt, setRecoverEndedAt] = useState(0);
+  const [cancelling, setCancelling] = useState(false);
 
   useEffect(() => {
     const handleLifecycle = (event: Event) => {
@@ -72,6 +88,9 @@ export function RunLifecycleBanner() {
       if (!next) return;
       setDetail(next);
       setNow(Date.now());
+      // 本页签发起了真实请求：恢复态让位于本地完整回执流。
+      setRecoveredProject('');
+      setRecoverEndedAt(0);
       if (next.phase === 'submitted') {
         setLiveStatus(null);
         setLiveStatusError('');
@@ -111,16 +130,85 @@ export function RunLifecycleBanner() {
     };
   }, [detail?.phase, detail?.projectId]);
 
+  // ── 刷新恢复：本地事件丢失（F5 / 关闭页签后返回）时，直接从服务端
+  // 运行租约恢复进度跟踪。只读探测，绝不推测阶段或百分比。
+  useEffect(() => {
+    if (detail) return;
+    if (!urlProject) {
+      setRecoveredProject('');
+      setRecoverEndedAt(0);
+      return;
+    }
+    let cancelled = false;
+    const probeServerRun = async () => {
+      try {
+        const status = await getLiveScanStatus(urlProject);
+        if (cancelled) return;
+        const mode = (status.active_scan.mode || '').toLowerCase();
+        const recoverable = status.active_scan_live === true
+          && RECOVERABLE_SERVER_MODES.includes(mode)
+          && (!status.active_scan.project_id || status.active_scan.project_id === urlProject);
+        if (recoverable) {
+          setRecoveredProject(status.active_scan.project_id?.trim() || urlProject);
+          setRecoverEndedAt(0);
+        } else if (!status.active_scan_live) {
+          setRecoveredProject((current) => {
+            if (current) setRecoverEndedAt(Date.now());
+            return current;
+          });
+        }
+      } catch {
+        // 服务端暂不可达：保持现状，下一轮探测继续；不伪造任何运行状态。
+      }
+    };
+    void probeServerRun();
+    const timer = window.setInterval(() => void probeServerRun(), 3000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [detail, urlProject]);
+
+  useEffect(() => {
+    if (!recoverEndedAt) return;
+    const timer = window.setTimeout(() => {
+      setRecoveredProject('');
+      setRecoverEndedAt(0);
+    }, 5000);
+    return () => window.clearTimeout(timer);
+  }, [recoverEndedAt]);
+
   useEffect(() => {
     if (!detail || detail.phase === 'submitted') return;
     const timer = window.setTimeout(() => setDetail(null), 5000);
     return () => window.clearTimeout(timer);
   }, [detail]);
 
+  const recoveredActive = !detail && Boolean(recoveredProject) && !recoverEndedAt;
+
+  const handleCancelRun = async (projectId: string) => {
+    if (!projectId || cancelling) return;
+    setCancelling(true);
+    try {
+      const result = await cancelActiveScan(projectId);
+      toast.show(
+        result.message || (result.requested ? '取消请求已登记，将在当前实验边界安全停止。' : '当前没有正在运行的检测任务。'),
+        result.requested ? 'warning' : 'info',
+      );
+    } catch (error: unknown) {
+      toast.show(error instanceof Error ? error.message : '取消请求失败', 'danger');
+    } finally {
+      setCancelling(false);
+    }
+  };
+
   const stages = useMemo(() => {
-    if (!detail) return [];
-    if (detail.phase === 'submitted') {
-      const stageMap = liveStatus?.scan_stage_progress?.stages || {};
+    const stageMap = liveStatus?.scan_stage_progress?.stages || {};
+    if (!detail) {
+      if (!recoveredActive) return [];
+      return LIVE_STAGE_DEFINITIONS.map(([key, label]) => [label, liveStageLabel(stageMap[key])]);
+    }
+    if (detail.phase === 'submitted' || recoveredActive) {
       return LIVE_STAGE_DEFINITIONS.map(([key, label]) => [label, liveStageLabel(stageMap[key])]);
     }
     if (detail.phase === 'failed') {
@@ -141,9 +229,61 @@ export function RunLifecycleBanner() {
       ['结果观察与证据收集', `${detail.evidenceCount} 条真实请求证据`],
       ['交付门禁与报告', detail.grade ? `${detail.grade} · 覆盖 ${detail.coverage}` : `覆盖 ${detail.coverage}`],
     ];
-  }, [detail, liveStatus?.scan_stage_progress?.stages]);
+  }, [detail, recoveredActive, liveStatus?.scan_stage_progress?.stages]);
 
-  if (!detail) return null;
+  if (!detail && !recoveredActive && !recoverEndedAt) return null;
+
+  // ── 恢复态：全部字段来自服务端租约，本地零推断。
+  if (!detail) {
+    if (recoverEndedAt) {
+      return (
+        <section className="card mb-4 status-card status-success" role="status" aria-live="polite">
+          <div className="settings-card-head">
+            <div>
+              <span className="panel-kicker">真实运行进度</span>
+              <h2>服务端检测已结束</h2>
+              <p className="muted">本次运行的最终回执以总览、问题清单与运行记录为准。</p>
+            </div>
+          </div>
+        </section>
+      );
+    }
+    return (
+      <section className="card mb-4 status-card status-warning" role="status" aria-live="polite">
+        <div className="settings-card-head">
+          <div>
+            <span className="panel-kicker">真实运行进度</span>
+            <h2>服务端检测仍在进行</h2>
+            <p className="muted">进度恢复自服务端运行租约（页面刷新后仍可继续跟踪）· {scanModeLabel(liveStatus?.active_scan.mode)}</p>
+          </div>
+          <div className="settings-actions">
+            <span className="summary-pill strong">服务端已用时 {liveStatus?.active_scan_elapsed_seconds || 0} 秒</span>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              disabled={cancelling || liveStatus?.cancel_requested === true}
+              onClick={() => void handleCancelRun(recoveredProject)}
+            >
+              {liveStatus?.cancel_requested === true
+                ? '取消已登记 · 等待实验边界'
+                : cancelling ? '正在登记取消…' : '取消本次检测'}
+            </button>
+          </div>
+        </div>
+        <div className="settings-grid mt-3">
+          {stages.map(([label, value]) => (
+            <div key={label}>
+              <span className="muted">{label}</span>
+              <p>{value}</p>
+            </div>
+          ))}
+        </div>
+        <p className="settings-hint mt-3">
+          取消是协作式的：登记后会在当前实验边界安全停止，不会中断已经开始的单个实验；剩余未执行的项将在最终回执中如实标注为「操作员取消」。
+        </p>
+      </section>
+    );
+  }
 
   const tone = lifecycleTone(detail);
   const serverConfirmed = detail.phase === 'submitted' && liveStatus?.active_scan_live === true;
@@ -169,7 +309,21 @@ export function RunLifecycleBanner() {
           <h2>{title}</h2>
           <p className="muted">{statusText}</p>
         </div>
-        <span className="summary-pill strong">已用时 {elapsedSeconds(detail, now)} 秒</span>
+        <div className="settings-actions">
+          <span className="summary-pill strong">已用时 {elapsedSeconds(detail, now)} 秒</span>
+          {detail.phase === 'submitted' && (
+            <button
+              type="button"
+              className="btn btn-secondary"
+              disabled={cancelling || liveStatus?.cancel_requested === true}
+              onClick={() => void handleCancelRun(detail.projectId)}
+            >
+              {liveStatus?.cancel_requested === true
+                ? '取消已登记 · 等待实验边界'
+                : cancelling ? '正在登记取消…' : '取消本次检测'}
+            </button>
+          )}
+        </div>
       </div>
 
       {detail.phase === 'submitted' && (
