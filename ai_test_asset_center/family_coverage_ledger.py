@@ -96,7 +96,7 @@ _FAMILY_PRECONDITIONS: dict[str, dict[str, str]] = {
     },
     "visibility": {
         "gap_reason_code": "NO_VISIBILITY_CONTRACT",
-        "gap_reason": "requires a visibility / role-based-field contract in the source",
+        "gap_reason": "requires a source visibility / role-based-field contract or a runtime-observed anonymous-exposure inconsistency (doc-less, 档位D)",
     },
     "temporal": {
         "gap_reason_code": "NO_TEMPORAL_CONTRACT",
