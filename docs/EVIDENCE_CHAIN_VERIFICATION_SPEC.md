@@ -67,3 +67,15 @@ L2-L4 的落地目标集：≥3 个不同行业真实开源企业系统（ERPNex
 ## 4. 修订记录
 
 - 2026-08-22：初版。确立"可复现即真值"为验证第一性原理；P0 定为自证证据包。
+- 2026-08-22：**P0 三件套已落地**——`ai_test_asset_center/self_proving_evidence_bundle.py`
+  （bundle 编译器 + stdlib 重放执行器 + 三态判定）+ `tools/discovery_evaluation.py`
+  新增 `bundle-build` / `verify` 子命令（exit code：REPRODUCED=0 / NOT_REPRODUCED=1 /
+  INDETERMINATE=2 / REFUSED=3）。密码学血缘绑定：入包请求体与请求语义指纹逐字节
+  复算并比对封存回执，不匹配即 `bundle_request_bytes_lineage_invalid` 拒绝。
+  双臂相位判定：control 基线失真→INDETERMINATE；treatment 偏离封存违规→NOT_REPRODUCED。
+  验收测试 `tests/test_self_proving_evidence_bundle.py` 13/13 全过
+  （含全新进程 CLI 重放、防篡改、HMAC、生产环境 fail-closed、敏感头拒入包、乱序扰动）。
+  v1 判定形状基准 = HTTP status-class；同状态码不同响应体的缺陷类不可判别（诚实边界，
+  body 断言通道留待后续增量）。附带发现：门禁 `validate_reproduction_receipt` 对步骤
+  字段集做精确 http 形状匹配，非 http 步骤回执在消费侧无法通过该校验（第五链路泛化的
+  潜在不一致，待独立任务处理）；builder 的非 http 拒绝分支作为纵深防御保留。

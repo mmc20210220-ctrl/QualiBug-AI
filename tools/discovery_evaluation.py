@@ -9,6 +9,7 @@ in runtime views, receipts, or aggregate reports.
 
 import argparse
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -273,6 +274,61 @@ def _command_goal_status(args: argparse.Namespace) -> dict[str, Any]:
     return {"status": status}
 
 
+def _command_bundle_build(args: argparse.Namespace) -> dict[str, Any]:
+    from ai_test_asset_center.self_proving_evidence_bundle import (
+        BundleError,
+        build_self_proving_bundle,
+    )
+
+    source = _load_object(Path(args.receipt_json), "receipt-json")
+    descriptor = _load_object(Path(args.target_descriptor), "target-descriptor")
+    hmac_key = None
+    if args.hmac_key_env:
+        raw = os.environ.get(args.hmac_key_env, "")
+        if not raw:
+            return {"ok": False, "reason_code": "bundle_hmac_key_env_missing", "exit_code": 3}
+        hmac_key = raw.encode("utf-8")
+    try:
+        bundle = build_self_proving_bundle(
+            reproduction_receipt=source.get("reproduction_receipt") or {},
+            hydrated_steps=source.get("hydrated_steps") or [],
+            target_descriptor=descriptor,
+            hmac_key=hmac_key,
+        )
+    except BundleError as exc:
+        return {"ok": False, "reason_code": exc.reason_code, "detail": exc.detail, "exit_code": 3}
+    Path(args.out).write_text(json.dumps(bundle, ensure_ascii=False, indent=2), encoding="utf-8")
+    return {
+        "ok": True,
+        "bundle_id": bundle.get("bundle_id"),
+        "out": str(args.out),
+        "exit_code": 0,
+    }
+
+
+def _command_verify(args: argparse.Namespace) -> dict[str, Any]:
+    from ai_test_asset_center.self_proving_evidence_bundle import verify_self_proving_bundle
+
+    bundle = _load_object(Path(args.bundle), "bundle")
+    overrides: dict[str, str] = {}
+    for item in args.base_url or []:
+        name, separator, url = str(item).partition("=")
+        if name.strip() and separator and url.strip():
+            overrides[name.strip()] = url.strip()
+    hmac_key = None
+    if args.hmac_key_env:
+        raw = os.environ.get(args.hmac_key_env, "")
+        if raw:
+            hmac_key = raw.encode("utf-8")
+    return verify_self_proving_bundle(
+        bundle,
+        base_url_overrides=overrides,
+        hmac_key=hmac_key,
+        perturb_order=bool(args.perturb_order),
+        timeout_seconds=float(args.timeout or 10.0),
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Evaluator-private, hidden-ground-truth discovery quality measurement"
@@ -358,6 +414,54 @@ def build_parser() -> argparse.ArgumentParser:
     )
     goal_parser.add_argument("--output", type=Path, help="optional path to persist the goal-status JSON")
     goal_parser.set_defaults(handler=_command_goal_status)
+
+    bundle_build_parser = subparsers.add_parser(
+        "bundle-build",
+        help="compile a sealed reproduction receipt into a self-proving evidence bundle (EVIDENCE_CHAIN_VERIFICATION_SPEC P0)",
+    )
+    bundle_build_parser.add_argument(
+        "--receipt-json",
+        type=Path,
+        required=True,
+        help="JSON object with reproduction_receipt + hydrated_steps (concrete method/path/headers/body per step_id)",
+    )
+    bundle_build_parser.add_argument(
+        "--target-descriptor",
+        type=Path,
+        required=True,
+        help="JSON {environment_type, services:[{name, base_url}]}; non-production environments only",
+    )
+    bundle_build_parser.add_argument("--out", type=Path, required=True)
+    bundle_build_parser.add_argument(
+        "--hmac-key-env",
+        default="",
+        help="env var holding the HMAC key; omit to seal by content digest only",
+    )
+    bundle_build_parser.set_defaults(handler=_command_bundle_build)
+
+    verify_parser = subparsers.add_parser(
+        "verify",
+        help="replay a self-proving evidence bundle against a live non-production target",
+    )
+    verify_parser.add_argument("--bundle", type=Path, required=True)
+    verify_parser.add_argument(
+        "--base-url",
+        action="append",
+        default=[],
+        help="override a service base URL: --base-url name=http://host:port (repeatable; '*' matches any)",
+    )
+    verify_parser.add_argument(
+        "--hmac-key-env",
+        default="",
+        help="env var holding the HMAC key; required only when the bundle carries an hmac_sha256 seal",
+    )
+    verify_parser.add_argument(
+        "--perturb-order",
+        action="store_true",
+        help="deterministically shuffle steps within each phase (control stays before treatment)",
+    )
+    verify_parser.add_argument("--timeout", type=float, default=10.0)
+    verify_parser.set_defaults(handler=_command_verify)
     return parser
 
 
@@ -365,6 +469,8 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     result = args.handler(args)
     print(json.dumps(result, ensure_ascii=False, indent=2))
+    if isinstance(result, dict):
+        return int(result.get("exit_code", 0))
     return 0
 
 
