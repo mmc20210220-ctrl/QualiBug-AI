@@ -11,7 +11,8 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-from .discovery_engine import AutonomousDiscoveryEngine, DiscoveryFinding
+import hashlib
+from .v12_pipeline import run_v12_pipeline
 from .target_endpoint import resolve_target_base_url
 from .loop_runtime import LoopBusyError, LoopRuntimeError, LoopRuntimeSession
 from .console_output import safe_print
@@ -136,7 +137,6 @@ class SelfImprovingSweep:
         self.project_id = str(project_id or DEFAULT_PROJECT_ID).strip() or DEFAULT_PROJECT_ID
         self.output_dir = Path(output_dir or Path("platform_outputs") / self.project_id)
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        self.engine = AutonomousDiscoveryEngine(base_url=self.base_url, project_id=self.project_id)
         self.rounds: list[ImproveRound] = []
         self._prior_inconclusive_rate = 1.0
         self._last_discovery_result: dict[str, Any] = {}
@@ -184,73 +184,84 @@ class SelfImprovingSweep:
         except Exception:
             return {}
 
-    def _observe(self) -> tuple[list[DiscoveryFinding], int, float]:
-        _tick("observe", "Starting discovery engine...")
+    def _observe(self) -> tuple[list[dict], int, float]:
+        _tick("observe", "Starting unified mainline discovery...")
         last_error: Exception | None = None
         result: dict[str, Any] | None = None
+        api_hash = hashlib.sha256((self.api or "").encode("utf-8")).hexdigest()
+        ctx = {
+            "mainline_authority": "experiment_candidate",
+            "run_id": f"self-improving-{self.project_id}",
+            "target_id": self.project_id,
+            "environment_id": "self_improving_env",
+            "policy_version": "v1.0.0-baseline",
+            "evaluation_mode": "local_sweep",
+            "scope_id": self.project_id,
+            "environment_ref": self.project_id,
+            "environment_kind": "test",
+            "approved_base_url": self.base_url,
+            "execution_mode": "safe_read_only",
+            "source_manifest": {
+                "source_id": "self_improving_loop",
+                "source_hash": api_hash,
+                "source_origin": "declared_manifest",
+                "source_version_id": "1",
+            },
+        }
         for attempt in range(2):
             try:
-                # Discovery emits stage transitions while the runtime heartbeat
-                # pump keeps the lease alive during slow provider calls.
-                self.engine.progress_callback = lambda stage, detail="": _tick(stage, detail)
-                candidate = self.engine.discover(self.prd, self.api)
-                if not isinstance(candidate, dict):
-                    raise DiscoveryRunError("discover() returned a non-dict result")
-                stage_failures = candidate.get("stage_failures", [])
-                if stage_failures:
-                    raise DiscoveryRunError("discovery stage failure: " + "; ".join(map(str, stage_failures)))
-                report = getattr(self.engine, "_last_engine_report", {}) or {}
-                failed = report.get("failed_engines", [])
-                total_engines = int(report.get("total_engines", 0) or 0)
-                if total_engines and len(failed) >= total_engines:
-                    existing_findings = list(getattr(self.engine, "findings", []) or [])
-                    local_exhausted = bool(report.get("local_bootstrap_exhausted_by_prior_findings"))
-                    # If the first pass already produced findings and the second-pass/local bootstrap
-                    # has no *new* non-duplicate hypotheses, this is convergence/exhaustion, not a
-                    # provider outage.  Never convert collected evidence into FAILED_RETRYABLE.
-                    if existing_findings and local_exhausted:
-                        result = candidate
-                        break
-                    # All engines failed — likely transient API outage, retry with backoff
-                    if attempt == 0:
-                        _console(f"  [WARN] All {total_engines} engines failed — API outage, retrying with backoff...")
-                        import gc; gc.collect()
-                        time.sleep(10)
-                        continue
-                    raise DiscoveryRunError("all reasoner engines failed after retry; refusing false convergence")
-                result = candidate
+                result = run_v12_pipeline(
+                    self.project_id,
+                    REPO_ROOT,
+                    self.prd,
+                    self.api,
+                    base_url=self.base_url,
+                    campaign_context=ctx,
+                    # existing_findings omitted -> closed-loop NOT activated (G1)
+                )
+                if not isinstance(result, dict):
+                    raise DiscoveryRunError("run_v12_pipeline returned a non-dict result")
+                # Fail-fast (principle 1): a non-approved / non-production target
+                # must surface loudly, never silently yield zero findings.
+                rc = result.get("runtime_contract") or {}
+                if str(rc.get("status")) != "approved":
+                    raise DiscoveryRunError(
+                        f"runtime contract not approved: status={rc.get('status')} "
+                        f"reason={rc.get('reason')} missing={rc.get('missing_requirements')}"
+                    )
+                executed = int((result.get("phases") or {}).get("execution", {}).get("executed") or 0)
+                if executed <= 0:
+                    raise DiscoveryRunError(
+                        "v12 mainline executed 0 experiments; target not approved/non-production"
+                    )
                 break
             except Exception as exc:
                 last_error = exc
-                _console(f"  [FAIL] discover() failed (attempt {attempt + 1}): {exc}")
+                _console(f"  [FAIL] discovery failed (attempt {attempt + 1}): {exc}")
                 if attempt == 0:
                     import gc
                     gc.collect()
                     time.sleep(2)
         if result is None:
-            raise DiscoveryRunError("discover() failed after retry: %s" % (last_error or "unknown failure"))
+            raise DiscoveryRunError("discovery failed after retry: %s" % (last_error or "unknown failure"))
 
         self._last_discovery_result = result
-        verifier_stage = ((result.get("stages") or {}).get("verifier") or {}) if isinstance(result, dict) else {}
-        self._last_raw_confirmed_signals = int(verifier_stage.get("raw_confirmed_signals", 0) or 0)
-        self._last_validated_candidates = int(verifier_stage.get("validated_candidates", 0) or 0)
-        self._last_needs_more_evidence = int(verifier_stage.get("needs_more_evidence", 0) or 0)
-        graph_stage = ((result.get("stages") or {}).get("cognitive_graph") or {}) if isinstance(result, dict) else {}
-        # This is intentionally read-only.  The Self-Improving Loop must not
-        # turn a graph score into a verifier relaxation, policy promotion, or
-        # write permission.  It only makes the selected frontier auditable.
+        fp = result.get("formal_count_projection") or {}
+        self._last_raw_confirmed_signals = int(fp.get("executed_clue_count") or 0)
+        self._last_validated_candidates = len(result.get("candidate_findings") or [])
+        self._last_needs_more_evidence = 0
         self._cognitive_graph_observation = {
-            "available": bool(graph_stage),
-            "mode": graph_stage.get("mode", "off") if isinstance(graph_stage, dict) else "off",
-            "frontier": graph_stage.get("frontier") if isinstance(graph_stage, dict) else None,
-            "context_refs": graph_stage.get("context_refs") if isinstance(graph_stage, dict) else [],
-            "ab": graph_stage.get("ab") if isinstance(graph_stage, dict) else {},
-            "reason": "read_only_discovery_observation",
+            "available": False,
+            "mode": "off",
+            "frontier": None,
+            "context_refs": [],
+            "ab": {},
+            "reason": "mainline_observation_disabled",
         }
-        findings = list(getattr(self.engine, "findings", []) or [])
+        findings = list(result.get("delivery_occurrences") or [])
         total = len(findings) or 1
-        validated_candidates = sum(1 for f in findings if f.verdict == "validated_candidate")
-        unresolved = sum(1 for f in findings if f.verdict in {"inconclusive", "needs_more_evidence", "schema_invalid"})
+        validated_candidates = 0
+        unresolved = len(result.get("candidate_findings") or [])
         inconclusive_rate = unresolved / total
         import gc
         gc.collect()
@@ -261,42 +272,17 @@ class SelfImprovingSweep:
         ))
         return findings, validated_candidates, inconclusive_rate
 
-    def _diagnose(self, findings: list[DiscoveryFinding]) -> list[ImprovementAction]:
+    def _diagnose(self, findings: list[dict]) -> list[ImprovementAction]:
         _tick("diagnose", f"Analyzing {len(findings)} findings...")
         actions = []
 
-        # ── Level 0: Engine health check (NEW) ──
-        engine_report = getattr(self.engine, '_last_engine_report', None)
-        if engine_report:
-            failed = engine_report.get('failed_engines', [])
-            total_engines = engine_report.get('total_engines', 9)
-            if len(failed) > 0:
-                # Check if these same engines failed in previous rounds
-                prev_failed = getattr(self, '_prev_failed_engines', set())
-                repeat_offenders = [e for e in failed if e in prev_failed]
-                self._prev_failed_engines = set(failed)
-                
-                if repeat_offenders and len(repeat_offenders) == len(failed):
-                    # Same engines keep failing — don't repeat ineffective fix
-                    actions.append(ImprovementAction("engine",
-                        f"{len(failed)}/{total_engines} engines persistently failed: {', '.join(failed[:3])}",
-                        "MAX_TOKENS_ALREADY_MAXED — skip these engines or switch LLM provider",
-                        f"External API issue, not code-fixable. Suggest: skip engine or use fallback model"))
-                else:
-                    actions.append(ImprovementAction("engine",
-                        f"{len(failed)}/{total_engines} engines failed: {', '.join(failed[:3])}",
-                        "Increase max_tokens, fix prompt format, or reduce prompt size",
-                        f"Restore {len(failed)} failed engines → ~{len(failed)*5} more hypotheses"))
-            low_output = engine_report.get('engines_with_low_output', [])
-            if low_output:
-                actions.append(ImprovementAction("prompt",
-                    f"{len(low_output)} engines with <3 hypotheses: {', '.join(low_output[:3])}",
-                    "Inject domain context into Reasoner prompt, add more few-shot examples",
-                    f"Boost hypothesis yield from {len(low_output)} engines"))
+        # Level 0 engine-health diagnostics are no longer available: the unified
+        # mainline does not expose a per-engine report. Contract-approval and
+        # execution failures are surfaced via the fail-fast check in _observe.
 
         # ── Level 1: Finding-level patterns ──
-        inconclusives = [f for f in findings if f.verdict == "inconclusive"]
-        evidence_texts = [str(f.evidence.get("actual", "")) for f in inconclusives]
+        inconclusives = [f for f in findings if str(f.get("verdict", "")) == "inconclusive"]
+        evidence_texts = [str((f.get("evidence") or {}).get("actual", "")) for f in inconclusives]
 
         route_404_count = sum(1 for t in evidence_texts if "404" in t)
         if route_404_count > len(inconclusives) * 0.3:
@@ -313,7 +299,7 @@ class SelfImprovingSweep:
                 f"Confirm ~{side_effect_count} orchestration-needed hypotheses"))
 
         fake_terms = ["租户", "tenant", "金额字段", "用户列表与用户详情"]
-        fake_count = sum(1 for f in inconclusives if any(t in f.title.lower() for t in fake_terms))
+        fake_count = sum(1 for f in inconclusives if any(t in str(f.get("title", "")).lower() for t in fake_terms))
         if fake_count > 0:
             actions.append(ImprovementAction("prompt",
                 f"{fake_count} hallucinated (multi-tenant / financial on single-tenant MES)",
@@ -511,7 +497,7 @@ class SelfImprovingSweep:
         # A run's business value is the unique/latest validated candidate count,
         # while repeated rounds are only attempts to improve evidence quality.
         total_bugs = max((r.bugs_found for r in self.rounds), default=0)
-        engine_health = getattr(self.engine, "_last_engine_report", {}) or {}
+        engine_health = result.get("pipeline_health") or result.get("runtime_contract") or {}
         result = {
             "rounds": len(self.rounds),
             "total_improvements": len(all_actions),
@@ -525,10 +511,13 @@ class SelfImprovingSweep:
             "execution_status": "COMPLETED",
             "actions": [{"target": a.target, "problem": a.problem, "change": a.change} for a in all_actions],
             "findings": [
-                {"id": f.hypothesis_id, "title": f.title, "verdict": f.verdict, "severity": f.severity,
-                 "expected": f.expected, "actual": f.actual, "confidence": f.confidence,
-                 "evidence": f.evidence if hasattr(f, 'evidence') and isinstance(f.evidence, dict) else {}}
-                for f in (getattr(self.engine, "findings", []) or [])
+                {"id": f.get("finding_id") or f.get("id"), "title": f.get("title"),
+                 "verdict": f.get("verdict") or "confirmed", "severity": f.get("severity") or "P2",
+                 "expected": f.get("expected") or (f.get("evidence") or {}).get("expected", ""),
+                 "actual": f.get("actual") or (f.get("evidence") or {}).get("actual", ""),
+                 "confidence": f.get("confidence") or f.get("confidence_score") or 0.0,
+                 "evidence": f.get("evidence") or {}}
+                for f in findings
             ],
             "engine_health": engine_health,
             "cognitive_graph": self._cognitive_graph_observation,
