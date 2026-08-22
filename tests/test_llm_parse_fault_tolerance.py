@@ -91,7 +91,7 @@ def _processing_recoveries() -> list[dict]:
 def test_clean_json_parses_without_recovery_marker():
     client = _client()
     with mock.patch("urllib.request.urlopen", return_value=_FakeResponse(_envelope('{"ok": true}'))):
-        result = client.chat_json("hi")
+        result = client.chat_json("hi", caller="parse_tolerance_test")
     assert result == {"ok": True}
     assert _processing_recoveries() == []
 
@@ -100,7 +100,7 @@ def test_prefix_text_before_json_is_extracted():
     client = _client()
     content = 'Here is my analysis of the business data:\n{"findings": [], "insufficient_evidence": true}'
     with mock.patch("urllib.request.urlopen", return_value=_FakeResponse(_envelope(content))):
-        result = client.chat_json("hi")
+        result = client.chat_json("hi", caller="parse_tolerance_test")
     assert result == {"findings": [], "insufficient_evidence": True}
     recoveries = _processing_recoveries()
     assert len(recoveries) == 1
@@ -111,7 +111,7 @@ def test_suffix_text_after_json_is_ignored():
     client = _client()
     content = '{"ok": true}\nThis concludes my audit. No further issues found.'
     with mock.patch("urllib.request.urlopen", return_value=_FakeResponse(_envelope(content))):
-        result = client.chat_json("hi")
+        result = client.chat_json("hi", caller="parse_tolerance_test")
     assert result == {"ok": True}
 
 
@@ -119,7 +119,7 @@ def test_prefix_and_suffix_text_together():
     client = _client()
     content = "Sure, the JSON is:\n{\"a\": 1}\n\nLet me know if you need more."
     with mock.patch("urllib.request.urlopen", return_value=_FakeResponse(_envelope(content))):
-        result = client.chat_json("hi")
+        result = client.chat_json("hi", caller="parse_tolerance_test")
     assert result == {"a": 1}
 
 
@@ -127,7 +127,7 @@ def test_prose_with_placeholder_braces_skips_to_real_json():
     client = _client()
     content = 'Use the {placeholder} style. Actually here: {"answer": 42} and that is final.'
     with mock.patch("urllib.request.urlopen", return_value=_FakeResponse(_envelope(content))):
-        result = client.chat_json("hi")
+        result = client.chat_json("hi", caller="parse_tolerance_test")
     assert result == {"answer": 42}
 
 
@@ -139,7 +139,7 @@ def test_fence_with_language_tag_stripped():
     client = _client()
     content = '```json\n{"ok": true}\n```'
     with mock.patch("urllib.request.urlopen", return_value=_FakeResponse(_envelope(content))):
-        result = client.chat_json("hi")
+        result = client.chat_json("hi", caller="parse_tolerance_test")
     assert result == {"ok": True}
     recoveries = _processing_recoveries()
     assert len(recoveries) == 1
@@ -150,7 +150,7 @@ def test_fence_bare_triple_backtick_stripped():
     client = _client()
     content = '```\n{"ok": true}\n```'
     with mock.patch("urllib.request.urlopen", return_value=_FakeResponse(_envelope(content))):
-        result = client.chat_json("hi")
+        result = client.chat_json("hi", caller="parse_tolerance_test")
     assert result == {"ok": True}
 
 
@@ -158,7 +158,7 @@ def test_unclosed_fence_keeps_content():
     client = _client()
     content = '```json\n{"ok": true}'
     with mock.patch("urllib.request.urlopen", return_value=_FakeResponse(_envelope(content))):
-        result = client.chat_json("hi")
+        result = client.chat_json("hi", caller="parse_tolerance_test")
     assert result == {"ok": True}
 
 
@@ -166,7 +166,7 @@ def test_explanation_before_fence_is_extracted():
     client = _client()
     content = 'Result:\n```json\n{"ok": true}\n```\nHope this helps.'
     with mock.patch("urllib.request.urlopen", return_value=_FakeResponse(_envelope(content))):
-        result = client.chat_json("hi")
+        result = client.chat_json("hi", caller="parse_tolerance_test")
     assert result == {"ok": True}
 
 
@@ -178,7 +178,7 @@ def test_jsonc_line_comments_stripped():
     client = _client()
     content = '{\n  "a": 1, // item count\n  "b": 2\n}'
     with mock.patch("urllib.request.urlopen", return_value=_FakeResponse(_envelope(content))):
-        result = client.chat_json("hi")
+        result = client.chat_json("hi", caller="parse_tolerance_test")
     assert result == {"a": 1, "b": 2}
     recoveries = _processing_recoveries()
     assert recoveries[0]["failure_reason"] == "recovered:comments"
@@ -188,7 +188,7 @@ def test_jsonc_block_comments_stripped():
     client = _client()
     content = '{"a": 1, /* block\ncomment */ "b": 2}'
     with mock.patch("urllib.request.urlopen", return_value=_FakeResponse(_envelope(content))):
-        result = client.chat_json("hi")
+        result = client.chat_json("hi", caller="parse_tolerance_test")
     assert result == {"a": 1, "b": 2}
 
 
@@ -196,7 +196,7 @@ def test_trailing_commas_stripped():
     client = _client()
     content = '{"a": [1, 2,], "b": {"c": 3,}}'
     with mock.patch("urllib.request.urlopen", return_value=_FakeResponse(_envelope(content))):
-        result = client.chat_json("hi")
+        result = client.chat_json("hi", caller="parse_tolerance_test")
     assert result == {"a": [1, 2], "b": {"c": 3}}
 
 
@@ -204,7 +204,7 @@ def test_comment_markers_inside_strings_are_preserved():
     client = _client()
     content = '{"url": "http://example.com/x", "path": "a//b", "note": "/* not a comment */"}'
     with mock.patch("urllib.request.urlopen", return_value=_FakeResponse(_envelope(content))):
-        result = client.chat_json("hi")
+        result = client.chat_json("hi", caller="parse_tolerance_test")
     assert result["url"] == "http://example.com/x"
     assert result["path"] == "a//b"
     assert result["note"] == "/* not a comment */"
@@ -218,7 +218,7 @@ def test_truncated_object_mid_array_is_closed():
     client = _client()
     content = '{"a": 1, "b": [1, 2'
     with mock.patch("urllib.request.urlopen", return_value=_FakeResponse(_envelope(content))):
-        result = client.chat_json("hi")
+        result = client.chat_json("hi", caller="parse_tolerance_test")
     assert result == {"a": 1, "b": [1, 2]}
     recoveries = _processing_recoveries()
     assert recoveries[0]["failure_reason"] == "recovered:truncated_closed"
@@ -228,7 +228,7 @@ def test_truncated_mid_string_is_closed():
     client = _client()
     content = '{"a": "unterminated'
     with mock.patch("urllib.request.urlopen", return_value=_FakeResponse(_envelope(content))):
-        result = client.chat_json("hi")
+        result = client.chat_json("hi", caller="parse_tolerance_test")
     assert result == {"a": "unterminated"}
 
 
@@ -236,7 +236,7 @@ def test_truncated_nested_structures_closed_in_reverse_order():
     client = _client()
     content = '{"a": {"b": [1, {"c": 2'
     with mock.patch("urllib.request.urlopen", return_value=_FakeResponse(_envelope(content))):
-        result = client.chat_json("hi")
+        result = client.chat_json("hi", caller="parse_tolerance_test")
     assert result == {"a": {"b": [1, {"c": 2}]}}
 
 
@@ -244,7 +244,7 @@ def test_finish_reason_length_flags_clean_parse_as_truncated():
     client = _client()
     body = _envelope('{"ok": true}', finish_reason="length")
     with mock.patch("urllib.request.urlopen", return_value=_FakeResponse(body)):
-        result = client.chat_json("hi")
+        result = client.chat_json("hi", caller="parse_tolerance_test")
     assert result == {"ok": True}
     recoveries = _processing_recoveries()
     assert len(recoveries) == 1
@@ -255,7 +255,7 @@ def test_finish_reason_length_with_unbalanced_content_closes_and_flags():
     client = _client()
     body = _envelope('{"ok": true, "tail": [1, 2', finish_reason="length")
     with mock.patch("urllib.request.urlopen", return_value=_FakeResponse(body)):
-        result = client.chat_json("hi")
+        result = client.chat_json("hi", caller="parse_tolerance_test")
     assert result == {"ok": True, "tail": [1, 2]}
 
 
@@ -270,14 +270,14 @@ def test_content_as_part_list_is_joined():
         {"type": "text", "text": ""},
     ]
     with mock.patch("urllib.request.urlopen", return_value=_FakeResponse(_envelope(content))):
-        result = client.chat_json("hi")
+        result = client.chat_json("hi", caller="parse_tolerance_test")
     assert result == {"ok": True}
 
 
 def test_content_as_single_part_dict():
     client = _client()
     with mock.patch("urllib.request.urlopen", return_value=_FakeResponse(_envelope({"text": '{"ok": true}'}))):
-        result = client.chat_json("hi")
+        result = client.chat_json("hi", caller="parse_tolerance_test")
     assert result == {"ok": True}
 
 
@@ -285,7 +285,7 @@ def test_braces_inside_string_values_do_not_confuse_matching():
     client = _client()
     content = '{"pattern": "a{2,3}", "nested": {"x": "{not json}", "y": [{"z": 1}]}}'
     with mock.patch("urllib.request.urlopen", return_value=_FakeResponse(_envelope(content))):
-        result = client.chat_json("hi")
+        result = client.chat_json("hi", caller="parse_tolerance_test")
     assert result == {"pattern": "a{2,3}", "nested": {"x": "{not json}", "y": [{"z": 1}]}}
 
 
@@ -298,7 +298,7 @@ def test_not_json_content_raises_with_reason():
     body = _envelope("not json at all")
     with mock.patch("urllib.request.urlopen", return_value=_FakeResponse(body)):
         with pytest.raises(ReasoningClientError) as exc_info:
-            client.chat_json("hi")
+            client.chat_json("hi", caller="parse_tolerance_test")
     assert "parse_reason=not_json" in str(exc_info.value)
     proc = [o for o in llm_observation_snapshot() if o["kind"] == "response_processing"]
     assert all(o["failure_reason"] == "not_json" for o in proc)
@@ -309,7 +309,7 @@ def test_empty_content_keeps_legacy_message_contract():
     body = _envelope("")
     with mock.patch("urllib.request.urlopen", return_value=_FakeResponse(body)):
         with pytest.raises(ReasoningClientError) as exc_info:
-            client.chat_json("hi")
+            client.chat_json("hi", caller="parse_tolerance_test")
     # agent_semantic_linker classifies this exact message as transient
     # (it lowercases the message before matching).
     assert "did not include json content" in str(exc_info.value).lower()
@@ -319,7 +319,7 @@ def test_envelope_not_json_is_shape_error():
     client = _client()
     with mock.patch("urllib.request.urlopen", return_value=_FakeResponse(b"<html>502 Bad Gateway</html>")):
         with pytest.raises(ReasoningClientError) as exc_info:
-            client.chat_json("hi")
+            client.chat_json("hi", caller="parse_tolerance_test")
     assert "response shape" in str(exc_info.value)
     proc = [o for o in llm_observation_snapshot() if o["kind"] == "response_processing"]
     assert all(o["failure_reason"] == "shape_error" for o in proc)
@@ -329,7 +329,7 @@ def test_envelope_missing_choices_is_shape_error():
     client = _client()
     with mock.patch("urllib.request.urlopen", return_value=_FakeResponse({"usage": {}})):
         with pytest.raises(ReasoningClientError):
-            client.chat_json("hi")
+            client.chat_json("hi", caller="parse_tolerance_test")
     proc = [o for o in llm_observation_snapshot() if o["kind"] == "response_processing"]
     assert all(o["failure_reason"] == "shape_error" for o in proc)
 
@@ -339,7 +339,7 @@ def test_unsalvageable_truncation_raises_truncated():
     body = _envelope('{"a":')  # closing yields {"a":} which is invalid
     with mock.patch("urllib.request.urlopen", return_value=_FakeResponse(body)):
         with pytest.raises(ReasoningClientError) as exc_info:
-            client.chat_json("hi")
+            client.chat_json("hi", caller="parse_tolerance_test")
     assert "parse_reason=truncated" in str(exc_info.value)
     proc = [o for o in llm_observation_snapshot() if o["kind"] == "response_processing"]
     assert all(o["failure_reason"] == "truncated" for o in proc)
@@ -350,7 +350,7 @@ def test_finish_reason_length_with_prose_failure_is_truncated():
     body = _envelope("I could not finish because the output was cut off here", finish_reason="length")
     with mock.patch("urllib.request.urlopen", return_value=_FakeResponse(body)):
         with pytest.raises(ReasoningClientError) as exc_info:
-            client.chat_json("hi")
+            client.chat_json("hi", caller="parse_tolerance_test")
     assert "parse_reason=truncated" in str(exc_info.value)
     proc = [o for o in llm_observation_snapshot() if o["kind"] == "response_processing"]
     assert all(o["failure_reason"] == "truncated" for o in proc)
@@ -361,7 +361,7 @@ def test_malformed_wrapped_json_raises_prefix_text():
     body = _envelope('The answer is {"a": 1,,,} more text')
     with mock.patch("urllib.request.urlopen", return_value=_FakeResponse(body)):
         with pytest.raises(ReasoningClientError) as exc_info:
-            client.chat_json("hi")
+            client.chat_json("hi", caller="parse_tolerance_test")
     assert "parse_reason=prefix_text" in str(exc_info.value)
     proc = [o for o in llm_observation_snapshot() if o["kind"] == "response_processing"]
     assert all(o["failure_reason"] == "prefix_text" for o in proc)
@@ -372,7 +372,7 @@ def test_root_array_is_shape_error():
     body = _envelope("[1, 2, 3]")
     with mock.patch("urllib.request.urlopen", return_value=_FakeResponse(body)):
         with pytest.raises(ReasoningClientError) as exc_info:
-            client.chat_json("hi")
+            client.chat_json("hi", caller="parse_tolerance_test")
     assert "root must be an object" in str(exc_info.value)
     proc = [o for o in llm_observation_snapshot() if o["kind"] == "response_processing"]
     assert all(o["failure_reason"] == "shape_error" for o in proc)
@@ -387,7 +387,7 @@ def test_chat_json_retries_once_and_recovers():
     bad = _envelope("totally not json")  # unparseable -> triggers the retry
     good = _envelope('{"ok": true}')
     with mock.patch("urllib.request.urlopen", side_effect=[_FakeResponse(bad), _FakeResponse(good)]):
-        result = client.chat_json("hi")
+        result = client.chat_json("hi", caller="parse_tolerance_test")
     assert result == {"ok": True}
     obs = llm_observation_snapshot()
     assert len([o for o in obs if o["kind"] == "chat"]) == 2
@@ -401,7 +401,7 @@ def test_chat_json_raises_after_two_parse_failures_no_third_call():
     bad = _envelope("not json at all")
     with mock.patch("urllib.request.urlopen", side_effect=[_FakeResponse(bad), _FakeResponse(bad)]):
         with pytest.raises(ReasoningClientError):
-            client.chat_json("hi")
+            client.chat_json("hi", caller="parse_tolerance_test")
     obs = llm_observation_snapshot()
     assert len([o for o in obs if o["kind"] == "chat"]) == 2  # exactly one retry, no more
     assert len([o for o in obs if o["kind"] == "response_processing"]) == 2
@@ -457,7 +457,7 @@ def test_receipt_aggregates_parse_recoveries():
     ]
     with mock.patch("urllib.request.urlopen", side_effect=[_FakeResponse(b) for b in bodies]):
         for _ in range(4):
-            client.chat_json("hi")
+            client.chat_json("hi", caller="parse_tolerance_test")
     receipt = build_llm_observability_receipt()
     recoveries = receipt["parse_recoveries"]
     assert recoveries["count"] == 4
@@ -497,7 +497,7 @@ def test_run10_deepseek_failure_shapes_now_parse():
     ]
     with mock.patch("urllib.request.urlopen", side_effect=[_FakeResponse(_envelope(s)) for s in shapes]):
         for index, shape in enumerate(shapes):
-            result = client.chat_json(f"query {index}")
+            result = client.chat_json(f"query {index}", caller="parse_tolerance_test")
             assert isinstance(result, dict), f"shape {index} failed to parse: {shape!r}"
     # shapes 1-5 need content-level recovery; shape 6 (part list) parses as a
     # clean content string, so it carries no recovery marker.

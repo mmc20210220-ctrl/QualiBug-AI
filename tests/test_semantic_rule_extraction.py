@@ -28,7 +28,7 @@ class _Client:
         self._responder = responder
         self.calls: list[tuple[str, str]] = []
 
-    def chat_json(self, prompt: str, *, system_prompt: str, tier: str = "strong"):
+    def chat_json(self, prompt: str, *, system_prompt: str, tier: str = "strong", caller: str = ""):
         self.calls.append((prompt, system_prompt))
         return self._responder(prompt)
 

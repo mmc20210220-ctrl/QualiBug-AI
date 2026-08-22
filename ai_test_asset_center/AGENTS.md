@@ -923,6 +923,15 @@ Evolution Contract):
 
 ## Package Risk Points
 
+- LLM cost attribution (Make It Observable, 2026-08-22): every `chat_json` /
+  `complete_json` call MUST declare `caller="<consumer identity>"`. The client
+  fails fast with `llm_caller_attribution_required` on empty/missing caller —
+  an unattributed LLM call is a boundary defect, never silently recorded.
+  `qualibug.llm-observability.v1` receipts bucket by `by_caller` (with a
+  visible `unattributed` bucket for legacy/bypass records) so the cost ledger
+  can always answer "which stage spent these tokens". Engine-level reasoner
+  calls keep their existing `engine_type` attribution. New LLM consumers
+  without a declared caller are rejected at the boundary.
 - Side-effect-free import: importing `ai_test_asset_center` must never
   install evaluator scoring, runtime patches, or scenario contracts (see
   Implementation SSOT Registry).

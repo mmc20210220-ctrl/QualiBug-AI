@@ -526,6 +526,7 @@ def _complete_batch(
     for attempt in range(1, MAX_PROVIDER_ATTEMPTS + 1):
         try:
             response = client.complete_json(
+                caller="agent_semantic_linker",
                 system_prompt=(
                     "You perform source-grounded enterprise business semantic analysis. "
                     "Identifiers and supplied facts are the only authority. Output JSON only."

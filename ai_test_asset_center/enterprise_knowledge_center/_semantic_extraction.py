@@ -1135,6 +1135,7 @@ def run_semantic_extraction(
                     user_prompt,
                     system_prompt=_SYSTEM_PROMPT,
                     tier="light",
+                    caller="semantic_rule_extraction",
                 )
         except Exception as exc:
             chunk_receipt["status"] = "FAILED_LLM_ERROR"

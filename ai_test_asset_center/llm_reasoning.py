@@ -253,6 +253,31 @@ def build_llm_observability_receipt() -> dict[str, Any]:
     for entry in by_call_point.values():
         entry["total_estimated_cost_usd"] = round(entry["total_estimated_cost_usd"], 6)
 
+    # Make It Observable：按调用者身份分桶——成本账本必须能回答
+    # “这些 token 是谁花的”。未声明的调用聚合在 "unattributed" 桶，
+    # 让归因缺口本身可见，而不是消失在总量里。
+    by_caller: dict[str, dict[str, Any]] = {}
+    for o in calls:
+        entry = by_caller.setdefault(str(o.get("caller") or "") or "unattributed", {
+            "calls": 0,
+            "failed": 0,
+            "total_latency_ms": 0,
+            "total_input_tokens": 0,
+            "total_output_tokens": 0,
+            "total_estimated_cost_usd": 0.0,
+            "cost_covered_calls": 0,
+        })
+        entry["calls"] += 1
+        entry["failed"] += 0 if o["success"] else 1
+        entry["total_latency_ms"] += int(o["latency_ms"] or 0)
+        entry["total_input_tokens"] += int(o["input_tokens"] or 0)
+        entry["total_output_tokens"] += int(o["output_tokens"] or 0)
+        if o["cost_estimate_usd"] is not None:
+            entry["total_estimated_cost_usd"] += float(o["cost_estimate_usd"])
+            entry["cost_covered_calls"] += 1
+    for entry in by_caller.values():
+        entry["total_estimated_cost_usd"] = round(entry["total_estimated_cost_usd"], 6)
+
     failure_reasons: dict[str, int] = {}
     failure_codes: dict[str, int] = {}
     for o in failed:
@@ -277,6 +302,7 @@ def build_llm_observability_receipt() -> dict[str, Any]:
     top_slow_calls = [
         {
             "call_point": o["call_point"],
+            "caller": str(o.get("caller") or "") or "unattributed",
             "kind": o["kind"],
             "model": o["model"],
             "success": o["success"],
@@ -318,6 +344,7 @@ def build_llm_observability_receipt() -> dict[str, Any]:
             ),
         },
         "by_call_point": by_call_point,
+        "by_caller": by_caller,
         "failures": {
             "count": len(failed),
             "by_reason": failure_reasons,
@@ -1319,6 +1346,7 @@ class ReasoningClient:
         tokens_estimated: bool = False,
         failure_reason: str | None = None,
         failure_code: str | None = None,
+        caller: str = "",
     ) -> None:
         """Record one per-call observation. Metadata only — never prompt or
         model-output content. Observation never affects the call outcome."""
@@ -1327,6 +1355,9 @@ class ReasoningClient:
             cost = self._estimate_cost_usd(kind, input_tokens, output_tokens)
         record_llm_observation({
             "call_point": call_point,
+            # Make It Observable：每条观测必须携带调用者身份，否则成本账本
+            # 无法回答“这些 token 是谁花的”（20260821 审计教训）。
+            "caller": str(caller or ""),
             "kind": kind,
             "model": model,
             "success": bool(success),
@@ -1346,11 +1377,12 @@ class ReasoningClient:
             "started_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         })
 
-    def _record_processing_failure(self, call_point: str, failure_reason: str) -> None:
+    def _record_processing_failure(self, call_point: str, failure_reason: str, caller: str = "") -> None:
         """Record a response-processing (parse) failure for a round trip that
         already succeeded at the HTTP layer."""
         self._record_observation(
             call_point=call_point,
+            caller=caller,
             kind="response_processing",
             model=None,
             success=False,
@@ -1360,13 +1392,14 @@ class ReasoningClient:
             failure_code=None,
         )
 
-    def _record_processing_recovery(self, call_point: str, method: str) -> None:
+    def _record_processing_recovery(self, call_point: str, method: str, caller: str = "") -> None:
         """Record a successful response-processing parse that required
         tolerance (fence/comment stripping, substring extraction, truncation
         closure). ``failure_reason`` carries ``recovered:<method>`` and is
         aggregated by the receipt's ``parse_recoveries`` section."""
         self._record_observation(
             call_point=call_point,
+            caller=caller,
             kind="response_processing",
             model=None,
             success=True,
@@ -1467,6 +1500,7 @@ class ReasoningClient:
         system_prompt: str | None = None,
         model: str | None = None,
         call_point: str | None = None,
+        caller: str = "",
     ) -> str:
         resolved_model = model or self.config.model
         call_point = call_point or "chat"
@@ -1484,6 +1518,7 @@ class ReasoningClient:
             _elapsed_ms = 0
             self._record_observation(
                 call_point=call_point,
+                caller=caller,
                 kind="chat",
                 model=resolved_model,
                 success=False,
@@ -1610,6 +1645,7 @@ class ReasoningClient:
                 output_tokens = max(0, math.ceil(len(response_text) / 4))
             self._record_observation(
                 call_point=call_point,
+                caller=caller,
                 kind="chat",
                 model=resolved_model,
                 success=True,
@@ -1654,6 +1690,7 @@ class ReasoningClient:
                 _failure_reason = "http_error"
             self._record_observation(
                 call_point=call_point,
+                caller=caller,
                 kind="chat",
                 model=resolved_model,
                 success=False,
@@ -1679,6 +1716,7 @@ class ReasoningClient:
             _code = "QB-L001" if _is_timeout else "QB-L004"
             self._record_observation(
                 call_point=call_point,
+                caller=caller,
                 kind="chat",
                 model=resolved_model,
                 success=False,
@@ -1705,6 +1743,7 @@ class ReasoningClient:
         system_prompt: str | None,
         model: str,
         call_point: str,
+        caller: str = "",
     ) -> dict[str, Any]:
         """Run one chat round trip and parse its JSON contract, retrying the
         *identical payload* once when the parse fails.
@@ -1722,9 +1761,10 @@ class ReasoningClient:
             system_prompt=system_prompt,
             model=model,
             call_point=call_point,
+            caller=caller,
         )
         try:
-            return self._parse_json(raw, call_point=call_point)
+            return self._parse_json(raw, call_point=call_point, caller=caller)
         except ReasoningClientError as exc:
             _llm_logger.info(
                 "LLM parse failed, retrying once: %s",
@@ -1736,8 +1776,9 @@ class ReasoningClient:
                 system_prompt=system_prompt,
                 model=model,
                 call_point=call_point,
+                caller=caller,
             )
-            return self._parse_json(raw, call_point=call_point)
+            return self._parse_json(raw, call_point=call_point, caller=caller)
 
     # ------------------------------------------------------------------
     # LLM output parse tolerance (root-cause fix for run10's 62% parse
@@ -2027,6 +2068,7 @@ class ReasoningClient:
         response_text: str,
         *,
         call_point: str = "response_processing",
+        caller: str = "",
     ) -> dict[str, Any]:
         """Parse the chat-completion envelope and its JSON content contract.
 
@@ -2047,19 +2089,19 @@ class ReasoningClient:
         try:
             raw = json.loads(response_text)
         except (TypeError, json.JSONDecodeError) as exc:
-            self._record_processing_failure(call_point, "shape_error")
+            self._record_processing_failure(call_point, "shape_error", caller=caller)
             raise ReasoningClientError(f"Unexpected LLM response shape: {exc}") from exc
         if not isinstance(raw, dict):
-            self._record_processing_failure(call_point, "shape_error")
+            self._record_processing_failure(call_point, "shape_error", caller=caller)
             raise ReasoningClientError("Unexpected LLM response shape: envelope is not an object")
         try:
             content, finish_reason = self._extract_message_content(raw)
         except (KeyError, IndexError, TypeError) as exc:
-            self._record_processing_failure(call_point, "shape_error")
+            self._record_processing_failure(call_point, "shape_error", caller=caller)
             raise ReasoningClientError(f"Unexpected LLM response shape: {exc}") from exc
 
         if not isinstance(content, str) or not content.strip():
-            self._record_processing_failure(call_point, "not_json")
+            self._record_processing_failure(call_point, "not_json", caller=caller)
             raise ReasoningClientError("LLM response did not include JSON content")
 
         truncated = finish_reason == "length"
@@ -2069,7 +2111,7 @@ class ReasoningClient:
             # A length-limited response that still fails to parse is a
             # truncation casualty regardless of the mechanical reason.
             reason = "truncated" if truncated and exc.reason in ("prefix_text", "not_json") else exc.reason
-            self._record_processing_failure(call_point, reason)
+            self._record_processing_failure(call_point, reason, caller=caller)
             message = str(exc)
             if reason != exc.reason:
                 message = message.replace(f"parse_reason={exc.reason}", f"parse_reason={reason}")
@@ -2082,25 +2124,41 @@ class ReasoningClient:
                 # mark the call so receipts never present a truncated dict
                 # as a fully clean parse.
                 method = "truncated_flagged"
-            self._record_processing_recovery(call_point, method)
+            self._record_processing_recovery(call_point, method, caller=caller)
         return parsed
 
-    def chat_json(self, user_prompt: str, *, system_prompt: str | None = None, tier: str = DEFAULT_TIER) -> dict[str, Any]:
+    def chat_json(
+        self,
+        user_prompt: str,
+        *,
+        system_prompt: str | None = None,
+        tier: str = DEFAULT_TIER,
+        caller: str = "",
+    ) -> dict[str, Any]:
         """Run one JSON-only advisory request using the shared provider settings.
 
         ``tier`` selects the routed model: "light" (LLM_MODEL_LIGHT when
         configured) for extraction/classification tasks, "strong" (primary
         LLM_MODEL) otherwise. Defaults to strong so existing callers keep
         their historical model.
+
+        ``caller`` is MANDATORY (Make It Observable): every LLM consumer must
+        declare its identity so the cost ledger can attribute tokens to the
+        stage that spent them. Empty/missing caller fails fast with
+        ``llm_caller_attribution_required`` — an unattributed call is treated
+        as a defect at the boundary, never silently recorded.
         """
         if not self.config.enabled:
             raise ReasoningClientError("LLM is not configured")
+        if not str(caller or "").strip():
+            raise ReasoningClientError("llm_caller_attribution_required")
         model = resolve_model_for_tier(self.config, tier)
         return self._chat_with_parse_retry(
             user_prompt,
             system_prompt=system_prompt,
             model=model,
             call_point="chat_json",
+            caller=str(caller).strip(),
         )
 
     def complete_json(
@@ -2109,14 +2167,15 @@ class ReasoningClient:
         user_prompt: str,
         system_prompt: str | None = None,
         tier: str = DEFAULT_TIER,
+        caller: str = "",
     ) -> dict[str, Any]:
         """Expose the fail-fast JSON contract used by constrained Agent planners."""
 
-        return self.chat_json(user_prompt, system_prompt=system_prompt, tier=tier)
+        return self.chat_json(user_prompt, system_prompt=system_prompt, tier=tier, caller=caller)
 
     def health_check(self) -> dict[str, Any]:
         """Perform a bounded provider check without storing credentials or prompts."""
-        result = self.chat_json('Return only this JSON object: {"ok":true}.')
+        result = self.chat_json('Return only this JSON object: {"ok":true}.', caller="llm_health_check")
         if result.get("ok") is not True:
             raise ReasoningClientError("LLM health response did not confirm ok=true")
         return {"ok": True, "model": self.config.model}

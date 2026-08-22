@@ -77,7 +77,7 @@ def _clean_ledger():
 def test_successful_chat_records_observation_with_provider_tokens():
     client = _client()
     with mock.patch("urllib.request.urlopen", return_value=_FakeResponse(_OK_BODY)) as urlopen_mock:
-        result = client.chat_json("summarize the spec", tier="strong")
+        result = client.chat_json("summarize the spec", tier="strong", caller="test_chat_json")
     assert result == {"ok": True, "note": "MODEL-OUTPUT-SECRET-88"}
     urlopen_mock.assert_called_once()
     obs = llm_observation_snapshot()
@@ -108,7 +108,7 @@ def test_no_prompt_or_output_content_leaks():
     client = _client()
     secret_prompt = "TOP-SECRET-PROMPT-MARKER-77"
     with mock.patch("urllib.request.urlopen", return_value=_FakeResponse(_OK_BODY)):
-        client.chat_json(secret_prompt)
+        client.chat_json(secret_prompt, caller="test_chat_json")
     serialized = json.dumps(build_llm_observability_receipt(), ensure_ascii=False)
     serialized += json.dumps(llm_observation_snapshot(), ensure_ascii=False)
     assert "TOP-SECRET-PROMPT-MARKER-77" not in serialized
@@ -119,7 +119,7 @@ def test_estimated_tokens_when_provider_omits_usage():
     body = {"choices": [{"message": {"content": '{"ok": true}'}}]}
     client = _client()
     with mock.patch("urllib.request.urlopen", return_value=_FakeResponse(body)):
-        client.chat_json("hello world")
+        client.chat_json("hello world", caller="test_chat_json")
     o = llm_observation_snapshot()[0]
     assert o["tokens_estimated"] is True
     assert o["input_tokens"] is not None and o["input_tokens"] >= 1
@@ -140,7 +140,7 @@ def test_http_failure_recorded():
         ),
     ):
         with pytest.raises(Exception):
-            client.chat_json("hi")
+            client.chat_json("hi", caller="test_chat_json")
     obs = llm_observation_snapshot()
     assert len(obs) == 1
     o = obs[0]
@@ -162,7 +162,7 @@ def test_auth_failure_maps_to_qb_l006():
         ),
     ):
         with pytest.raises(Exception):
-            client.chat_json("hi")
+            client.chat_json("hi", caller="test_chat_json")
     o = llm_observation_snapshot()[0]
     assert o["failure_code"] == "QB-L006"
 
@@ -171,7 +171,7 @@ def test_timeout_failure_recorded():
     client = _client()
     with mock.patch("urllib.request.urlopen", side_effect=URLError("timed out")):
         with pytest.raises(Exception):
-            client.chat_json("hi")
+            client.chat_json("hi", caller="test_chat_json")
     o = llm_observation_snapshot()[0]
     assert o["success"] is False
     assert o["failure_reason"] == "timeout"
@@ -186,7 +186,7 @@ def test_parse_failure_recorded_as_processing():
     }
     with mock.patch("urllib.request.urlopen", return_value=_FakeResponse(body)):
         with pytest.raises(Exception):
-            client.chat_json("hi")
+            client.chat_json("hi", caller="test_chat_json")
     obs = llm_observation_snapshot()
     # chat_json performs one bounded retry on parse failure: 2 HTTP attempts
     # (each recorded as a chat observation) + 2 processing failures.
@@ -233,8 +233,8 @@ def test_receipt_aggregation_and_cost():
         "usage": {"prompt_tokens": 2000, "completion_tokens": 1000, "total_tokens": 3000},
     }
     with mock.patch("urllib.request.urlopen", side_effect=[_FakeResponse(body_a), _FakeResponse(body_b)]):
-        client.chat_json("a")
-        client.chat_json("b")
+        client.chat_json("a", caller="test_chat_json")
+        client.chat_json("b", caller="test_chat_json")
     receipt = build_llm_observability_receipt()
     assert receipt["schema_version"] == "qualibug.llm-observability.v1"
     s = receipt["summary"]
@@ -262,7 +262,7 @@ def test_receipt_aggregation_and_cost():
 def test_receipt_without_unit_price_records_tokens_only():
     client = _client()
     with mock.patch("urllib.request.urlopen", return_value=_FakeResponse(_OK_BODY)):
-        client.chat_json("hi")
+        client.chat_json("hi", caller="test_chat_json")
     receipt = build_llm_observability_receipt()
     assert receipt["summary"]["total_estimated_cost_usd"] is None
     assert receipt["summary"]["cost_basis"] == "not_configured"
@@ -330,7 +330,7 @@ def test_ledger_cap_marks_truncation():
 def test_reset_clears_ledger():
     client = _client()
     with mock.patch("urllib.request.urlopen", return_value=_FakeResponse(_OK_BODY)):
-        client.chat_json("hi")
+        client.chat_json("hi", caller="test_chat_json")
     assert len(llm_observation_snapshot()) == 1
     reset_llm_observations()
     assert llm_observation_snapshot() == []
@@ -347,10 +347,10 @@ def test_observation_does_not_change_call_results():
     }
     client = _client()
     with mock.patch("urllib.request.urlopen", return_value=_FakeResponse(body)):
-        first = client.chat_json("question")
+        first = client.chat_json("question", caller="test_chat_json")
     reset_llm_observations()
     with mock.patch("urllib.request.urlopen", return_value=_FakeResponse(body)):
-        second = client.chat_json("question")
+        second = client.chat_json("question", caller="test_chat_json")
     assert first == {"answer": 42}
     assert second == {"answer": 42}
     assert first == second
@@ -364,7 +364,7 @@ def test_legacy_usage_snapshot_still_aggregates():
         "cost_usd": 0.001,
     }
     with mock.patch("urllib.request.urlopen", return_value=_FakeResponse(body)):
-        client.chat_json("hi")
+        client.chat_json("hi", caller="test_chat_json")
     snapshot = client.usage_snapshot()
     assert snapshot["request_count"] == 1
     assert snapshot["prompt_tokens"] == 10
@@ -414,3 +414,53 @@ def test_embedding_failure_recorded_and_fail_soft():
     assert o["success"] is False
     assert o["failure_reason"] == "embedding_error"
     assert o["latency_ms"] >= 0
+
+
+# ---------------------------------------------------------------------------
+# Make It Observable：LLM 调用强制归因（caller）契约
+# ---------------------------------------------------------------------------
+
+def test_missing_caller_fails_fast():
+    client = _client()
+    with pytest.raises(Exception) as exc_info:
+        client.chat_json("hi")
+    assert "llm_caller_attribution_required" in str(exc_info.value)
+    # fail-fast 发生在边界：不产生任何未归因观测
+    assert llm_observation_snapshot() == []
+
+
+def test_blank_caller_fails_fast():
+    client = _client()
+    with pytest.raises(Exception) as exc_info:
+        client.chat_json("hi", caller="   ")
+    assert "llm_caller_attribution_required" in str(exc_info.value)
+
+
+def test_by_caller_bucketing_with_unattributed_visible():
+    client = _client()
+    with mock.patch("urllib.request.urlopen", return_value=_FakeResponse(_OK_BODY)):
+        client.chat_json("a", caller="alpha_stage")
+        client.chat_json("b", caller="beta_stage")
+        client.chat_json("c", caller="alpha_stage")
+    # 模拟历史/绕过路径的无 caller 观测：缺口必须可见，而不是消失在总量里
+    record_llm_observation({
+        "call_point": "chat", "kind": "chat", "model": "model-x",
+        "success": True, "http_status": 200, "latency_ms": 1,
+        "input_tokens": 7, "output_tokens": 3, "tokens_estimated": False,
+        "retry_count": 0, "failure_reason": None, "failure_code": None,
+        "cost_estimate_usd": None, "started_at_utc": "2026-01-01T00:00:00Z",
+    })
+    receipt = build_llm_observability_receipt()
+    by_caller = receipt["by_caller"]
+    assert by_caller["alpha_stage"]["calls"] == 2
+    assert by_caller["alpha_stage"]["total_input_tokens"] > 0
+    assert by_caller["beta_stage"]["calls"] == 1
+    assert by_caller["unattributed"]["calls"] == 1
+
+
+def test_top_slow_calls_carry_caller():
+    client = _client()
+    with mock.patch("urllib.request.urlopen", return_value=_FakeResponse(_OK_BODY)):
+        client.chat_json("hi", caller="attributed_stage")
+    receipt = build_llm_observability_receipt()
+    assert receipt["top_slow_calls"][0]["caller"] == "attributed_stage"
