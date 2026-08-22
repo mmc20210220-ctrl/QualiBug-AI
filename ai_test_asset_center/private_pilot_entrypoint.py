@@ -480,6 +480,21 @@ def _block_on_fatal_preflight(
 
 def run_server() -> None:
     log_dir = setup_product_logging()
+    # Startup-time .env loading: default order is <root>/.env then .env.local
+    # (existing process environment always wins). Operators may point
+    # QUALIBUG_ENV_FILE at an explicit file to load exactly that one.
+    # Previously dotenv loading only happened lazily inside the LLM client,
+    # so documented settings (QUALIBUG_PORT, JWT secret, provider keys) written
+    # to .env.local never applied on the bare-metal launch path.
+    from aitestops.env_loader import load_dotenv
+
+    env_file = os.environ.get("QUALIBUG_ENV_FILE", "").strip()
+    loaded_env = load_dotenv(Path(env_file) if env_file else None)
+    if loaded_env:
+        _logger.info(
+            "Loaded environment file(s) at startup",
+            extra={"context": {"env_file": env_file or "<root>/.env + .env.local", "keys": sorted(loaded_env)}},
+        )
     started = time.perf_counter()
     _service._dbg_report(
         hypothesis_id="STARTUP",

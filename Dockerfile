@@ -1,6 +1,17 @@
 # QualiBug AI Enterprise Edition - Dockerfile
 # Version 95.0.0 private-pilot deployment
 
+# ── UI build stage ──
+# Fresh clones can produce a runnable image with a single `docker build`:
+# the customer SPA is compiled inside the image, so the host needs no Node
+# and no prebuilt frontend/dist.
+FROM node:22-alpine AS ui
+WORKDIR /ui
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci --no-audit --no-fund
+COPY frontend/ ./
+RUN npm run build
+
 FROM python:3.12-slim
 
 # Set environment variables
@@ -63,8 +74,8 @@ COPY aitestops/ ./aitestops/
 RUN pip install --no-cache-dir . \
     && python -c "import olefile, openpyxl, pptx, pypdfium2, pytesseract"
 
-# Copy prebuilt customer pilot SPA so the backend serves UI + API on one port
-COPY frontend/dist ./frontend_dist/
+# Customer pilot SPA built in the ui stage above: UI + API served on one port
+COPY --from=ui /ui/dist ./frontend_dist/
 
 # Create necessary directories.  Logs live under platform_outputs/logs
 # (product_logging._LOG_DIR_RELATIVE), so no separate /app/logs is created.

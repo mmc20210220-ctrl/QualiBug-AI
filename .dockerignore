@@ -23,3 +23,7 @@ logs/
 .env
 .env.*
 !.env.local.example
+
+# The SPA is compiled inside the image's ui stage; host artifacts stay out.
+frontend/node_modules/
+frontend/dist/

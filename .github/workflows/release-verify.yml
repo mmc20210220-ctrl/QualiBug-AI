@@ -26,6 +26,12 @@ jobs:
           python -m pytest tests/test_discovery_engine_verifier_quality.py tests/test_grounded_probe_executor.py tests/test_blind_project_runner.py -q
       - name: Build clean release archive
         run: python build_release.py --output build/QualiBug_V11_PRODUCTION_FINAL_CLEAN.zip
+      - name: Upload release archive artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: qualibug-release-zip
+          path: build/QualiBug_V11_PRODUCTION_FINAL_CLEAN.zip
+          if-no-files-found: error
 
   frontend_gate:
     runs-on: ubuntu-latest
@@ -44,6 +50,4 @@ jobs:
         run: npx playwright install --with-deps chromium
       - name: Frontend quality gate
         working-directory: frontend
-        env:
-          AUTH_MODE: demo
         run: npm run ci:gate
