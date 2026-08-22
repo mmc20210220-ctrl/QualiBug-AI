@@ -942,7 +942,17 @@ Evolution Contract):
   (single-rule context stays intact), and blocks single units that still
   exceed the budget with named reason code `llm_input_budget_exhausted` —
   never a silent send, never a silent drop. Split/block counters ride in the
-  link receipt under `input_budget`.
+  link receipt under `input_budget`. Budget scope is rule batches only: the
+  transition unit keeps its designed single-request global-budget semantics.
+- Run-level LLM cost breaker (2026-08-22): operators may declare
+  `LLM_RUN_MAX_INPUT_TOKENS` (default 0 = disabled). The client pre-flights
+  every transport with the CJK-aware estimator against process-cumulative
+  spend; a projected overrun fails fast BEFORE transport with named code
+  QB-L009 (`run_budget_exhausted`) and records its own observation.
+  In-flight calls are unaffected; subsequent calls keep failing fast and
+  visibly instead of discovering insolvency via provider 402s.
+  `qualibug.llm-observability.v1` receipts expose `run_input_budget`
+  (limit / spent_input_tokens / exhausted_calls).
 - Side-effect-free import: importing `ai_test_asset_center` must never
   install evaluator scoring, runtime patches, or scenario contracts (see
   Implementation SSOT Registry).

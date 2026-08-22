@@ -171,6 +171,40 @@ LLM_OBSERVATION_LEDGER_MAX = 20000
 _LLM_OBSERVATION_LOCK = threading.Lock()
 _LLM_OBSERVATIONS: list[dict[str, Any]] = []
 _LLM_OBSERVATIONS_TRUNCATED = False
+# ── 运行级成本熔断器（⑥）────────────────────────────────────────────
+# 操作员经 LLM_RUN_MAX_INPUT_TOKENS 声明本次运行允许消耗的输入 token 上限
+# （0/未设 = 关闭）。进程内累计计数随观测账本同生命周期；传输前预检，
+# 超限调用以具名错误 llm_run_budget_exhausted（QB-L009）快速失败——
+# 在途调用不受影响，后续调用全部快速失败并留痕，杜绝“供应商 402 才
+# 发现破产”的最坏成本形态。
+RUN_INPUT_BUDGET_ENV = "LLM_RUN_MAX_INPUT_TOKENS"
+_LLM_RUN_INPUT_SPENT = 0
+
+
+def _run_input_budget() -> int:
+    raw = os.getenv(RUN_INPUT_BUDGET_ENV, "")
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return 0
+    return value if value > 0 else 0
+
+
+def _llm_run_input_spent() -> int:
+    with _LLM_OBSERVATION_LOCK:
+        return _LLM_RUN_INPUT_SPENT
+
+
+def _llm_run_input_charge(input_tokens: Any) -> None:
+    global _LLM_RUN_INPUT_SPENT
+    try:
+        cost = int(input_tokens)
+    except (TypeError, ValueError):
+        return
+    if cost <= 0:
+        return
+    with _LLM_OBSERVATION_LOCK:
+        _LLM_RUN_INPUT_SPENT += cost
 
 
 def record_llm_observation(observation: dict[str, Any]) -> None:
@@ -191,10 +225,11 @@ def llm_observation_snapshot() -> list[dict[str, Any]]:
 
 def reset_llm_observations() -> None:
     """Clear the ledger (test isolation / operator reset)."""
-    global _LLM_OBSERVATIONS_TRUNCATED
+    global _LLM_OBSERVATIONS_TRUNCATED, _LLM_RUN_INPUT_SPENT
     with _LLM_OBSERVATION_LOCK:
         _LLM_OBSERVATIONS.clear()
         _LLM_OBSERVATIONS_TRUNCATED = False
+        _LLM_RUN_INPUT_SPENT = 0
 
 
 def _llm_observations_truncated() -> bool:
@@ -345,6 +380,12 @@ def build_llm_observability_receipt() -> dict[str, Any]:
         },
         "by_call_point": by_call_point,
         "by_caller": by_caller,
+        # 熔断器状态显影：limit=None 表示操作员未启用运行级预算
+        "run_input_budget": {
+            "limit": _run_input_budget() or None,
+            "spent_input_tokens": total_input,
+            "exhausted_calls": failure_codes.get("QB-L009", 0),
+        },
         "failures": {
             "count": len(failed),
             "by_reason": failure_reasons,
@@ -1376,6 +1417,10 @@ class ReasoningClient:
             "cost_estimate_usd": cost,
             "started_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         })
+        # 熔断器计费：任何真实/预估的输入消耗都计入运行累计（response_processing
+        # 除外——它不产生传输）。预算预检在 _chat 传输前执行。
+        if kind in ("chat", "embedding") and input_tokens is not None:
+            _llm_run_input_charge(input_tokens)
 
     def _record_processing_failure(self, call_point: str, failure_reason: str, caller: str = "") -> None:
         """Record a response-processing (parse) failure for a round trip that
@@ -1524,6 +1569,45 @@ class ReasoningClient:
         _input_tokens = estimate_input_tokens(user_prompt) + estimate_input_tokens(
             system_prompt or SYSTEM_PROMPT
         )
+        # ── 运行级成本熔断器（⑥）───────────────────────────────────────
+        # 传输前预检：本次预估 + 运行累计 > 操作员预算 → 快速失败，绝不发送。
+        # 在途调用不受影响；后续调用同样快速失败并留痕，杜绝“供应商 402 才
+        # 发现破产”的最坏成本形态。
+        _run_budget = _run_input_budget()
+        if _run_budget > 0:
+            _projected_spend = _llm_run_input_spent() + _input_tokens
+            if _projected_spend > _run_budget:
+                self._record_observation(
+                    call_point=call_point,
+                    caller=caller,
+                    kind="chat",
+                    model=resolved_model,
+                    success=False,
+                    http_status=None,
+                    latency_ms=0,
+                    failure_reason="run_budget_exhausted",
+                    failure_code="QB-L009",
+                    input_tokens=_input_tokens,
+                    tokens_estimated=True,
+                )
+                _llm_logger.error(
+                    "LLM run input budget exhausted: call_point=%s projected=%d spent=%d limit=%d",
+                    call_point,
+                    _projected_spend,
+                    _llm_run_input_spent(),
+                    _run_budget,
+                    extra={"error_code": "QB-L009", "context": {
+                        "call_point": call_point,
+                        "caller": caller,
+                        "projected_input_tokens": _projected_spend,
+                        "spent_input_tokens": _llm_run_input_spent(),
+                        "run_max_input_tokens": _run_budget,
+                    }},
+                )
+                raise ReasoningClientError(
+                    f"LLM run input budget exhausted: "
+                    f"projected {_projected_spend} tokens > limit {_run_budget}"
+                )
         if _input_budget > 0 and _input_tokens > _input_budget:
             _elapsed_ms = 0
             self._record_observation(

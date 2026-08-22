@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 from urllib.error import HTTPError, URLError
 import unittest.mock as mock
 
@@ -466,3 +467,52 @@ def test_top_slow_calls_carry_caller():
         client.chat_json("hi", caller="attributed_stage")
     receipt = build_llm_observability_receipt()
     assert receipt["top_slow_calls"][0]["caller"] == "attributed_stage"
+
+
+# ---------------------------------------------------------------------------
+# 运行级成本熔断器（QB-L009 / llm run budget）
+# ---------------------------------------------------------------------------
+
+def test_run_budget_stops_second_call_before_transport():
+    client = _client()
+    with mock.patch(
+        "urllib.request.urlopen",
+        return_value=_FakeResponse(_OK_BODY),
+    ) as transport:
+        with mock.patch.dict(os.environ, {"LLM_RUN_MAX_INPUT_TOKENS": "300"}):
+            # 第一次：累计 0 + 本次 120 ≤ 200 → 放行
+            client.chat_json("first", caller="budget_test")
+            # 第二次：累计 120 + 本次 120 = 240 > 200 → 传输前快速失败
+            with pytest.raises(Exception) as exc_info:
+                client.chat_json("second", caller="budget_test")
+    assert transport.call_count == 1, "超限调用绝不允许触达传输层"
+    assert "run input budget exhausted" in str(exc_info.value)
+    obs = llm_observation_snapshot()
+    blocked = [o for o in obs if o.get("failure_reason") == "run_budget_exhausted"]
+    assert len(blocked) == 1
+    assert blocked[0]["failure_code"] == "QB-L009"
+    assert blocked[0]["caller"] == "budget_test"
+
+
+def test_run_budget_disabled_by_default():
+    client = _client()
+    assert os.environ.get("LLM_RUN_MAX_INPUT_TOKENS") in (None, "")
+    with mock.patch("urllib.request.urlopen", return_value=_FakeResponse(_OK_BODY)):
+        for _ in range(3):
+            client.chat_json("loop", caller="no_budget_test")
+    ok = [o for o in llm_observation_snapshot() if o["success"]]
+    assert len(ok) == 3
+
+
+def test_receipt_reports_run_input_budget_state():
+    client = _client()
+    with mock.patch.dict(os.environ, {"LLM_RUN_MAX_INPUT_TOKENS": "500"}):
+        with mock.patch("urllib.request.urlopen", return_value=_FakeResponse(_OK_BODY)):
+            client.chat_json("once", caller="receipt_test")
+        # limit 在构建时读取 env：构建与断言都必须留在 env 上下文内
+        receipt = build_llm_observability_receipt()
+    section = receipt["run_input_budget"]
+    assert section["limit"] == 500
+    assert section["spent_input_tokens"] > 0
+    assert section["exhausted_calls"] == 0
+
