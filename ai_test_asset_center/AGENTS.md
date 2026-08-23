@@ -1031,6 +1031,22 @@ Evolution Contract):
   through the `[cleanup-trace]` structured events in
   `experiment_cleanup_executor_core.py`; ad-hoc stderr prints are forbidden
   on that path.
+- Execution scheduling visibility + endpoint circuit breaker (2026-08-23,
+  offline reconciliation of CMP_77d5dfe1 round 2): the concurrent scheduler
+  emits `[exec-trace] schedule/batch` lines (group count, top group sizes,
+  workers, mode, elapsed) at scheduling time so topology collapse is visible
+  even when a later wrap-up crash would have erased the batch receipt.
+  Governed writes pass an endpoint circuit breaker before transport:
+  `QUALIBUG_ENDPOINT_BREAKER_THRESHOLD` (default 5) consecutive server-side
+  failures (5xx / transport-0) on one (method, path) open a circuit that
+  blocks further governed writes to it with named reason
+  `endpoint_circuit_open:<METHOD>:<path>` until
+  `QUALIBUG_ENDPOINT_BREAKER_COOLDOWN_SECONDS` (default 300) elapses and a
+  half-open probe runs. Business 4xx rejections never trip it; success clears
+  it. The breaker changes only WHERE attempts stop — blocked attempts are
+  honest BLOCKED receipts with zero target writes, and no verdict is altered.
+  Evidence: POST /api/orders took 152 consecutive rejections / 0 acceptances
+  in one run, each retry variant re-paying fixture + transport cost.
 - Wrap-up persistence hot-path contract (py-spy evidence 2026-08-23, run
   CMP_77d5dfe1 round 2: >25 min spinning inside
   `write_scan_result → redact/reseal/content_fingerprint`):

@@ -17,6 +17,7 @@ import inspect
 import json
 import os
 import re
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -77,6 +78,89 @@ _TEST_ENV_TOKENS = frozenset({
 _PRODUCTION_ENV_TOKENS = frozenset({
     "prod", "production", "live", "prd", "release", "生产", "线上", "正式",
 })
+
+
+# ── Endpoint circuit breaker (run-local, self-healing) ──
+# Evidence CMP_77d5dfe1 round 2: POST /api/orders returned 152 consecutive
+# rejections / 0 acceptances — every retry variant re-paid transport + fixture
+# cost against a dead endpoint. After N consecutive server-side failures
+# (5xx / transport-0) on the same (method, path), further governed writes to
+# that endpoint are blocked BEFORE transport with a named reason
+# ``endpoint_circuit_open:<METHOD>:<path>`` until the cooldown elapses, when a
+# single probe is allowed again (success closes, failure re-opens). Business
+# 4xx rejections never trip it — they are evidence, not endpoint death. The
+# breaker changes WHERE attempts stop, never any verdict: blocked attempts are
+# honest BLOCKED receipts with zero target writes.
+_ENDPOINT_BREAKER_LOCK = threading.Lock()
+_ENDPOINT_BREAKER: dict[tuple[str, str], dict[str, Any]] = {}
+_ENDPOINT_BREAKER_THRESHOLD_ENV = "QUALIBUG_ENDPOINT_BREAKER_THRESHOLD"
+_ENDPOINT_BREAKER_COOLDOWN_ENV = "QUALIBUG_ENDPOINT_BREAKER_COOLDOWN_SECONDS"
+
+
+def _endpoint_breaker_threshold() -> int:
+    raw = str(os.environ.get(_ENDPOINT_BREAKER_THRESHOLD_ENV) or "").strip()
+    if not raw:
+        return 5
+    try:
+        value = int(raw)
+    except ValueError:
+        return 5
+    return value  # 0 disables explicitly
+
+
+def _endpoint_breaker_cooldown_seconds() -> float:
+    raw = str(os.environ.get(_ENDPOINT_BREAKER_COOLDOWN_ENV) or "").strip()
+    if not raw:
+        return 300.0
+    try:
+        value = float(raw)
+    except ValueError:
+        return 300.0
+    return value if value >= 0 else 300.0
+
+
+def _endpoint_breaker_key(method: str, path: str) -> tuple[str, str]:
+    clean_path = normalize_path_placeholders(_text(path)).split("?", 1)[0]
+    return (str(method).upper(), clean_path)
+
+
+def _endpoint_circuit_block_reason(method: str, path: str) -> str:
+    threshold = _endpoint_breaker_threshold()
+    if threshold <= 0 or str(method).upper() not in _WRITE_METHODS:
+        return ""
+    key = _endpoint_breaker_key(method, path)
+    now = time.monotonic()
+    with _ENDPOINT_BREAKER_LOCK:
+        state = _ENDPOINT_BREAKER.get(key)
+        if not state or state.get("open_since") is None:
+            return ""
+        if now - float(state["open_since"]) < _endpoint_breaker_cooldown_seconds():
+            return f"endpoint_circuit_open:{key[0]}:{key[1]}"
+        # Cooldown elapsed: allow one half-open probe through.
+        return ""
+
+
+def _endpoint_circuit_record(method: str, path: str, status: int) -> None:
+    threshold = _endpoint_breaker_threshold()
+    if threshold <= 0 or str(method).upper() not in _WRITE_METHODS:
+        return
+    key = _endpoint_breaker_key(method, path)
+    code = int(status or 0)
+    now = time.monotonic()
+    with _ENDPOINT_BREAKER_LOCK:
+        state = _ENDPOINT_BREAKER.setdefault(
+            key, {"consecutive_failures": 0, "open_since": None}
+        )
+        if 200 <= code < 500:
+            # Success or a business rejection — neither is endpoint death.
+            state["consecutive_failures"] = 0
+            state["open_since"] = None
+            return
+        if code < 500 and code != 0:
+            return
+        state["consecutive_failures"] += 1
+        if state["consecutive_failures"] >= threshold:
+            state["open_since"] = now
 
 
 @contextmanager
@@ -960,6 +1044,44 @@ def execute_governed_control_write(
             allowed = False
             reason = identity_block_reason
     base = _text(base_url).rstrip("/")
+    circuit_block = _endpoint_circuit_block_reason(method, path)
+    if allowed and circuit_block:
+        record = {
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "actor_role": actor_identity,
+            "method": method,
+            "path": path,
+            "before_ref": f"control_before:{observation_path}:circuit_open",
+            "after_ref": "",
+            "cleanup_status": "not_applicable",
+            "cleanup_reason": circuit_block,
+            "operation_phase": phase,
+            "operation_accepted": False,
+            "campaign_id": campaign_id,
+            "slice_id": "evaluation_fixture_control",
+            "environment_kind": resolve_environment_kind(root, project, runtime_contract),
+            "approved_base_url": _text(runtime_contract.get("approved_base_url")),
+            "http_status": 0,
+        }
+        audit_path = _append_audit(root, project, record)
+        return {
+            "status": "blocked",
+            "reason": circuit_block,
+            "accepted": False,
+            "method": method,
+            "path": path,
+            "observation_path": observation_path,
+            "before": {},
+            "write": {"status": 0, "body": "", "headers": {}, "error": circuit_block},
+            "after": {},
+            "before_ref": record["before_ref"],
+            "after_ref": "",
+            "audit_path": str(audit_path),
+            "audit_record": record,
+            "http_attempt_count": 0,
+            "write_request_attempt_count": 0,
+            "production_http_requests": 0,
+        }
     before = _http_request("GET", base + observation_path, token=actor_token) if allowed else {}
     # Identity-scoped entity observation (e.g. GET /orders/{id} before
     # POST /orders/{id}/confirm) must be observable before the write. A 404
@@ -1054,6 +1176,8 @@ def execute_governed_control_write(
                 "runtime_body_receipt": runtime_body_receipt,
             }
     write = _http_request(method, base + path, token=actor_token, body=body) if allowed else {}
+    if write:
+        _endpoint_circuit_record(method, path, int(write.get("status") or 0))
     after = _http_request("GET", base + observation_path, token=actor_token) if allowed else {}
     accepted = allowed and 200 <= int(write.get("status") or 0) < 300
     record = {
@@ -2160,6 +2284,9 @@ def _execute_with_per_write_governance(
             )
             if cleanup_block:
                 raise RuntimeError(cleanup_block)
+            circuit_block = _endpoint_circuit_block_reason(method, path)
+            if circuit_block:
+                raise RuntimeError(circuit_block)
             identity_block = _protected_runtime_identity_write_block_reason(
                 root=root,
                 project=project,
@@ -2250,6 +2377,8 @@ def _execute_with_per_write_governance(
         )
         event["after"] = after
         status = int(event.get("status") or 0)
+        if event.get("after_hook_received"):
+            _endpoint_circuit_record(event["method"], event["path"], status)
         observer_proves_unchanged = (
             200 <= int(_as_dict(event.get("before")).get("status") or 0) < 300
             and 200 <= int(after.get("status") or 0) < 300
@@ -2462,6 +2591,9 @@ def execute_with_sandbox_write(
     )
     if cleanup_block:
         return _blocked_write_trace(scenario, cleanup_block, write_meta)
+    circuit_block = _endpoint_circuit_block_reason(method, path)
+    if circuit_block:
+        return _blocked_write_trace(scenario, circuit_block, write_meta)
 
     base = base_url.rstrip("/")
     observe_path = _documented_observation_path(scenario, path, documented_routes)
@@ -2494,6 +2626,8 @@ def execute_with_sandbox_write(
         write_body = _as_dict(step.get("response")).get("body")
         write_status_code = int(_as_dict(step.get("response")).get("status") or step.get("status") or 0)
         break
+    if write_status_code:
+        _endpoint_circuit_record(method, executed_path, write_status_code)
 
     from .policy_wiring import get_policy_value
 

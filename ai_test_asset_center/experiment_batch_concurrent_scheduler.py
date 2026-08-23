@@ -835,6 +835,21 @@ def execute_selected_experiments_concurrent(
         selected, experiments_by_obligation, behavior_ir
     )
     concurrency = get_concurrency()
+    # ── Scheduling-time topology trace ──────────────────────────────────────
+    # The batch receipt only survives a clean scan_result write; a wrap-up
+    # crash used to erase the answer to "why did execution take this long".
+    # Emitting the topology here makes group collapse visible immediately
+    # (CMP_77d5dfe1 round-2 post-mortem gap).
+    group_sizes = sorted((len(g) for g in groups), reverse=True)
+    logger.info(
+        "[exec-trace] schedule groups=%d workers=%d selected=%d deferred=%d "
+        "top_group_sizes=%s",
+        len(groups),
+        concurrency,
+        len(selected),
+        len(deferred),
+        group_sizes[:5],
+    )
     if not selected:
         # Empty selection: return an empty batch shaped like the core's, with
         # the same validation envelope, so downstream accounting stays intact.
@@ -887,13 +902,18 @@ def execute_selected_experiments_concurrent(
             prioritization_receipt=prioritization_receipt,
             prioritization_failed=prioritization_failed,
         )
-        merged["concurrency"] = {
-            "mode": "serial_fallback",
-            "max_workers": concurrency,
-            "group_count": len(groups),
-            "group_errors": [batch["group_error"]] if batch.get("group_error") else [],
-        }
-        return merged
+    merged["concurrency"] = {
+        "mode": "serial_fallback",
+        "max_workers": concurrency,
+        "group_count": len(groups),
+        "group_errors": [batch["group_error"]] if batch.get("group_error") else [],
+    }
+    logger.info(
+        "[exec-trace] batch mode=serial_fallback groups=%d selected=%d",
+        len(groups),
+        len(selected),
+    )
+    return merged
 
     batch_nonce = str(time.time_ns())
     started = time.time()
@@ -945,6 +965,12 @@ def execute_selected_experiments_concurrent(
             if _text(_dict(batch).get("group_error"))
         ],
     }
+    logger.info(
+        "[exec-trace] batch mode=concurrent groups=%d workers=%d elapsed_ms=%d",
+        len(groups),
+        concurrency,
+        merged["concurrency"]["elapsed_ms"],
+    )
     return merged
 
 
