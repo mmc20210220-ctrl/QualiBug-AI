@@ -1646,6 +1646,15 @@ def build_discovery_plan(
                         "reuse_schema": _reasoner_prior.get("schema"),
                     }
             _reasoner_hit = _reasoner_fingerprint_receipt.get("status") == "hit"
+            # [plan-trace] at WARNING so standalone CLI runs surface it
+            # (INFO is filtered there); answers the recurring "where did the
+            # planning segment go" question with one line.
+            _planning_logger.warning(
+                "[plan-trace] reasoner hit=%s reason=%s elapsed_seconds=%.1f",
+                _reasoner_hit,
+                _reasoner_fingerprint_receipt.get("reason") or "hit",
+                time.perf_counter() - _reasoner_start,
+            )
             if _reasoner_hit:
                 # Replay, not fresh comprehension: the receipt is stamped
                 # REUSED so the scan consumer can tell no new LLM comprehension

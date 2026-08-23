@@ -789,6 +789,11 @@ def execute_selected_experiments(
                     },
                 })
                 continue
+            # ── [exec-trace] per-experiment wall clock (WARNING-level so
+            # standalone CLI runs surface it; INFO is filtered there) ──
+            import time as _t_exp
+
+            _exp_t0 = _t_exp.perf_counter()
             outcome = execute_one_experiment(
                 exp,
                 behavior_ir=behavior_ir,
@@ -799,6 +804,13 @@ def execute_selected_experiments(
                 campaign_id=campaign_id,
                 execution_id=execution_id,
                 actor_tokens=tokens,
+            )
+            logger.warning(
+                "[exec-trace] experiment eid=%s obligation=%s total_ms=%d status=%s",
+                _text(outcome.get("experiment_id")) or eid,
+                execution_oid,
+                int((_t_exp.perf_counter() - _exp_t0) * 1000),
+                _text(_dict(outcome.get("execution_receipt")).get("status")),
             )
         eid = _text(outcome.get("experiment_id")) or eid
         # The executor may run under a per-attempt execution identity (runtime

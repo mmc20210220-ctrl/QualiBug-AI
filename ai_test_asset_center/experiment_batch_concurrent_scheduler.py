@@ -841,7 +841,7 @@ def execute_selected_experiments_concurrent(
     # Emitting the topology here makes group collapse visible immediately
     # (CMP_77d5dfe1 round-2 post-mortem gap).
     group_sizes = sorted((len(g) for g in groups), reverse=True)
-    logger.info(
+    logger.warning(
         "[exec-trace] schedule groups=%d workers=%d selected=%d deferred=%d "
         "top_group_sizes=%s",
         len(groups),
@@ -908,7 +908,7 @@ def execute_selected_experiments_concurrent(
             "group_count": len(groups),
             "group_errors": [batch["group_error"]] if batch.get("group_error") else [],
         }
-        logger.info(
+        logger.warning(
             "[exec-trace] batch mode=serial_fallback groups=%d selected=%d",
             len(groups),
             len(selected),
@@ -965,7 +965,7 @@ def execute_selected_experiments_concurrent(
             if _text(_dict(batch).get("group_error"))
         ],
     }
-    logger.info(
+    logger.warning(
         "[exec-trace] batch mode=concurrent groups=%d workers=%d elapsed_ms=%d",
         len(groups),
         concurrency,
