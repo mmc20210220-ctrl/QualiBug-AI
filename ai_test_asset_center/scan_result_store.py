@@ -112,6 +112,13 @@ SHARD_MARKER = "_scan_result_shards"
 _WRITTEN_SCAN_RESULTS: dict[str, str] = {}
 SCAN_RESULT_SHARD_SCHEMA = "qualibug.scan-result-shard.v1"
 SHARD_DIR_NAME = "scan_result.parts"
+# Completion marker: written LAST after skeleton + shards + stale cleanup.
+# Its absence (or manifest-hash mismatch) at load time means the store is
+# TORN — a crash or concurrent writer interleaved between the two persistence
+# moments — and hydration must refuse loudly instead of surfacing misleading
+# per-entry "registry entry missing" errors (round7-zombie torn store, 2026-08-23).
+STORE_COMPLETE_MARKER = "_store_complete.json"
+STORE_COMPLETE_MARKER_SCHEMA = "qualibug.scan-result-store-complete.v1"
 
 # 默认分片阈值：单键序列化字节数 >= 该值即分片（4 MiB）。
 DEFAULT_SHARD_THRESHOLD_BYTES = 4 * 1024 * 1024
@@ -592,6 +599,20 @@ def write_scan_result(
                 stale.unlink()
             except OSError:
                 pass
+    # ── 完成标记（撕裂存储检测，最后写入）─────────────────────────────
+    # 骨架与分片注册表是两次落盘：进程在两者之间崩溃/被杀会留下
+    # 「旧骨架 + 新分片」的撕裂态，加载端表现为大量 registry entry
+    # missing（round7 僵尸实证）。必须在陈旧清理之后最后写标记。
+    _manifest_sha = hashlib.sha256(
+        json.dumps(manifest, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+    _atomic_write_json(
+        parts_dir / STORE_COMPLETE_MARKER,
+        {
+            "schema_version": STORE_COMPLETE_MARKER_SCHEMA,
+            "manifest_sha256": _manifest_sha,
+        },
+    )
     # 分阶段计时（可观测性）：大 result 的落盘各阶段耗时，帮助定位
     # 性能瓶颈（实测多 GB 内容时 copy/normalize/redact 各占分钟级）。
     _start = _stage_marks[0][1]
@@ -1118,6 +1139,30 @@ def _assemble(
     manifest = payload.get(SHARD_MARKER)
     if not isinstance(manifest, dict):
         return payload  # 旧单文件（或任意普通 JSON 对象）
+    # ── 撕裂存储拒绝 ──
+    # 完成标记由 writer 在骨架+分片+陈旧清理全部落盘后最后写入；
+    # 缺失或 manifest 指纹不符 ⇒ 骨架与分片来自不同写入时刻
+    # （崩溃/并发写），水合只会产生误导性的 entry missing。
+    import hashlib as _hashlib
+
+    parts_dir_marker = parts_dir / STORE_COMPLETE_MARKER
+    try:
+        marker = json.loads(parts_dir_marker.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        marker = None
+    expected_sha = _hashlib.sha256(
+        json.dumps(manifest, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+    if (
+        not isinstance(marker, dict)
+        or marker.get("schema_version") != STORE_COMPLETE_MARKER_SCHEMA
+        or marker.get("manifest_sha256") != expected_sha
+    ):
+        raise ValueError(
+            "scan_result store is torn/incomplete: completion marker missing "
+            f"or stale ({parts_dir_marker}); refusing partial hydration. "
+            "Re-run the scan to regenerate a consistent store."
+        )
     skeleton = {key: value for key, value in payload.items() if key != SHARD_MARKER}
     shards = manifest.get("shards") if isinstance(manifest.get("shards"), dict) else {}
     resolver: _RegistryResolver | None = None
@@ -1426,6 +1471,16 @@ def shard_legacy_scan_result(
         legacy_path = target.with_name(target.name + ".legacy")
         os.replace(target, legacy_path)
     _atomic_write_json(target, skeleton, indent=indent)
+    _manifest_sha = hashlib.sha256(
+        json.dumps(manifest, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+    _atomic_write_json(
+        parts_dir / STORE_COMPLETE_MARKER,
+        {
+            "schema_version": STORE_COMPLETE_MARKER_SCHEMA,
+            "manifest_sha256": _manifest_sha,
+        },
+    )
     return {
         "status": "sharded",
         "path": str(target),
