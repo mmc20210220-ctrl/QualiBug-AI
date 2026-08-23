@@ -948,6 +948,24 @@ def _auto_promote(
     if current_status != BindingStatus.CANDIDATE.value:
         return  # Already promoted
 
+    # Declared confirmation bypasses the confidence ladder entirely:
+    # executable_without_probe=True means the confirmation probe already
+    # exists in source/runtime facts (a source-declared operation identity;
+    # a runtime-bound actor's configured credentials). Gating this behind
+    # composite-confidence thresholds stranded exactly those bindings at
+    # CANDIDATE — measured 8,689 authorization blocks in CMP_77d5dfe1 r7
+    # where even runtime_bound actors sat below the 0.95 ladder rung.
+    if executable_without_probe:
+        ledger.promote(
+            binding_id, BindingStatus.HIGH_CONFIDENCE,
+            reason="auto_promote:declared_confirmation",
+        )
+        ledger.promote(
+            binding_id, BindingStatus.EXECUTABLE,
+            reason="auto_promote:source_or_runtime_confirmed",
+        )
+        return
+
     if confidence >= 0.90:
         try:
             ledger.promote(

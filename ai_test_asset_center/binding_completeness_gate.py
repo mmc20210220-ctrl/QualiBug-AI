@@ -340,6 +340,18 @@ def _check_dimension(
             if _binding_matches_ref(b, dimension, ref, obl)
         ]
         if existing:
+            # Actor dimension authoritative fallback: a CANDIDATE role-level
+            # actor backed by a same-role runtime-bound account is planning-
+            # executable (credentials declared; runtime proof stays with the
+            # executor preflight). Same design family as the field/relation
+            # source-declared fallbacks above.
+            if (
+                dimension == "actor"
+                and _actor_role_has_runtime_bound_credentials(ir, ref)
+                and _active_structural_status(existing[0])
+            ):
+                source_authoritative_count += 1
+                continue
             missing.append(f"{ref}(status={existing[0].get('status')})")
         else:
             missing.append(f"{ref}(no_binding)")
@@ -370,6 +382,37 @@ def _is_ir_node_ref(ref: str) -> bool:
     """True when a needed ref names a Behavior IR node (bir_/field:/rel:/…)."""
     lowered = ref.lower()
     return lowered.startswith("bir_") or lowered.startswith("field:") or lowered.startswith("rel:")
+
+
+def _actor_role_has_runtime_bound_credentials(
+    behavior_ir: dict[str, Any],
+    actor_ref: str,
+) -> bool:
+    """True when the ref's role has a runtime-bound (declared-credential) account.
+
+    Permission-matrix rows derive ROLE-level actors without credentials; the
+    operator's runtime_actors provide NAMED accounts for those same roles.
+    Planning-level executability is satisfied by that declared pairing — the
+    runtime credential proof remains the executor preflight's job. Without
+    this bridge, every authorization obligation bound to a matrix-derived
+    actor is blocked forever even though credentials exist (measured:
+    8,689 BLOCKED_MISSING_BINDING in CMP_77d5dfe1 round7, 84% of all blocks).
+    """
+    ir = _dict(behavior_ir)
+    target_role = ""
+    for actor in _list(ir.get("actors")):
+        if isinstance(actor, dict) and _text(actor.get("id")) == actor_ref:
+            target_role = _text(actor.get("role")).lower()
+            break
+    if not target_role or target_role in {"anonymous", "public"}:
+        return False
+    for actor in _list(ir.get("actors")):
+        if not isinstance(actor, dict):
+            continue
+        same_role = _text(actor.get("role")).lower() == target_role
+        if same_role and actor.get("runtime_bound") is True:
+            return True
+    return False
 
 
 def _get_needed_refs(
