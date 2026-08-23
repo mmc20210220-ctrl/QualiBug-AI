@@ -9,8 +9,6 @@ import { useEffect, useReducer } from 'react';
 import {
   getKnowledgeAsset,
   getServiceCredentials,
-  listConnectors,
-  type ConnectorRecord,
 } from '../api/client';
 import { listKnowledgeConnectors } from '../api/knowledge-connectors';
 import { hasMaterializedFindingData, usePipelineSnapshot } from '../api/data';
@@ -123,7 +121,6 @@ export function buildOnboardingSteps(facts: OnboardingFacts): OnboardingStep[] {
 // ── 接入事实共享存储：每项目一个轮询循环，全部挂载点共用同一份快照 ─────────
 
 type TrioEntry = {
-  connectors: ConnectorRecord[];
   services: SavedServiceConfig[];
   materialActiveCount: number;
   knowledgeConnectorCount: number;
@@ -143,16 +140,12 @@ const trioEntries = new Map<string, TrioEntry>();
 async function fetchTrio(project: string, entry: TrioEntry): Promise<void> {
   if (entry.fetching || !project) return;
   entry.fetching = true;
-  const [connectorsResult, servicesResult, materialsResult, knowledgeConnectorsResult] = await Promise.allSettled([
-    listConnectors(project),
+  const [servicesResult, materialsResult, knowledgeConnectorsResult] = await Promise.allSettled([
     getServiceCredentials(project),
     getKnowledgeAsset(project),
     listKnowledgeConnectors(project),
   ]);
   // 单项读取失败保留上次成功值并计入 failedReads：不把读取失败解释成「未接入」。
-  if (connectorsResult.status === 'fulfilled') {
-    entry.connectors = connectorsResult.value.filter((connector) => connector.enabled);
-  }
   if (servicesResult.status === 'fulfilled') {
     entry.services = extractServiceConfigs(servicesResult.value);
   }
@@ -162,7 +155,7 @@ async function fetchTrio(project: string, entry: TrioEntry): Promise<void> {
   if (knowledgeConnectorsResult.status === 'fulfilled') {
     entry.knowledgeConnectorCount = knowledgeConnectorsResult.value.connectors.length;
   }
-  entry.failedReads = [connectorsResult, servicesResult, materialsResult, knowledgeConnectorsResult]
+  entry.failedReads = [servicesResult, materialsResult, knowledgeConnectorsResult]
     .filter((result) => result.status === 'rejected').length;
   entry.loaded = true;
   entry.loading = false;
@@ -191,7 +184,6 @@ function scheduleTrioLoop(project: string, entry: TrioEntry): void {
 
 function createTrioEntry(): TrioEntry {
   return {
-    connectors: [],
     services: [],
     materialActiveCount: 0,
     knowledgeConnectorCount: 0,
@@ -235,8 +227,13 @@ export function useOnboardingProgress(project: string, requestedIntervalMs = 20_
   const firstScanMaterialized = Boolean(project && raw && hasMaterializedFindingData(raw));
 
   const entry = project ? trioEntries.get(project) : undefined;
+  // 步骤①「接入被测系统」的口径必须与接入页/运行前检查一致：
+  // 被测服务凭据清单（base_url 非空且未停用），而不是企业资料连接器清单。
+  const enabledServiceCount = (entry?.services ?? []).filter(
+    (service) => service.enabled !== false && String(service.base_url || '').trim(),
+  ).length;
   const facts: OnboardingFacts = {
-    enabledServiceCount: entry?.connectors.length ?? 0,
+    enabledServiceCount,
     authCount: (entry?.services ?? []).filter((service) => hasConfiguredAuthMaterial(service)).length,
     materialActiveCount: entry?.materialActiveCount ?? 0,
     knowledgeConnectorCount: entry?.knowledgeConnectorCount ?? 0,
