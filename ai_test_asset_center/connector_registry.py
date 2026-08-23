@@ -651,14 +651,29 @@ class ConnectorRegistry:
         }
 
 
+_DEFAULT_REGISTRY_CACHE: "ConnectorRegistry | None" = None
+
+
 def build_default_connector_registry() -> ConnectorRegistry:
-    """Build the installed product registry without importing adapters at module import time."""
+    """Build the installed product registry without importing adapters at module import time.
+
+    The default registry is a static code fact: every adapter manifest is pure
+    declaration with no network or filesystem I/O. Building it costs >1s per
+    call, and this entrypoint sits on hot request paths (connector-type
+    catalog, source preflight, OAuth, webhook policy, local runners), so the
+    built instance is cached at module level. All callers are read-only
+    consumers; tests that exercise mutation construct their own
+    ``ConnectorRegistry`` directly.
+    """
+    global _DEFAULT_REGISTRY_CACHE
+    if _DEFAULT_REGISTRY_CACHE is not None:
+        return _DEFAULT_REGISTRY_CACHE
     from .feishu_connector_adapter import FeishuConnectorAdapter
     from .git_connector_adapter import GitRepositoryConnectorAdapter
     from .openapi_connector_adapter import OpenApiConnectorAdapter
     from .website_connector_adapter import WebsiteConnectorAdapter
 
-    return ConnectorRegistry(
+    _DEFAULT_REGISTRY_CACHE = ConnectorRegistry(
         (
             FeishuConnectorAdapter(),
             GitRepositoryConnectorAdapter("gitee"),
@@ -671,6 +686,7 @@ def build_default_connector_registry() -> ConnectorRegistry:
             WebsiteConnectorAdapter(),
         )
     )
+    return _DEFAULT_REGISTRY_CACHE
 
 
 __all__ = [

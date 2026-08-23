@@ -827,6 +827,11 @@ export function Materials() {
                   setWebhookEnabled(false);
                 }}
               >
+                {manifests.length === 0 && (
+                  <option value="">
+                    {loading ? '正在加载连接器清单…' : loadError ? '清单不可用：请查看页面顶部错误' : '暂无可用连接器'}
+                  </option>
+                )}
                 {manifests.map((manifest) => <option key={manifest.connector_type} value={manifest.connector_type}>{manifest.display_name}</option>)}
               </select>
             </label>
