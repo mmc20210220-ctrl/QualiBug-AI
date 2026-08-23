@@ -1288,6 +1288,54 @@ class ReasoningClientError(RuntimeError):
     pass
 
 
+# ── Caller-scoped provider-call budget (run-level call COUNT) ───────────────
+# Complements the run-level INPUT-TOKEN breaker (QB-L009), which only sees
+# cumulative tokens and therefore cannot stop a consumer whose individual
+# calls are small but whose cascade multiplies into hundreds of calls
+# (measured 2026-08-23: agent_semantic_linker's relationship/confidence
+# recovery cascades burned the whole 5M-token run budget through windows that
+# each looked harmless). A stage installs a [remaining, limit] cell for its
+# caller id; every chat_json/complete_json under that caller consumes one and
+# fails fast with ``llm_call_budget_exhausted:<caller>`` once spent. Absent
+# cell = unbounded, exactly as before — bounds are always explicit installs.
+import contextvars as _contextvars
+
+_CALLER_CALL_BUDGET: _contextvars.ContextVar[dict[str, list[int]] | None] = (
+    _contextvars.ContextVar("qualibug_caller_call_budget", default=None)
+)
+
+
+def install_caller_call_budget(caller: str, limit: int) -> None:
+    """Declare a per-caller provider-call ceiling for this execution context."""
+    table = dict(_CALLER_CALL_BUDGET.get() or {})
+    if limit > 0:
+        table[str(caller)] = [limit, limit]
+    else:
+        table.pop(str(caller), None)
+    _CALLER_CALL_BUDGET.set(table or None)
+
+
+def clear_caller_call_budget(caller: str) -> None:
+    table = dict(_CALLER_CALL_BUDGET.get() or {})
+    table.pop(str(caller), None)
+    _CALLER_CALL_BUDGET.set(table or None)
+
+
+def _caller_call_budget_consume(caller: str) -> None:
+    """Consume one call slot; raise once the ceiling is exhausted."""
+    cell = _CALLER_CALL_BUDGET.get()
+    if not cell:
+        return
+    slot = cell.get(str(caller))
+    if slot is None:
+        return
+    if slot[0] <= 0:
+        raise ReasoningClientError(
+            f"llm_call_budget_exhausted:{caller}:limit={slot[1]}"
+        )
+    slot[0] -= 1
+
+
 # Sentinel returned by the tolerant JSON parser when a candidate does not
 # parse at all (distinct from a candidate that parses to a non-dict root).
 _UNPARSEABLE = object()
@@ -2254,6 +2302,7 @@ class ReasoningClient:
             raise ReasoningClientError("LLM is not configured")
         if not str(caller or "").strip():
             raise ReasoningClientError("llm_caller_attribution_required")
+        _caller_call_budget_consume(str(caller).strip())
         model = resolve_model_for_tier(self.config, tier)
         return self._chat_with_parse_retry(
             user_prompt,

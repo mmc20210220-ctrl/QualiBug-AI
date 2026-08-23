@@ -767,10 +767,18 @@ Evolution Contract):
   failures remain fail-fast. Prompt payloads pass the shared artifact
   redaction boundary and must not include credential values or
   request-example values.
-- Agent-linker run-level cost bounds (2026-08-23, evidence CMP_77d5dfe1: paged
-  enrichment burned the whole 5M-token run budget inside the unbounded chunk
-  loop and still failed, so every later LLM consumer failed fast and repeated
-  scans re-paid full price for an asset unchanged since 08-17):
+- Agent-linker run-level cost bounds (2026-08-23, evidence CMP_77d5dfe1 + the
+  round-3 rerun: even WITH window caps, one fact-window's cascade — candidate
+  paging, relationship follow-ups, confidence/omitted recovery — fires dozens
+  of provider calls, so both reruns still burned the entire 5M-token run
+  budget through windows that each looked harmless):
+  (0) `QUALIBUG_AGENT_LINKER_MAX_PROVIDER_CALLS` (default 40) installs a
+  caller-scoped provider-CALL ceiling for `agent_semantic_linker` via
+  `llm_reasoning.install_caller_call_budget`; every `chat_json` under that
+  caller consumes one slot and fails fast with
+  `llm_call_budget_exhausted:<caller>` once spent. Calls are the atomic spend
+  unit — windows are not. The mechanism is generic: any consumer may install
+   a call ceiling for its own caller id.
   (1) `QUALIBUG_AGENT_LINKER_MAX_WINDOWS` (default 24, 0 = explicit unlimited)
   caps provider windows per enrichment via a ContextVar budget cell installed
   at `enrich_knowledge_asset_with_agent_relationships` and consumed at EVERY

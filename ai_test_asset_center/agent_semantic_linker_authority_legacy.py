@@ -689,6 +689,30 @@ def _lossless_rule_enrichment(governed_asset: dict[str, Any], *, client: Any | N
 def enrich_knowledge_asset_with_agent_relationships(knowledge_asset: dict[str, Any], *, client: Any | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
     if not isinstance(knowledge_asset, dict):
         raise AgentSemanticLinkerError("knowledge_asset_not_object")
+    # ── Provider-CALL ceiling (the real spend unit) ─────────────────────────
+    # The window budget below counts paging windows, but ONE window's cascade
+    # (candidate + relationship follow-ups + confidence/omitted recoveries)
+    # can fire dozens of provider calls — measured 2026-08-23: two rounds
+    # burned the entire 5M-token run budget through windows that each looked
+    # harmless. Calls are the atomic spend unit, so cap THEM at the shared
+    # chat_json boundary via the caller id this linker already declares.
+    from .llm_reasoning import clear_caller_call_budget, install_caller_call_budget
+
+    raw_calls = str(os.environ.get("QUALIBUG_AGENT_LINKER_MAX_PROVIDER_CALLS") or "").strip()
+    try:
+        max_calls = int(raw_calls) if raw_calls else 40
+    except ValueError:
+        max_calls = 40
+    install_caller_call_budget("agent_semantic_linker", max_calls)
+    try:
+        return _enrich_with_budgeted_windows(knowledge_asset, client=client)
+    finally:
+        clear_caller_call_budget("agent_semantic_linker")
+
+
+def _enrich_with_budgeted_windows(knowledge_asset: dict[str, Any], *, client: Any | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
+    if not isinstance(knowledge_asset, dict):
+        raise AgentSemanticLinkerError("knowledge_asset_not_object")
     original_relationships = _dicts(knowledge_asset.get("relationships"))
     governed_existing: list[dict[str, Any]] = []
     ungoverned_existing: list[dict[str, Any]] = []
