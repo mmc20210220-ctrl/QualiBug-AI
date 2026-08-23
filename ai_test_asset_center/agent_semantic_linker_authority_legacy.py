@@ -6,6 +6,7 @@ truncated before semantic linking.
 """
 from __future__ import annotations
 
+import os
 from contextvars import ContextVar
 from copy import deepcopy
 import threading
@@ -13,6 +14,19 @@ from typing import Any
 
 from . import agent_semantic_linker as _impl
 from .enterprise_knowledge_center._linking import _relationship_is_authoritative
+
+
+def _text(value: Any) -> str:
+    """Local text helper.
+
+    The supporting-fact closure loop below has referenced ``_text`` since it
+    was extracted, but no definition existed in this module — global lookup
+    does NOT fall through to ``_impl`` (module ``__getattr__`` only serves
+    attribute access), so the big-fact-pool path carried a latent NameError
+    and could never execute. Delegating to the implementation's helper keeps
+    one definition.
+    """
+    return str(value or "").strip()
 
 RECEIPT_SCHEMA = _impl.RECEIPT_SCHEMA
 PROMPT_PROTOCOL = _impl.PROMPT_PROTOCOL
@@ -22,6 +36,26 @@ _RULE_BATCH_WINDOW = max(1, int(_impl.MAX_RULES_PER_REQUEST) * int(_impl.MAX_PRO
 _TRANSITION_BATCH_WINDOW = max(1, int(_impl.MAX_TRANSITIONS_PER_REQUEST))
 _CANDIDATE_BATCH_WINDOW = max(1, int(_impl.MAX_CANDIDATES_PER_RULE))
 _FACT_BATCH_WINDOW = max(1, int(_impl.MAX_SUPPORTING_FACTS_PER_RULE))
+
+#: Run-level ceiling on provider windows the linker may spend in one scan.
+#: Measured 2026-08-23 (CMP_77d5dfe1): an unbounded chunk loop burned the whole
+#: 5M-token run budget inside paged enrichment and still failed — every later
+#: LLM consumer then failed fast and the spend bought nothing. A declared bound
+#: with a named reason code replaces silent unbounded paging; 0 = unlimited is
+#: an explicit operator choice, never a hidden default.
+_LINKER_WINDOW_BUDGET_ENV = "QUALIBUG_AGENT_LINKER_MAX_WINDOWS"
+
+
+def _linker_max_windows() -> int:
+    raw = str(os.environ.get(_LINKER_WINDOW_BUDGET_ENV) or "").strip()
+    if not raw:
+        return 24
+    try:
+        value = int(raw)
+    except ValueError:
+        return 24
+    return value if value >= 0 else 24
+
 _TRANSITION_ROWS_OVERRIDE: ContextVar[tuple[dict[str, Any], ...] | None] = ContextVar(
     "qualibug_transition_rows_override",
     default=None,
@@ -30,6 +64,46 @@ _FACT_ROWS_OVERRIDE: ContextVar[tuple[dict[str, Any], ...] | None] = ContextVar(
     "qualibug_fact_rows_override",
     default=None,
 )
+
+#: Run-level ceiling on provider windows the linker may spend in one enrichment
+#: pass. Measured 2026-08-23 (CMP_77d5dfe1): an unbounded closure loop burned
+#: the whole 5M-token run budget inside paged enrichment and still failed, so
+#: every later LLM consumer failed fast and the spend bought nothing. The cell
+#: ([remaining, limit]) is installed once per top-level enrichment and consumed
+#: by every paging layer (rule chunks, supporting-fact windows, candidate
+#: cascades) — a declared bound with a named reason code, never silent
+#: truncation. ``None`` means unlimited, which is only ever an explicit
+#: operator choice (QUALIBUG_AGENT_LINKER_MAX_WINDOWS=0), never a default.
+_LINKER_WINDOW_BUDGET: ContextVar[tuple[list[int], int] | None] = ContextVar(
+    "qualibug_linker_window_budget",
+    default=None,
+)
+LINKER_WINDOW_BUDGET_EXHAUSTED = "AGENT_LINKER_WINDOW_BUDGET_EXHAUSTED"
+
+
+def _linker_budget_install(limit: int) -> None:
+    _LINKER_WINDOW_BUDGET.set(None if limit <= 0 else [[limit, limit], limit])
+
+
+def _linker_budget_remaining() -> int:
+    cell = _LINKER_WINDOW_BUDGET.get()
+    return cell[0][0] if cell is not None else -1
+
+
+def _linker_budget_available() -> bool:
+    cell = _LINKER_WINDOW_BUDGET.get()
+    return cell is None or cell[0][0] > 0
+
+
+def _linker_budget_consume() -> None:
+    cell = _LINKER_WINDOW_BUDGET.get()
+    if cell is not None and cell[0][0] > 0:
+        cell[0][0] -= 1
+
+
+def _linker_budget_used() -> int:
+    cell = _LINKER_WINDOW_BUDGET.get()
+    return cell[0][1] - cell[0][0] if cell is not None else 0
 
 _original_asset_transition_rows = getattr(
     _impl._asset_transition_rows,
@@ -443,6 +517,22 @@ def _fact_paged_enrichment(governed_asset: dict[str, Any], *, client: Any | None
     """
     fact_pool = _original_all_fact_rows(governed_asset)
     if len(fact_pool) <= _FACT_BATCH_WINDOW:
+        if not _linker_budget_available():
+            merged = deepcopy(governed_asset)
+            receipt = {
+                "status": "VERIFIED_WITH_GAPS",
+                "reason_code": LINKER_WINDOW_BUDGET_EXHAUSTED,
+                "accepted_edge_ids": [],
+                "unassessed_rule_ids": [
+                    _text(row.get("rule_id"))
+                    for row in _dicts(governed_asset.get("rule_library"))
+                ],
+                "unassessed_rule_count": len(_dicts(governed_asset.get("rule_library"))),
+            }
+            receipt["receipt_fingerprint"] = _impl._fingerprint(receipt)
+            merged["agent_semantic_link_receipt"] = receipt
+            return merged, receipt
+        _linker_budget_consume()
         return _candidate_paged_enrichment(governed_asset, client=client)
 
     base_client = client or _impl._default_client()
@@ -455,10 +545,16 @@ def _fact_paged_enrichment(governed_asset: dict[str, Any], *, client: Any | None
     enriched_assets: list[dict[str, Any]] = []
     consumed_chunks: list[list[dict[str, Any]]] = []
     unresolved_rule_counts: list[int] = []
+    budget_stopped = False
 
     for index, chunk in enumerate(chunks):
         if not remaining_rules:
             break
+        if not _linker_budget_available():
+            unresolved_rule_counts.append(len(remaining_rules))
+            budget_stopped = True
+            break
+        _linker_budget_consume()
         chunk_asset = deepcopy(governed_asset)
         chunk_asset["rule_library"] = remaining_rules
         if index > 0:
@@ -500,10 +596,11 @@ def _fact_paged_enrichment(governed_asset: dict[str, Any], *, client: Any | None
     merged_receipt["accepted_relationship_count"] = len(merged_receipt["accepted_edge_ids"])
     merged_receipt["supporting_fact_pool_count"] = len(fact_pool)
     merged_receipt["context_fact_omitted_count"] = 0
-    merged_receipt["supporting_fact_paging"] = {
+    fact_paging = {
         "enabled": True,
         "window_size": _FACT_BATCH_WINDOW,
         "window_count": len(consumed_chunks),
+        "windows_executed": len(consumed_chunks),
         "source_fact_count": len(fact_pool),
         "window_fact_counts": [len(chunk) for chunk in consumed_chunks],
         "unconsumed_tail_fact_count": max(
@@ -515,6 +612,16 @@ def _fact_paged_enrichment(governed_asset: dict[str, Any], *, client: Any | None
         "zero_score_fact_fill_enabled": True,
         "reason_code": "SOURCE_SUPPORTING_FACTS_PAGED_UNTIL_RULE_CLOSURE",
     }
+    if budget_stopped:
+        fact_paging.update({
+            "window_budget_exhausted": True,
+            "reason_code": LINKER_WINDOW_BUDGET_EXHAUSTED,
+        })
+        merged_receipt["unassessed_rule_ids"] = sorted({
+            _text(row.get("rule_id")) for row in remaining_rules
+        } | set(merged_receipt.get("unassessed_rule_ids") or []))
+        merged_receipt["unassessed_rule_count"] = len(merged_receipt["unassessed_rule_ids"])
+    merged_receipt["supporting_fact_paging"] = fact_paging
     merged_receipt["receipt_fingerprint"] = _impl._fingerprint(merged_receipt)
     merged_asset["agent_semantic_link_receipt"] = merged_receipt
     return merged_asset, merged_receipt
@@ -527,7 +634,16 @@ def _lossless_rule_enrichment(governed_asset: dict[str, Any], *, client: Any | N
     chunks = [rules[i:i + _RULE_BATCH_WINDOW] for i in range(0, len(rules), _RULE_BATCH_WINDOW)]
     receipts: list[dict[str, Any]] = []
     generated_relationships: list[dict[str, Any]] = []
+    budget_exhausted = False
+    skipped_rule_count = 0
     for index, chunk in enumerate(chunks):
+        if not _linker_budget_available():
+            # Declared ceiling reached: remaining rule windows are skipped with
+            # a named reason and counted — never a silent truncation, never an
+            # unbounded provider spend (measured 5M-token burn, CMP_77d5dfe1).
+            budget_exhausted = True
+            skipped_rule_count += len(chunk)
+            continue
         chunk_asset = deepcopy(governed_asset)
         chunk_asset["rule_library"] = chunk
         if index > 0:
@@ -539,13 +655,32 @@ def _lossless_rule_enrichment(governed_asset: dict[str, Any], *, client: Any | N
     merged_asset = deepcopy(governed_asset)
     merged_asset["relationships"] = [*(_dicts(governed_asset.get("relationships"))), *generated_relationships]
     merged_receipt = _merge_receipts(receipts, rule_count=len(rules), duplicate_rule_windows=False)
-    merged_receipt["lossless_rule_scheduling"] = {
+    if budget_exhausted:
+        merged_receipt["unassessed_rule_count"] = int(
+            merged_receipt.get("unassessed_rule_count") or 0
+        ) + skipped_rule_count
+        merged_receipt.setdefault("unassessed_rule_ids", [])
+    scheduling = {
         "enabled": True,
         "window_size": _RULE_BATCH_WINDOW,
         "window_count": len(chunks),
+        "windows_executed": (
+            _linker_budget_used()
+            if _LINKER_WINDOW_BUDGET.get() is not None
+            else len(receipts)
+        ),
+        "window_budget": _linker_max_windows(),
         "budget_skipped_rule_count": merged_receipt["budget_skipped_rule_count"],
-        "reason_code": "SOURCE_RULES_PAGED_INSTEAD_OF_GLOBALLY_TRUNCATED",
     }
+    if budget_exhausted:
+        scheduling.update({
+            "window_budget_exhausted": True,
+            "window_budget_skipped_rule_count": skipped_rule_count,
+            "reason_code": LINKER_WINDOW_BUDGET_EXHAUSTED,
+        })
+    else:
+        scheduling["reason_code"] = "SOURCE_RULES_PAGED_INSTEAD_OF_GLOBALLY_TRUNCATED"
+    merged_receipt["lossless_rule_scheduling"] = scheduling
     merged_receipt["receipt_fingerprint"] = _impl._fingerprint(merged_receipt)
     merged_asset["agent_semantic_link_receipt"] = merged_receipt
     return merged_asset, merged_receipt
@@ -564,7 +699,11 @@ def enrich_knowledge_asset_with_agent_relationships(knowledge_asset: dict[str, A
             ungoverned_existing.append(dict(row))
     governed_asset = deepcopy(knowledge_asset)
     governed_asset["relationships"] = governed_existing
-    enriched, receipt = _lossless_rule_enrichment(governed_asset, client=client)
+    _linker_budget_install(_linker_max_windows())
+    try:
+        enriched, receipt = _lossless_rule_enrichment(governed_asset, client=client)
+    finally:
+        _LINKER_WINDOW_BUDGET.set(None)
     accepted_edge_ids = {str(x).strip() for x in receipt.get("accepted_edge_ids", []) if str(x).strip()}
     generated = [dict(row) for row in _dicts(enriched.get("relationships")) if str(row.get("edge_id") or "").strip() in accepted_edge_ids]
     preserved = [dict(row) for row in original_relationships if str(row.get("edge_id") or "").strip() not in accepted_edge_ids]

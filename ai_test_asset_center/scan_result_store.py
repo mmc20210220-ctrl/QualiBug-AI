@@ -526,7 +526,11 @@ def write_scan_result(
         # on multi-GB shards; copy mode halves throughput).
         redacted, piece_receipt = redact_artifact(value, inplace=True)
         # 密封 ledger 分片在这里完成 reseal（attempt/ledger 指纹链自洽）。
-        redacted = _reseal_attempt_ledgers(redacted)
+        # Reseal 只修复脱敏改写造成的指纹断裂：零脱敏事件 ⇒ 分片字节未变 ⇒
+        # 既有密封仍然有效，跳过整棵 ledger 的重复内容指纹
+        # （实测收尾段热点：>16k attempt 的 ledger 每次 reseal 都要全量序列化）。
+        if piece_receipt.get("redaction_applied"):
+            redacted = _reseal_attempt_ledgers(redacted)
         # The redactor's combined pattern is a superset of the scanner's six
         # string patterns and just ran on this exact payload (any hit would
         # already have been redacted, so no residual pattern can match). Only

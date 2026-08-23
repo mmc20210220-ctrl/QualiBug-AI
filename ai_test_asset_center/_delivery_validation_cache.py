@@ -100,6 +100,11 @@ def content_fingerprint(value: Any) -> str:
     redacted and hashed during delivery validation; identical content always
     yields the same fingerprint, and any content change changes it, which is
     exactly the correctness contract the delivery caches rely on.
+
+    Note: measured 2026-08-23 — ``iterencode`` streaming hashing LOSES ~6× to
+    plain ``dumps``+``encode`` below ~100 MB (per-chunk encode overhead), so
+    the wrap-up hot-path fix lives in the CALLERS (skip reseal/rederive when
+    redaction changed nothing, id-memoize repeated ledgers), not here.
     """
     return hashlib.sha256(
         json.dumps(

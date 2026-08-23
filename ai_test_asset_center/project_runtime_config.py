@@ -116,7 +116,11 @@ def load_real_project_config(
     config.setdefault("openapi_url", "")
     config.setdefault("discovery_mode", "safe")
     config.setdefault("auth_type", "password_login")
-    config.setdefault("login_api", "/auth/login")
+    # An absent declaration stays empty: fabricating "/auth/login" here made
+    # consumers read an invented contract as if the operator had declared one
+    # (and contradicted the credentials layer's own generic default). Login
+    # path discovery belongs to each consumer's candidate-probe safety net.
+    config.setdefault("login_api", "")
     config.setdefault("safe_mode", False)
     config.setdefault("allow_destructive_tests", False)
     config.setdefault("request_timeout_seconds", 10)

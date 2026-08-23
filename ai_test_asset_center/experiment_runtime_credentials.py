@@ -7,12 +7,24 @@ so existing import paths and symbol identity stay stable.
 The authority here is source-declared test accounts and the configured
 enterprise credential manager. No account is invented, and a stale or orphan
 token snapshot is never handed to the executor as if it were live.
+
+``load_actor_tokens`` is run-level idempotent: within one scan process the
+catalog is resolved once per (root, project, base_url, login-env, input-file
+fingerprint, TTL bucket) and reused, because repeated resolution re-parses the
+account files, re-probes login endpoints per actor and re-logs every stale
+snapshot for every caller (~450×/run measured 2026-08-22, CMP_77d5dfe1 —
+minutes of pure redundant HTTP/file churn between governed writes).
+File-fingerprint invalidation keeps operator edits authoritative;
+``QUALIBUG_ACTOR_TOKEN_CACHE_DISABLED=1`` bypasses the cache entirely, and
+``QUALIBUG_ACTOR_TOKEN_CACHE_TTL_SECONDS`` (default 300) bounds how long a
+resolved catalog may be reused before wall-clock expiry is re-evaluated.
 """
 from __future__ import annotations
 
 import json
 import logging
 import os
+import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -22,6 +34,137 @@ from .sandbox_write_executor import _http_request
 
 
 _LOGGER = logging.getLogger(__name__)
+
+_ACTOR_TOKEN_CACHE: dict[tuple[Any, ...], dict[str, str]] = {}
+_ACTOR_TOKEN_CACHE_LOCK = threading.Lock()
+_ACTOR_TOKEN_CACHE_MAX_KEYS = 16
+# Dedup is TIME-WINDOWED, not once-per-process: a long-lived backend runs many
+# scans against the same project, and silencing every repeat would hide the
+# fact that THOSE scans also executed with stale credentials. Within the
+# window (default 600s, QUALIBUG_ACTOR_TOKEN_DEDUP_WINDOW_SECONDS) repeats are
+# suppressed — that kills the 3150-print flood inside one scan — while each
+# new scan past the window warns once again.
+_STALE_SNAPSHOT_PRINTED: dict[tuple[str, str, str, str], float] = {}
+_EXPIRED_SUMMARY_WARNED: dict[tuple[str, str, tuple[str, ...]], float] = {}
+_STALE_DEDUP_LOCK = threading.Lock()
+
+
+def _stale_dedup_window_seconds() -> float:
+    raw = str(os.environ.get("QUALIBUG_ACTOR_TOKEN_DEDUP_WINDOW_SECONDS") or "").strip()
+    try:
+        value = float(raw)
+    except ValueError:
+        return 600.0
+    return value if value >= 0 else 600.0
+
+
+def _dedup_should_emit(key: Any, table: dict) -> bool:
+    """True when this dedup key may emit now (first time or window elapsed)."""
+    now = time.monotonic()
+    with _STALE_DEDUP_LOCK:
+        last = table.get(key)
+        if last is not None and (now - last) < _stale_dedup_window_seconds():
+            return False
+        table[key] = now
+        # Bound memory: drop entries older than twice the window.
+        horizon = 2 * _stale_dedup_window_seconds()
+        for stale_key in [k for k, v in table.items() if (now - v) > horizon]:
+            del table[stale_key]
+        return True
+
+# A successful live-login refresh persists the renewed tokens back into
+# ``test_accounts.json``, which bumps that file's fingerprint. Without this
+# bookkeeping every cached resolution would invalidate itself through its own
+# persist (resolve → persist → new fingerprint → resolve → …), an unbounded
+# login/persist churn. The fingerprint written by our own persist maps back to
+# the fingerprint the resolving cache entry used, so the very next load hits
+# that entry; an operator edit produces a third, unseen fingerprint and
+# invalidates normally.
+_SELF_WRITE_FINGERPRINT: dict[tuple[Any, Any], tuple[Any, Any]] = {}
+
+
+def _env_truthy(name: str) -> bool:
+    return str(os.environ.get(name) or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _file_fingerprint(path: Path | None) -> tuple[Any, ...]:
+    if path is None:
+        return ("", -1, -1)
+    try:
+        st = path.stat()
+        return (str(path), int(st.st_size), int(st.st_mtime_ns))
+    except OSError:
+        return (str(path), -1, -1)
+
+
+def _actor_token_cache_ttl_seconds() -> int:
+    raw = str(os.environ.get("QUALIBUG_ACTOR_TOKEN_CACHE_TTL_SECONDS") or "").strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        return 300
+    return value if value > 0 else 300
+
+
+def _actor_token_input_fingerprint(root: Path, project: str) -> tuple[Any, ...]:
+    parts: list[tuple[Any, ...]] = [
+        os.environ.get("QUALIBUG_LOGIN_PATH") or "",
+        os.environ.get("QUALIBUG_LOGIN_BASE_URL") or "",
+        _file_fingerprint(Path(root) / "platform_inputs" / str(project) / "test_accounts.json"),
+        # The credential base_url fallback resolves from this declared config;
+        # an operator edit must invalidate cached catalogs resolved through it.
+        _file_fingerprint(Path(root) / "platform_inputs" / str(project) / "real_project_config.json"),
+        _file_fingerprint(_credential_config_path(root, project)),
+    ]
+    for directory in (
+        Path(root) / "projects" / str(project) / "input",
+        Path(root) / "platform_inputs" / str(project),
+        Path(root) / "platform_workspace" / str(project) / "input",
+    ):
+        for fname in ("TEST_ACCOUNTS.md", "test_accounts.md"):
+            parts.append(_file_fingerprint(directory / fname))
+    return tuple(parts)
+
+
+def _load_actor_tokens_cached(root: Path, project: str, *, base_url: str) -> dict[str, str]:
+    ttl = _actor_token_cache_ttl_seconds()
+    identity = (str(root), str(project))
+    raw_fp = _actor_token_input_fingerprint(root, project)
+    prior_fp = _SELF_WRITE_FINGERPRINT.get(identity)
+    effective_fp = raw_fp
+    if prior_fp is not None and raw_fp == prior_fp[0]:
+        # The only change is our own token-refresh persist — not a real edit.
+        effective_fp = prior_fp[1]
+    key: tuple[Any, ...] = (
+        identity[0],
+        identity[1],
+        str(base_url),
+        int(time.time()) // ttl,
+        effective_fp,
+    )
+    with _ACTOR_TOKEN_CACHE_LOCK:
+        cached = _ACTOR_TOKEN_CACHE.get(key)
+        if cached is not None:
+            return dict(cached)
+    tokens = _load_actor_tokens_uncached(root, project, base_url=base_url)
+    snapshot = dict(tokens)
+    post_fp = _actor_token_input_fingerprint(root, project)
+    if post_fp != effective_fp:
+        # The resolution itself rewrote an input file (token refresh persist).
+        # Map the post-write fingerprint back to this entry's fingerprint so
+        # the next load resolves to the same cache key instead of churning.
+        with _ACTOR_TOKEN_CACHE_LOCK:
+            _SELF_WRITE_FINGERPRINT[identity] = (post_fp, effective_fp)
+    with _ACTOR_TOKEN_CACHE_LOCK:
+        current_bucket = key[3]
+        for stale_key in [
+            k for k in _ACTOR_TOKEN_CACHE if k[:4] == key[:4] and k[3] != current_bucket
+        ]:
+            _ACTOR_TOKEN_CACHE.pop(stale_key, None)
+        if len(_ACTOR_TOKEN_CACHE) >= _ACTOR_TOKEN_CACHE_MAX_KEYS:
+            _ACTOR_TOKEN_CACHE.clear()
+        _ACTOR_TOKEN_CACHE[key] = snapshot
+    return dict(snapshot)
 
 
 def _dict(value: Any) -> dict[str, Any]:
@@ -218,16 +361,16 @@ def _login_declared_account(
         except Exception:
             fields = ["email", "username", "account", "loginName", "mobile"]
 
-    # Probe login paths most-likely-first: the declared path, then the same
-    # common-path safety net the enterprise credential manager already uses.
+    # Probe login paths most-likely-first: the declared path, then the shared
+    # common-path safety net (single candidate authority shared with the
+    # enterprise credential manager and outcome validation).
     declared = str(login_path or "").strip().strip("/")
     paths: list[str] = []
     if declared:
         paths.append(declared)
-    paths.extend([
-        "/api/auth/login", "/api/v1/auth/login", "/auth/login",
-        "/login", "/api/login", "/api/v1/login", "/auth/token", "/oauth/token",
-    ])
+    from .enterprise_credential_manager import COMMON_LOGIN_PATH_CANDIDATES
+
+    paths.extend(COMMON_LOGIN_PATH_CANDIDATES)
     seen: set[str] = set()
     unique_paths: list[str] = []
     for p in paths:
@@ -532,8 +675,52 @@ def _configured_credential_tokens(
     return tokens
 
 
+def _effective_target_base_url(root: Path, project: str, base_url: str) -> str:
+    """Resolve the approved target base_url for credential acquisition.
+
+    Priority: caller-supplied value > ``QUALIBUG_TARGET_BASE_URL`` > the
+    project's own declared runtime config (``approved_base_url``/``base_url``).
+    The config leg exists because a base_url-less caller previously silenced
+    the whole live-login/MD-fallback branch (`if base_url:`): CMP_77d5dfe1
+    measured 450 such calls in one run — every declared actor stale, zero login
+    attempts, entire campaign executing without credentials. Only a declared,
+    operator-owned value is consulted; nothing is inferred or fabricated.
+    """
+    resolved = _text(base_url) or _text(os.environ.get("QUALIBUG_TARGET_BASE_URL") or "")
+    if resolved:
+        return resolved
+    try:
+        from .project_runtime_config import load_real_project_config
+
+        cfg = load_real_project_config(project, Path(root)) or {}
+    except Exception:
+        return ""
+    return _text(cfg.get("approved_base_url") or cfg.get("base_url") or "")
+
+
 def load_actor_tokens(root: Path, project: str, *, base_url: str = "") -> dict[str, str]:
     """Map role / secret_ref → bearer token from declared test accounts only.
+
+    Run-level idempotent entry point: see module docstring for the caching
+    contract. Resolution itself lives in ``_load_actor_tokens_uncached``.
+    The config fallback for an empty ``base_url`` resolves INSIDE the uncached
+    resolver so a cache hit performs zero file I/O — resolving it here would
+    re-parse the project config on every call and reintroduce exactly the
+    per-call churn this cache exists to remove. The cache key therefore uses
+    the RAW caller value; two callers (one explicit, one falling back to the
+    same declared URL) occupy distinct keys with identical results, which only
+    costs one extra resolution on their first miss each.
+    """
+    if _env_truthy("QUALIBUG_ACTOR_TOKEN_CACHE_DISABLED"):
+        return _load_actor_tokens_uncached(
+            Path(root), project,
+            base_url=_effective_target_base_url(Path(root), project, base_url),
+        )
+    return _load_actor_tokens_cached(Path(root), project, base_url=base_url)
+
+
+def _load_actor_tokens_uncached(root: Path, project: str, *, base_url: str = "") -> dict[str, str]:
+    """Resolve the actor-token catalog from declared accounts (uncached).
 
     P0-4/P0-7 enhanced: falls back to parsing TEST_ACCOUNTS.md from the
     project input directory and performing login when tokens are absent.
@@ -551,7 +738,7 @@ def load_actor_tokens(root: Path, project: str, *, base_url: str = "") -> dict[s
     validates and reads may return empty 200, but writes fail with a user-identity
     foreign key. Preferring live login closes that gap without inventing bodies.
     """
-    base_url = _text(base_url) or _text(os.environ.get("QUALIBUG_TARGET_BASE_URL") or "")
+    base_url = _effective_target_base_url(Path(root), project, base_url)
     # Login endpoint authority: project-declared login_api/login_base_url first,
     # environment override second, the generic default last. In a multi-service
     # deployment the auth service is a different host than the scan target, so
@@ -695,13 +882,24 @@ def load_actor_tokens(root: Path, project: str, *, base_url: str = "") -> dict[s
                     else:
                         # Recorded, not silently skipped: a stale snapshot is the
                         # difference between "no credential" and "a credential the
-                        # target will reject".
-                        expired_roles.append(role)
-                        print(
-                            f"[STALE] declared actor token expired role={role} "
-                            f"account_ref={account_ref}",
-                            flush=True,
+                        # target will reject". Printed once per role/account per
+                        # process — repeat callers re-resolving the same stale
+                        # catalog must not flood the run log (3150×/run measured
+                        # 2026-08-22); the structured summary below stays the
+                        # machine-readable signal.
+                        stale_key = (
+                            str(root),
+                            str(project),
+                            role,
+                            account_ref,
                         )
+                        expired_roles.append(role)
+                        if _dedup_should_emit(stale_key, _STALE_SNAPSHOT_PRINTED):
+                            print(
+                                f"[STALE] declared actor token expired role={role} "
+                                f"account_ref={account_ref}",
+                                flush=True,
+                            )
                         continue
                 else:
                     token = stored_token
@@ -740,16 +938,32 @@ def load_actor_tokens(root: Path, project: str, *, base_url: str = "") -> dict[s
         if tokens:
             return tokens
         if expired_roles or password_login_failed:
-            _LOGGER.warning(
-                "declared_actor_tokens_expired project=%s expired_count=%s "
-                "login_failed_count=%s roles=%s action=reload_test_accounts",
-                project,
-                len(expired_roles),
-                len(password_login_failed),
-                ",".join(
-                    sorted(set(expired_roles + password_login_failed))[:6]
-                ),
-            )
+            summary_roles = tuple(sorted(set(expired_roles + password_login_failed)))
+            warn_key = (str(root), str(project), summary_roles)
+            # Time-windowed per (project, role-set): repeat callers
+            # re-resolving the same all-stale catalog previously logged this
+            # warning 450×/run, while once-per-process would have hidden the
+            # signal from later scans in a long-lived backend. First
+            # occurrence (or first past the window) warns; repeats stay
+            # visible at debug without flooding structured logs.
+            if _dedup_should_emit(warn_key, _EXPIRED_SUMMARY_WARNED):
+                _LOGGER.warning(
+                    "declared_actor_tokens_expired project=%s expired_count=%s "
+                    "login_failed_count=%s roles=%s action=reload_test_accounts",
+                    project,
+                    len(expired_roles),
+                    len(password_login_failed),
+                    ",".join(sorted(set(expired_roles + password_login_failed))[:6]),
+                )
+            else:
+                _LOGGER.debug(
+                    "declared_actor_tokens_expired_repeat project=%s expired_count=%s "
+                    "login_failed_count=%s roles=%s",
+                    project,
+                    len(expired_roles),
+                    len(password_login_failed),
+                    ",".join(summary_roles[:6]),
+                )
 
     # ── P0-4: Fallback to TEST_ACCOUNTS.md with login ──
     md_accounts = _parse_test_accounts_md(root, project)

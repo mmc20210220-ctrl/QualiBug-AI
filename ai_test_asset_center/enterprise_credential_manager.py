@@ -36,6 +36,15 @@ from .credential_crypto import decrypt as _decrypt_cred
 
 _LOGGER = logging.getLogger(__name__)
 
+# Generic login-path probe order shared by every consumer that must discover an
+# undeclared login endpoint (credentials runtime, outcome validation). This is
+# the single candidate authority — never per-module copies.
+COMMON_LOGIN_PATH_CANDIDATES = [
+    "/auth/login", "/api/auth/login", "/api/v1/auth/login",
+    "/login", "/api/login", "/api/v1/login",
+    "/auth/token", "/oauth/token",
+]
+
 # ---------------------------------------------------------------------------
 # Data models
 # ---------------------------------------------------------------------------
@@ -517,11 +526,7 @@ class EnterpriseCredentialManager:
             candidates.extend(spec_paths)
 
         # 2. Probe common paths as safety net
-        candidates.extend([
-            "/auth/login", "/api/auth/login", "/api/v1/auth/login",
-            "/login", "/api/login", "/api/v1/login",
-            "/auth/token", "/oauth/token",
-        ])
+        candidates.extend(COMMON_LOGIN_PATH_CANDIDATES)
 
         # Deduplicate preserving order
         seen = set()

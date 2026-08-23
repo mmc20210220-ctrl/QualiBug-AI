@@ -167,12 +167,18 @@ def test_executors_thread_the_approved_base_url() -> None:
     """A parameter nobody passes is the same as no parameter."""
     root = Path(__file__).resolve().parents[1] / "ai_test_asset_center"
     # The token-loading call site moved into the extracted executor core during
-    # the architecture split; the batch executor still threads base_url into it.
+    # the architecture split; the batch executor's implementation SSOT is the
+    # single-finding mechanics base (experiment_batch_executor.py is a thin
+    # delegating facade), and it still threads base_url into token loading.
     core = (root / "experiment_executor_core.py").read_text(encoding="utf-8")
     assert "load_actor_tokens(" in core
     assert "root, project, base_url=base_url" in core
-    batch = (root / "experiment_batch_executor.py").read_text(encoding="utf-8")
-    assert "base_url=base_url" in batch
+    batch_impl = (
+        root / "_experiment_batch_executor_single_finding_mechanics_base.py"
+    ).read_text(encoding="utf-8")
+    assert "load_actor_tokens(root, project, base_url=base_url)" in batch_impl
+    batch_facade = (root / "experiment_batch_executor.py").read_text(encoding="utf-8")
+    assert "_base.execute_selected_experiments" in batch_facade
 
 
 def test_password_login_preferred_over_unexpired_stored_token(

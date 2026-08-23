@@ -56,7 +56,9 @@ from .adaptive_planning_history import (
     select_matching_historical_yield,
 )
 from .agent_semantic_linker import (
+    PROMPT_PROTOCOL,
     RECEIPT_SCHEMA as AGENT_SEMANTIC_LINK_RECEIPT_SCHEMA,
+    _fingerprint as _impl_fingerprint,
     enrich_knowledge_asset_with_agent_relationships,
 )
 from .behavior_ir import build_behavior_ir_from_knowledge_asset
@@ -545,6 +547,192 @@ def derive_unit_execution_arms(
     return arm_receipt
 
 
+# ── Agent-linker steady-state reuse gate ────────────────────────────────────
+# The linker re-pages the ENTIRE rule library through the LLM on every scan
+# (measured 2026-08-23: it alone burned the 5M-token run budget and failed —
+# CMP_77d5dfe1). Enterprise understanding is a persistent, versioned asset:
+# an unchanged rule/interface set must not pay full-price linking again
+# (Enterprise Understanding Lifecycle Contract). A completed enrichment pass
+# persists its generated relationships content-addressed by the linker-relevant
+# asset subset + provider identity; the next scan with the same fingerprint
+# replays them deterministically with ZERO provider calls. Kill switch:
+# QUALIBUG_AGENT_LINKER_REUSE_DISABLED=1.
+
+_AGENT_LINKER_REUSE_STATE_SCHEMA = "qualibug.agent-linker-reuse-state.v1"
+_AGENT_LINKER_VERIFIED_STATUSES = frozenset({
+    "VERIFIED",
+    "VERIFIED_WITH_REJECTIONS",
+    "VERIFIED_WITH_FAILED_UNITS",
+    "VERIFIED_WITH_GAPS",
+})
+
+
+def _agent_linker_fingerprint(asset: dict[str, Any]) -> str:
+    """Content-address the subset the linker actually reads."""
+    import hashlib
+
+    rules = sorted(
+        (
+            str(row.get("rule_id") or ""),
+            str(row.get("statement") or row.get("text") or ""),
+            str(row.get("kind") or ""),
+        )
+        for row in _list(asset.get("rule_library"))
+        if isinstance(row, dict)
+    )
+    interfaces = sorted(
+        json.dumps(row, ensure_ascii=False, sort_keys=True, default=str)
+        for row in _list(asset.get("interfaces"))
+        if isinstance(row, dict)
+    )
+    transitions = len(
+        [
+            row
+            for row in _list(asset.get("state_machines"))
+            if isinstance(row, dict)
+        ]
+    )
+    model = ""
+    try:
+        from .reasoning_config import ReasoningConfig
+
+        model = str(getattr(ReasoningConfig.from_env(), "model", "") or "")
+    except Exception:
+        model = ""
+    payload = json.dumps(
+        {
+            "prompt_protocol": PROMPT_PROTOCOL,
+            "model": model,
+            "rules": rules,
+            "interfaces": interfaces,
+            "state_machine_count": transitions,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _agent_linker_state_path(root: Path, project: str) -> Path:
+    return (
+        Path(root)
+        / "platform_workspace"
+        / str(project)
+        / "defect_discovery"
+        / "agent_linker_reuse_state.json"
+    )
+
+
+def _load_agent_linker_state(root: Path, project: str) -> dict[str, Any]:
+    try:
+        raw = json.loads(
+            _agent_linker_state_path(root, project).read_text(encoding="utf-8")
+        )
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return raw if isinstance(raw, dict) else {}
+
+
+def _enrich_with_agent_semantic_reuse_gate(
+    asset: dict[str, Any],
+    *,
+    root: Path,
+    project: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    started = time.perf_counter()
+    fingerprint = _agent_linker_fingerprint(asset)
+    reuse_disabled = str(
+        os.environ.get("QUALIBUG_AGENT_LINKER_REUSE_DISABLED") or ""
+    ).strip().lower() in {"1", "true", "yes", "on"}
+    state = {} if reuse_disabled else _load_agent_linker_state(root, project)
+    if (
+        state.get("schema_version") == _AGENT_LINKER_REUSE_STATE_SCHEMA
+        and state.get("fingerprint") == fingerprint
+        and state.get("status") in _AGENT_LINKER_VERIFIED_STATUSES
+        and isinstance(state.get("relationships"), list)
+    ):
+        reused = dict(asset)
+        reused["relationships"] = [dict(row) for row in state["relationships"]]
+        receipt = dict(state.get("receipt") or {})
+        receipt.update({
+            "status": "REUSED",
+            "reused_from_fingerprint": fingerprint[:16],
+            "provider_calls": 0,
+        })
+        receipt["receipt_fingerprint"] = _impl_fingerprint(receipt)
+        reused["agent_semantic_link_receipt"] = receipt
+        _planning_logger.info(
+            "[plan-trace] agent_link stage=reused elapsed_ms=%d relationships=%d fingerprint=%s",
+            int((time.perf_counter() - started) * 1000),
+            len(reused["relationships"]),
+            fingerprint[:16],
+        )
+        return reused, receipt
+
+    asset, receipt = enrich_knowledge_asset_with_agent_relationships(asset)
+    elapsed_ms = int((time.perf_counter() - started) * 1000)
+    _planning_logger.info(
+        "[plan-trace] agent_link stage=executed elapsed_ms=%d status=%s accepted=%s windows=%s",
+        elapsed_ms,
+        receipt.get("status"),
+        receipt.get("accepted_relationship_count"),
+        _dict(
+            receipt.get("lossless_rule_scheduling")
+            or receipt.get("supporting_fact_paging")
+            or {}
+        ).get("windows_executed")
+        or _dict(receipt.get("supporting_fact_paging") or {}).get("window_count"),
+    )
+    if receipt.get("status") in _AGENT_LINKER_VERIFIED_STATUSES:
+        _save_agent_linker_state(root, project, fingerprint, asset, receipt)
+    return asset, receipt
+
+
+def _save_agent_linker_state(
+    root: Path,
+    project: str,
+    fingerprint: str,
+    enriched_asset: dict[str, Any],
+    receipt: dict[str, Any],
+) -> None:
+    try:
+        state = {
+            "schema_version": _AGENT_LINKER_REUSE_STATE_SCHEMA,
+            "fingerprint": fingerprint,
+            "status": receipt.get("status"),
+            "persisted_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "relationships": [
+                dict(row) for row in _list(enriched_asset.get("relationships"))
+                if isinstance(row, dict)
+            ],
+            "receipt": {
+                key: receipt.get(key)
+                for key in (
+                    "status",
+                    "accepted_relationship_count",
+                    "assessed_rule_count",
+                    "unassessed_rule_count",
+                    "unassessed_rule_ids",
+                    "lossless_rule_scheduling",
+                    "supporting_fact_paging",
+                )
+                if receipt.get(key) is not None
+            },
+        }
+        path = _agent_linker_state_path(root, project)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        from .project_runtime_primitives import write_json_artifact
+
+        write_json_artifact(path, state)
+    except OSError as exc:
+        _planning_logger.warning(
+            "agent_linker_reuse_state_persist_failed project=%s error_type=%s error=%s",
+            project,
+            type(exc).__name__,
+            str(exc)[:200],
+        )
+
+
 def build_discovery_plan(
     inputs: DiscoveryMainlineInputs,
     campaign_handle: Any,
@@ -659,8 +847,10 @@ def build_discovery_plan(
     if not isinstance(semantic_linking_enabled, bool):
         raise MainlineContractError("agent_semantic_linking_enabled_not_boolean")
     if semantic_linking_enabled:
-        asset, agent_semantic_link_receipt = (
-            enrich_knowledge_asset_with_agent_relationships(asset)
+        asset, agent_semantic_link_receipt = _enrich_with_agent_semantic_reuse_gate(
+            asset,
+            root=inputs.root,
+            project=inputs.project,
         )
         # ── ⑤下半场：富集结果立即原子落盘 ─────────────────────────────
         # 否则后续任何崩溃/降级都会让 Tier-0 指纹标记随内存丢失，下一轮

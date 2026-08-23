@@ -117,6 +117,7 @@ def test_supporting_fact_recall_pages_past_the_20_fact_window() -> None:
         "enabled": True,
         "window_size": 20,
         "window_count": 2,
+        "windows_executed": 2,
         "source_fact_count": 21,
         "window_fact_counts": [20, 1],
         "unconsumed_tail_fact_count": 0,

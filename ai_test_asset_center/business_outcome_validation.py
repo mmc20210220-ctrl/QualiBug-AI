@@ -946,29 +946,44 @@ def _normal_token(cfg: dict[str, Any], project: str, root: Path, timeout: int) -
     password = normal.get("password") or normal.get("pass")
     base_url = str(cfg.get("base_url") or "")
     login_api = str(cfg.get("login_api") or "")
-    if not (base_url and login_api and username and password):
+    if not (base_url and username and password):
         return None
     headers = {"Content-Type": "application/json", "Accept": "application/json"}
     # A hardcoded "username" key returns 401 against any system that authenticates
     # by email, which reads here as "no token available" and silently degrades every
     # authenticated probe downstream. Try the declared shape, else probe.
-    from .enterprise_credential_manager import _identity_field_candidates
+    from .enterprise_credential_manager import (
+        COMMON_LOGIN_PATH_CANDIDATES,
+        _identity_field_candidates,
+    )
 
+    # Declared path first, then the shared generic probe safety net — an
+    # undeclared project is discovered, never fabricated (the config layer
+    # leaves login_api empty when the operator declared nothing).
+    login_paths = [login_api] + list(COMMON_LOGIN_PATH_CANDIDATES) if login_api else list(COMMON_LOGIN_PATH_CANDIDATES)
+    seen_paths: set[str] = set()
+    unique_login_paths: list[str] = []
+    for p in login_paths:
+        key = str(p).strip().strip("/")
+        if key and key not in seen_paths:
+            seen_paths.add(key)
+            unique_login_paths.append(key)
     for identity_field in _identity_field_candidates(
         username, str(normal.get("username_field") or cfg.get("username_field") or "")
     ):
         body = json.dumps(
             {identity_field: username, "password": password}, ensure_ascii=False
         ).encode("utf-8")
-        try:
-            req = urllib.request.Request(_join_url(base_url, login_api), data=body, method="POST", headers=headers)
-            with urllib.request.urlopen(req, timeout=timeout) as response:
-                data = json.loads(response.read(300_000).decode("utf-8", errors="replace"))
-                for key in ("token", "access_token", "jwt"):
-                    if data.get(key):
-                        return str(data[key])
-        except Exception:
-            continue
+        for login_path in unique_login_paths:
+            try:
+                req = urllib.request.Request(_join_url(base_url, login_path), data=body, method="POST", headers=headers)
+                with urllib.request.urlopen(req, timeout=timeout) as response:
+                    data = json.loads(response.read(300_000).decode("utf-8", errors="replace"))
+                    for key in ("token", "access_token", "jwt"):
+                        if data.get(key):
+                            return str(data[key])
+            except Exception:
+                continue
     return None
 
 

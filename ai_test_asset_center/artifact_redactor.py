@@ -419,7 +419,15 @@ def scan_for_secrets(payload: Any, *, skip_value_patterns: bool = False) -> dict
 def redact_and_validate(payload: Any) -> tuple[Any, dict[str, Any]]:
     """Redact then scan. Raises ArtifactSecretLeakError on residual secrets."""
     redacted, receipt = redact_artifact(payload)
-    redacted = _reseal_attempt_ledgers(redacted)
+    # Reseal exists solely to restore sealed-fingerprint chains broken BY
+    # REDACTION rewriting secret-bearing strings: zero redaction events means
+    # zero bytes changed, so every embedded seal is still valid and the whole-
+    # ledger content fingerprints can be skipped (measured wrap-up hotspot,
+    # py-spy 2026-08-23). Authority rederive stays unconditional by contract:
+    # it also rebuilds stale/unbuilt authority artifacts independent of
+    # redaction (envelope_authority_rebuild_equals_whole_tree equivalence).
+    if receipt.get("redaction_applied"):
+        redacted = _reseal_attempt_ledgers(redacted)
     redacted = _rederive_redaction_sensitive_authority(redacted)
     scan = scan_for_secrets(redacted)
     combined = {
@@ -436,20 +444,33 @@ def redact_and_validate(payload: Any) -> tuple[Any, dict[str, Any]]:
     return redacted, combined
 
 
-def _reseal_attempt_ledgers(value: Any) -> Any:
-    """Keep sealed obligation-attempt ledgers valid after secret redaction."""
+def _reseal_attempt_ledgers(value: Any, *, _seen: set[int] | None = None) -> Any:
+    """Keep sealed obligation-attempt-ledgers valid after secret redaction.
+
+    ``_seen`` makes one walk idempotent over shared references: v12 results
+    legitimately reference the same ledger object from several projections,
+    and each redundant reseal pays a full content fingerprint of a >16k-attempt
+    ledger (measured wrap-up hotspot). Callers must pass no argument.
+    """
+
+    if _seen is None:
+        _seen = set()
 
     if isinstance(value, dict):
         if value.get("schema_version") == "qualibug.obligation-attempt-ledger.v1":
+            marker = id(value)
+            if marker in _seen:
+                return value
+            _seen.add(marker)
             from .obligation_attempt_ledger import reseal_obligation_attempt_ledger
 
             return reseal_obligation_attempt_ledger(value)
         return {
-            key: _reseal_attempt_ledgers(item)
+            key: _reseal_attempt_ledgers(item, _seen=_seen)
             for key, item in value.items()
         }
     if isinstance(value, list):
-        return [_reseal_attempt_ledgers(item) for item in value]
+        return [_reseal_attempt_ledgers(item, _seen=_seen) for item in value]
     return value
 
 

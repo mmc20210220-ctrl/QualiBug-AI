@@ -92,6 +92,39 @@ by replacing host methods:
   (trigger / decision / failure / recovery / result) carry the stable
   campaign / slice / obligation / experiment identity so one cleanup failure
   can be reconstructed from logs alone.
+- Actor-token catalog resolution (`experiment_runtime_credentials.load_actor_tokens`)
+  is run-level idempotent: within one scan process the catalog resolves once
+  per (root, project, base_url, login-env, input-file fingerprint, TTL bucket)
+  and is reused by every caller (batch executors, fixture materialization,
+  observers). Rationale: CMP_77d5dfe1 (2026-08-22) measured 450 full-stale
+  re-resolutions (~3150 `[STALE]` prints + repeated md-fallback login probes)
+  in a single run — minutes of redundant file/HTTP churn between governed
+  writes. File-fingerprint invalidation keeps operator edits authoritative;
+  the resolver's own token-refresh persist maps its post-write fingerprint
+  back to the resolving entry so it never self-invalidates;
+  `QUALIBUG_ACTOR_TOKEN_CACHE_DISABLED=1` bypasses and
+  `QUALIBUG_ACTOR_TOKEN_CACHE_TTL_SECONDS` (default 300) bounds reuse.
+  `[STALE]` prints and the `declared_actor_tokens_expired` warning are deduped
+  per (root, project, role/account / role-set) with a TIME WINDOW
+  (`QUALIBUG_ACTOR_TOKEN_DEDUP_WINDOW_SECONDS`, default 600): repeats within
+  the window are downgraded to debug, but each new scan past the window warns
+  again — a long-lived backend must not lose the signal that a later scan
+  also ran on stale credentials.
+- Credential base_url authority (`_effective_target_base_url`): an omitted
+  `base_url` argument falls back to `QUALIBUG_TARGET_BASE_URL`, then to the
+  project's declared runtime config (`approved_base_url`/`base_url`). The
+  same run's root cause was 450 base_url-less calls silently skipping the
+  entire live-login branch (`if base_url:`) while every declared actor
+  snapshot was expired — the whole campaign executed without credentials
+  (mass `BLOCKED_MISSING_*`). Explicit caller values keep precedence; only
+  operator-declared configuration is consulted, nothing inferred.
+- Undeclared login endpoint stays undeclared:
+  `project_runtime_config.load_real_project_config` defaults `login_api` to
+  empty (previously it fabricated `"/auth/login"`, contradicting the
+  credentials layer and reading as an operator declaration). Consumers that
+  must discover an undeclared login path probe the shared candidate list
+  `enterprise_credential_manager.COMMON_LOGIN_PATH_CANDIDATES` (single
+  authority; outcome validation reuses it instead of skipping).
 - Accepted-residue degradation (declared non-production targets only): a
   write without a source-declared compensator is no longer held hostage by
   cleanup guarantees. The compiler emits `accepted_residue` cleanup-plan
@@ -734,6 +767,33 @@ Evolution Contract):
   failures remain fail-fast. Prompt payloads pass the shared artifact
   redaction boundary and must not include credential values or
   request-example values.
+- Agent-linker run-level cost bounds (2026-08-23, evidence CMP_77d5dfe1: paged
+  enrichment burned the whole 5M-token run budget inside the unbounded chunk
+  loop and still failed, so every later LLM consumer failed fast and repeated
+  scans re-paid full price for an asset unchanged since 08-17):
+  (1) `QUALIBUG_AGENT_LINKER_MAX_WINDOWS` (default 24, 0 = explicit unlimited)
+  caps provider windows per enrichment via a ContextVar budget cell installed
+  at `enrich_knowledge_asset_with_agent_relationships` and consumed at EVERY
+  paging layer — legacy `_fact_paged_enrichment` AND its production
+  replacement `authority._lossless_fact_paged_enrichment` (which patches
+  `_base._fact_paged_enrichment` at import), plus the rule-chunk guard in
+  `_lossless_rule_enrichment`. Exhaustion skips remaining windows with reason
+  `AGENT_LINKER_WINDOW_BUDGET_EXHAUSTED`, counts skipped rules in
+  `unassessed_rule_count`/`window_budget_skipped_rule_count`, and stamps the
+  receipt — a named visible bound, never silent truncation. The entry clears
+  the cell in `finally`, so nothing leaks across scans or tests.
+  (2) Steady-state reuse gate (`_enrich_with_agent_semantic_reuse_gate`): a
+  completed pass (`VERIFIED*` status) persists its generated relationships
+  content-addressed by rule/interface/model/prompt fingerprint to
+  `platform_workspace/<project>/defect_discovery/agent_linker_reuse_state.json`
+  (atomic write); the next scan on the same fingerprint replays them with
+  status `REUSED` and zero provider calls. Failed passes persist nothing — no
+  poisoned state. Kill switch `QUALIBUG_AGENT_LINKER_REUSE_DISABLED=1`. This
+  is the linker's slice of the Enterprise Understanding Lifecycle Contract:
+  unchanged enterprises cost near-zero comprehension LLM per scan.
+  Latent-bug note: the supporting-fact closure loop had referenced `_text`
+  without a definition since extraction (NameError on any big-fact-pool run);
+  a delegating helper now exists.
 - Explicit UI execution requests are part of the `run_v12_pipeline`
   compatibility path and execute only through the governed UI adapter.
   Playwright locator intent must resolve to one visible DOM/accessibility
@@ -971,6 +1031,20 @@ Evolution Contract):
   through the `[cleanup-trace]` structured events in
   `experiment_cleanup_executor_core.py`; ad-hoc stderr prints are forbidden
   on that path.
+- Wrap-up persistence hot-path contract (py-spy evidence 2026-08-23, run
+  CMP_77d5dfe1 round 2: >25 min spinning inside
+  `write_scan_result → redact/reseal/content_fingerprint`):
+  `_reseal_attempt_ledgers` runs ONLY when redaction actually changed bytes
+  (`receipt.redaction_applied`) — it exists solely to repair seals broken by
+  authorized secret rewriting, and every redundant call pays a full content
+  fingerprint of a >16k-attempt ledger. One walk memoizes ledgers by identity
+  so shared references seal once (inplace shard mode preserves sharing;
+  copy mode rebuilds containers and cannot). Authority rederive stays
+  UNCONDITIONAL by contract — it also rebuilds stale/unbuilt authority
+  artifacts independent of redaction
+  (`test_envelope_authority_rebuild_equals_whole_tree`).
+  `_delivery_validation_cache.content_fingerprint` stays plain
+  dumps+hash: iterencode streaming measured ~6× slower below ~100 MB.
 
 ## Enterprise Comprehension — Implementation Anchors
 

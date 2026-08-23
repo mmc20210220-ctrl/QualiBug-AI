@@ -181,8 +181,16 @@ def _run_transition_recovery_batches(
     ]
     recovered_assets: list[dict[str, Any]] = []
     recovered_receipts: list[dict[str, Any]] = []
+    recovery_budget_stopped = False
 
     for chunk in chunks:
+        if not _base._linker_budget_available():
+            # Recovery windows are refinement: when the declared window budget
+            # is spent, skip them visibly instead of multiplying provider
+            # calls past the operator's bound.
+            recovery_budget_stopped = True
+            break
+        _base._linker_budget_consume()
         recovered, raw_receipt = _base._run_core_with_transition_window(
             recovery_asset,
             client=recovery_client,
@@ -206,6 +214,9 @@ def _run_transition_recovery_batches(
         rule_count=0,
         duplicate_rule_windows=True,
     )
+    if recovery_budget_stopped:
+        merged_receipt["transition_recovery_budget_exhausted"] = True
+        merged_receipt.setdefault("reason_code", _base.LINKER_WINDOW_BUDGET_EXHAUSTED)
     merged_receipt["accepted_relationship_count"] = len(
         merged_receipt.get("accepted_edge_ids", [])
     )
@@ -473,6 +484,22 @@ def _lossless_fact_paged_enrichment(
     """Keep assessing a rule across fact windows until its link set closes."""
     fact_pool = _base._original_all_fact_rows(governed_asset)
     if len(fact_pool) <= _base._FACT_BATCH_WINDOW:
+        if not _base._linker_budget_available():
+            rules_left = _base._dicts(governed_asset.get("rule_library"))
+            exhausted_receipt = {
+                "status": "VERIFIED_WITH_GAPS",
+                "reason_code": _base.LINKER_WINDOW_BUDGET_EXHAUSTED,
+                "accepted_edge_ids": [],
+                "unassessed_rule_ids": [
+                    str(row.get("rule_id") or "") for row in rules_left
+                ],
+                "unassessed_rule_count": len(rules_left),
+            }
+            exhausted_receipt["receipt_fingerprint"] = _impl._fingerprint(exhausted_receipt)
+            exhausted_asset = deepcopy(governed_asset)
+            exhausted_asset["agent_semantic_link_receipt"] = exhausted_receipt
+            return exhausted_asset, exhausted_receipt
+        _base._linker_budget_consume()
         return _base._candidate_paged_enrichment(governed_asset, client=client)
 
     base_client = client or _impl._default_client()
@@ -491,6 +518,7 @@ def _lossless_fact_paged_enrichment(
         for rule in rules
         if len(accumulated_by_rule.get(_rule_id(rule), set())) < MAX_LINKS_PER_RULE
     ]
+    budget_stopped = False
     receipts: list[dict[str, Any]] = []
     enriched_assets: list[dict[str, Any]] = []
     consumed_chunks: list[list[dict[str, Any]]] = []
@@ -499,6 +527,11 @@ def _lossless_fact_paged_enrichment(
     for index, chunk in enumerate(chunks):
         if not remaining_rules:
             break
+        if not _base._linker_budget_available():
+            unresolved_rule_counts.append(len(remaining_rules))
+            budget_stopped = True
+            break
+        _base._linker_budget_consume()
         chunk_asset = deepcopy(governed_asset)
         chunk_asset["rule_library"] = remaining_rules
         if index > 0:
@@ -543,10 +576,11 @@ def _lossless_fact_paged_enrichment(
     )
     merged_receipt["supporting_fact_pool_count"] = len(fact_pool)
     merged_receipt["context_fact_omitted_count"] = 0
-    merged_receipt["supporting_fact_paging"] = {
+    fact_paging = {
         "enabled": True,
         "window_size": _base._FACT_BATCH_WINDOW,
         "window_count": len(consumed_chunks),
+        "windows_executed": len(consumed_chunks),
         "source_fact_count": len(fact_pool),
         "window_fact_counts": [len(chunk) for chunk in consumed_chunks],
         "unconsumed_tail_fact_count": max(
@@ -559,6 +593,16 @@ def _lossless_fact_paged_enrichment(
         "zero_score_fact_fill_enabled": True,
         "reason_code": "SOURCE_SUPPORTING_FACTS_PAGED_UNTIL_RULE_LINK_CLOSURE_OR_FACT_EXHAUSTION",
     }
+    if budget_stopped:
+        fact_paging.update({
+            "window_budget_exhausted": True,
+            "reason_code": _base.LINKER_WINDOW_BUDGET_EXHAUSTED,
+        })
+        merged_receipt["unassessed_rule_ids"] = sorted({
+            str(row.get("rule_id") or "") for row in remaining_rules
+        } | set(merged_receipt.get("unassessed_rule_ids") or []))
+        merged_receipt["unassessed_rule_count"] = len(merged_receipt["unassessed_rule_ids"])
+    merged_receipt["supporting_fact_paging"] = fact_paging
     merged_receipt["receipt_fingerprint"] = _impl._fingerprint(merged_receipt)
     merged_asset["agent_semantic_link_receipt"] = merged_receipt
     return merged_asset, merged_receipt

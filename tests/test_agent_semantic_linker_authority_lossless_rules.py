@@ -91,6 +91,8 @@ def test_rules_after_the_320_window_are_still_semantically_linked() -> None:
         "enabled": True,
         "window_size": 320,
         "window_count": 2,
+        "windows_executed": 2,
+        "window_budget": 24,
         "budget_skipped_rule_count": 0,
         "reason_code": "SOURCE_RULES_PAGED_INSTEAD_OF_GLOBALLY_TRUNCATED",
     }
