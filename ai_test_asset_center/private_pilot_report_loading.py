@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import time
@@ -18,9 +19,44 @@ from .private_pilot_json_io import _read_json_artifact, _read_json_object, _read
 from .real_id_resolver import normalize_path_placeholders
 from .real_project_onboarding import _safe_project_id
 
+_LOGGER = logging.getLogger(__name__)
+
 class ReportLoadingMixin:
     @staticmethod
     def _read_json_dict(path: Path) -> dict[str, Any]:
+        return _read_json_object(path)
+
+    @staticmethod
+    def _read_scan_report_payload(path: Path) -> dict[str, Any]:
+        """Read one scan-report candidate with Dual-Read hydration.
+
+        ``scan_result.json`` may be an artifactized/sharded store: its heavy
+        rows persist as ``$qualibug_artifact_ref`` placeholders that hydrate
+        ONLY through ``scan_result_store.load_scan_result``. A bare JSON read
+        yields ref-placeholder rows with no identity and no authority
+        fingerprint, which downstream fail-fast contracts then reject with
+        ``finding_authority_fingerprint_missing`` — blocking the entire
+        command-center view for the project. Hydration failures fall back to
+        the raw view (store-disabled mode) with a visible warning; downstream
+        contracts still surface any real inconsistency.
+        """
+
+        if path.name != "scan_result.json":
+            return _read_json_object(path)
+        try:
+            from .scan_result_store import load_scan_result
+
+            hydrated = load_scan_result(path)
+            if hydrated:
+                return hydrated
+        except Exception as exc:  # noqa: BLE001 - fallback keeps report load alive
+            _LOGGER.warning(
+                "scan_result_dual_read_hydration_failed path=%s error_type=%s error=%s",
+                path,
+                type(exc).__name__,
+                str(exc)[:240],
+                exc_info=True,
+            )
         return _read_json_object(path)
 
     @staticmethod
@@ -169,7 +205,7 @@ class ReportLoadingMixin:
         for path in explicit_candidates:
             if not path.exists():
                 continue
-            payload = self._read_json_dict(path)
+            payload = self._read_scan_report_payload(path)
             if not payload:
                 continue
             payload.setdefault("report_source_path", path.relative_to(root).as_posix() if path.is_relative_to(root) else str(path))
@@ -237,7 +273,7 @@ class ReportLoadingMixin:
         for path in candidates:
             if not path.exists():
                 continue
-            payload = self._read_json_dict(path)
+            payload = self._read_scan_report_payload(path)
             if not payload:
                 continue
             payload.setdefault("report_source_path", path.relative_to(root).as_posix() if path.is_relative_to(root) else str(path))
@@ -945,7 +981,7 @@ class ReportLoadingMixin:
         report = root / "platform_outputs" / project_id / "scan_result.json"
         if not report.exists():
             return []
-        data = _read_json_object(report)
+        data = ReportLoadingMixin._read_scan_report_payload(report)
         db_verification = data.get("db_verification")
         if db_verification is None:
             return []
@@ -1065,7 +1101,7 @@ class ReportLoadingMixin:
         scan_file = root / "platform_outputs" / project_id / "scan_result.json"
         if not scan_file.exists():
             return []
-        data = _read_json_object(scan_file)
+        data = ReportLoadingMixin._read_scan_report_payload(scan_file)
         layers = data.get("layers", {})
         if not isinstance(layers, dict):
             raise ValueError(f"scan layers must be an object: {scan_file}")
