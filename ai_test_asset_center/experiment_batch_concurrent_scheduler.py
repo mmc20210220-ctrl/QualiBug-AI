@@ -902,18 +902,18 @@ def execute_selected_experiments_concurrent(
             prioritization_receipt=prioritization_receipt,
             prioritization_failed=prioritization_failed,
         )
-    merged["concurrency"] = {
-        "mode": "serial_fallback",
-        "max_workers": concurrency,
-        "group_count": len(groups),
-        "group_errors": [batch["group_error"]] if batch.get("group_error") else [],
-    }
-    logger.info(
-        "[exec-trace] batch mode=serial_fallback groups=%d selected=%d",
-        len(groups),
-        len(selected),
-    )
-    return merged
+        merged["concurrency"] = {
+            "mode": "serial_fallback",
+            "max_workers": concurrency,
+            "group_count": len(groups),
+            "group_errors": [batch["group_error"]] if batch.get("group_error") else [],
+        }
+        logger.info(
+            "[exec-trace] batch mode=serial_fallback groups=%d selected=%d",
+            len(groups),
+            len(selected),
+        )
+        return merged
 
     batch_nonce = str(time.time_ns())
     started = time.time()

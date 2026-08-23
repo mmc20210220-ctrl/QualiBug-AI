@@ -513,7 +513,9 @@ class TestLinkerInputBudget:
 
     def test_transition_path_keeps_global_budget_semantics(self, monkeypatch):
         # 语义明确化：预算 scope=rule_batches_only；transition 单元按设计是
-        # ≤200 迁移的单次大请求（有独立分页权威契约），不套用规则批预算。
+        # ≤200 迁移的单次大请求（有独立分页权威契约），不套用规则批预算，
+        # 但携带自己的声明式输入上限（实测巨型 transition prompt 两次烧穿
+        # 5M token 运行预算，2026-08-23）——超限可见失败而非无界发送。
         monkeypatch.setenv("LLM_LINKER_MAX_INPUT_TOKENS", "10")
         client = FakeAgentClient(_linked_response())
         _, receipt = enrich_knowledge_asset_with_agent_relationships(
@@ -522,9 +524,9 @@ class TestLinkerInputBudget:
         assert receipt["input_budget"]["scope"] == "rule_batches_only"
         # 规则批全部被拦截……
         assert receipt["input_budget"]["budget_exhausted_unit_count"] >= 1
-        # ……而 transition 仍按全局语义发出唯一一次请求
+        # ……而 transition 仍发出唯一一次请求，但带自己的声明式上限
         assert len(client.requests) == 1
-        assert "max_input_tokens" not in client.requests[0]
+        assert client.requests[0].get("max_input_tokens") == 131072
 
     def test_moderate_budget_splits_batch_and_still_executes(self, monkeypatch):
         # 实测尺寸：4规则批≈9067 / 2规则≈4854 / 单规则≈2747 est tokens

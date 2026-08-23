@@ -89,6 +89,27 @@ def _linker_input_budget() -> int:
     return value if value > 0 else LINKER_MAX_INPUT_TOKENS_DEFAULT
 
 
+_TRANSITION_INPUT_BUDGET_ENV = "QUALIBUG_AGENT_LINKER_MAX_TRANSITION_INPUT_TOKENS"
+_TRANSITION_INPUT_BUDGET_DEFAULT = 131072
+
+
+def _transition_input_budget() -> int:
+    """操作员可覆盖的 transition 单次请求输入上限（token）。
+
+    巨型 transition prompt 是两轮 run 烧穿运行预算的主力（2026-08-23）。
+    超限的单元以 ``transition_input_budget_exhausted`` 可见失败——不静默发送、
+    不静默截断；显式放宽是操作员决定。0 = 不设限（回到旧的无界行为）。
+    """
+    raw = os.getenv(_TRANSITION_INPUT_BUDGET_ENV, "")
+    if raw == "0":
+        return 0
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return _TRANSITION_INPUT_BUDGET_DEFAULT
+    return value if value > 0 else _TRANSITION_INPUT_BUDGET_DEFAULT
+
+
 RECEIPT_SCHEMA = "qualibug.agent-semantic-link-receipt.v2"
 PROMPT_PROTOCOL = "qualibug.agent-business-semantic-assessment.v3"
 MIN_CONFIDENCE = 0.65
@@ -1875,33 +1896,58 @@ def enrich_knowledge_asset_with_agent_relationships(
         else:
             cache_miss_count += 1
             # Transition 单元按设计是单次大请求（≤200 条迁移、每扫描一次、
-            # 有独立分页权威契约）：保持全局预算语义，不套用规则批预算。
+            # 有独立分页权威契约）。但"单次大请求"不等于"无界请求"：实测
+            # （2026-08-23 两轮 run）巨型 transition prompt 是烧穿 5M token
+            # 运行预算的主力。声明式上限 + 超限可见失败——绝不静默发送，
+            # 也绝不静默截断；操作员可用环境变量显式放宽。
             prompt = _build_transition_request_prompt(transition_unit)
-            try:
-                response, attempts, retries = _complete_batch(
-                    resolved_client,
-                    prompt=prompt,
-                )
-            except AgentSemanticLinkerError as exc:
-                failed_units.append({
-                    "unit_kind": "transition",
-                    "reason_code": "provider_failure",
-                    "error": str(exc)[:300],
-                })
-            else:
-                provider_attempt_count += attempts
-                provider_retry_count += retries
+            estimated = estimate_input_tokens(prompt)
+            over_transition_budget = (
+                _transition_input_budget() > 0
+                and estimated > _transition_input_budget()
+            )
+            if not over_transition_budget:
                 try:
-                    _validate_transition_response_shape(response)
+                    response, attempts, retries = _complete_batch(
+                        resolved_client,
+                        prompt=prompt,
+                        max_input_tokens=(
+                            _transition_input_budget()
+                            if _transition_input_budget() > 0
+                            else None
+                        ),
+                    )
                 except AgentSemanticLinkerError as exc:
                     failed_units.append({
                         "unit_kind": "transition",
-                        "reason_code": "response_schema_invalid",
+                        "reason_code": "provider_failure",
                         "error": str(exc)[:300],
                     })
                 else:
-                    cache.put(transition_key, response)
-                    transition_response = response
+                    provider_attempt_count += attempts
+                    provider_retry_count += retries
+                    try:
+                        _validate_transition_response_shape(response)
+                    except AgentSemanticLinkerError as exc:
+                        failed_units.append({
+                            "unit_kind": "transition",
+                            "reason_code": "response_schema_invalid",
+                            "error": str(exc)[:300],
+                        })
+                    else:
+                        cache.put(transition_key, response)
+                        transition_response = response
+            else:
+                failed_units.append({
+                    "unit_kind": "transition",
+                    "reason_code": "transition_input_budget_exhausted",
+                    "error": (
+                        f"estimated_input_tokens={estimated} > "
+                        f"limit={_transition_input_budget()}; "
+                        "raise QUALIBUG_AGENT_LINKER_MAX_TRANSITION_INPUT_TOKENS "
+                        "to allow this unit deliberately"
+                    ),
+                })
 
     # --- granular degradation: raise only when every unit failed ---
     if (
