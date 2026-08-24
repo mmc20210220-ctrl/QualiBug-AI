@@ -1444,10 +1444,15 @@ def build_customer_delivery_gate_receipt_v2(
             finding_id = _text(reconstructed.get("finding_id") or reconstructed.get("id"))
             import sys as _sys_rec
 
+            # NOTE: `identity` is assigned later (after this recovery branch),
+            # so reference the already-validated `execution` carrier here to
+            # avoid an UnboundLocalError that would discard a real finding as
+            # HARNESS_FAILED. `execution` already carries obligation/experiment
+            # identity (validated at the top of this function).
             _sys_rec.stderr.write(
                 "[DELIVERY-RECOVERY] reconstructed finding for "
-                f"obligation={_text(identity.get('obligation_id'))} "
-                f"experiment={_text(identity.get('experiment_id'))}: "
+                f"obligation={_text(execution.get('obligation_id'))} "
+                f"experiment={_text(execution.get('experiment_id'))}: "
                 "upstream finalizer dropped finding payload despite validated VIOLATION\n"
             )
         else:
