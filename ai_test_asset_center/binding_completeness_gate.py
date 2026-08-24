@@ -349,8 +349,11 @@ def _check_dimension(
             # source-declared fallbacks above.
             if (
                 dimension == "actor"
-                and _actor_role_has_runtime_bound_credentials(ir, ref)
                 and _active_structural_status(existing[0])
+                and (
+                    _actor_role_has_runtime_bound_credentials(ir, ref)
+                    or _obligation_declares_account_backed_role(obl, ir, ref)
+                )
             ):
                 source_authoritative_count += 1
                 continue
@@ -440,6 +443,83 @@ def _actor_role_has_runtime_bound_credentials(
         if r in candidate_roles or _norm_role(r) in candidate_roles:
             return True
     return False
+
+
+def _obligation_declares_account_backed_role(
+    obligation: dict[str, Any],
+    behavior_ir: dict[str, Any],
+    actor_ref: str,
+) -> bool:
+    """True when the obligation's own permission sources name a role that has
+    a runtime-bound account.
+
+    Document prose derives GENERIC actor classes (登录用户 / 普通用户 /
+    approver …) that never carry credentials and are absent from the operator's
+    account catalog, so the direct same-role bridge above cannot resolve them.
+    The obligation itself still cites the operation's permission-matrix rows
+    (source_refs kind=permission_matrix, locator ``role->resource``) — those
+    rows are the operation's own declaration of which concrete roles may call
+    it. When at least one declared permitted role has a runtime-bound account,
+    executing the operation as that account satisfies both the source contract
+    and the generic document actor (a logged-in user IS one of the concrete
+    roles). Purely source-driven: the role comes from the obligation's own
+    permission provenance, never from a language table; obligations whose
+    permitted roles have no declared account stay blocked (measured: 8,098
+    BLOCKED_MISSING_BINDING in CMP_f9c8b621 round1 where 27 document-derived
+    actor nodes stranded operations whose permission rows named buyer/seller/
+    admin accounts that existed all along).
+    """
+    ir = _dict(behavior_ir)
+    obl = _dict(obligation)
+    bound_roles: set[str] = set()
+    for actor in _list(ir.get("actors")):
+        if isinstance(actor, dict) and actor.get("runtime_bound") is True:
+            role = _text(actor.get("role")).lower()
+            if role:
+                bound_roles.add(role)
+    if not bound_roles:
+        return False
+
+    def _role_backed(role: str) -> bool:
+        return (
+            role in bound_roles
+            or any(_norm_role(role) == b or _norm_role(b) == role for b in bound_roles)
+        )
+
+    for ref in _list(obl.get("source_refs")):
+        if not isinstance(ref, dict) or _text(ref.get("kind")) != "permission_matrix":
+            continue
+        locator = _text(ref.get("locator"))
+        role = locator.split("->", 1)[0].strip().lower()
+        if not role or role in {"anonymous", "public"}:
+            continue
+        if _role_backed(role):
+            return True
+
+    for op_ref in _list(obl.get("operation_refs")):
+        node = _ir_node_by_id(ir, "operations", _text(op_ref))
+        if not node:
+            continue
+        fields = node.get("typed_fields") if isinstance(node.get("typed_fields"), dict) else node
+        for key in ("required_roles", "allowed_roles", "permitted_roles"):
+            value = fields.get(key) if isinstance(fields, dict) else None
+            for role in _list(value):
+                r = _text(role).strip().lower()
+                if r and r not in {"anonymous", "public"} and _role_backed(r):
+                    return True
+    return False
+
+
+def _ir_node_by_id(ir: dict[str, Any], collection: str, node_id: str) -> dict[str, Any] | None:
+    nodes = ir.get(collection)
+    if isinstance(nodes, dict):
+        node = nodes.get(node_id)
+        return node if isinstance(node, dict) else None
+    if isinstance(nodes, list):
+        for node in nodes:
+            if isinstance(node, dict) and _text(node.get("id")) == node_id:
+                return node
+    return None
 
 
 def _get_needed_refs(
