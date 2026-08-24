@@ -1238,7 +1238,15 @@ def build_source_backed_coverage_obligations(
                 alt_actor_ref = _text(active_actors[1].get("id"))
 
         required_actors = [actor_ref] if actor_ref else []
-        if alt_actor_ref and template == "owner_viewer_isolation":
+        # Sensitive families (visibility / privacy / isolation) need two distinct
+        # runtime actors for a real control/treatment contrast. A single-arm
+        # visibility/privacy obligation cannot test an exposure boundary and the
+        # compiler's distinctness gate blocks it as actor_pair_missing
+        # (experiment_compiler_conflict_base._runtime_pair_problem). Mirror the
+        # existing isolation pairing: whenever a distinct alt actor exists, pair
+        # control/treatment so the contrast is executable and the finding is real
+        # (no vacuous self-comparison, no fabricated verdict — 原则2/7/14).
+        if alt_actor_ref and family in ("visibility", "privacy", "isolation"):
             required_actors = [actor_ref, alt_actor_ref]
 
         # Observers: resolve through make_obligation's canonical family so
