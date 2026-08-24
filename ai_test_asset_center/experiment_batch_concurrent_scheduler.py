@@ -471,11 +471,18 @@ def _harness_failed_batch(
             "status": "HARNESS_FAILED",
             "reason_code": "HARNESS_FAILURE",
             "detail": detail,
+            # Mirror the serial BLOCKED path (base.py:1013): the mainline
+            # ledger builder reads `reason_detail` off the outcome, so without
+            # this a group-level harness failure arrives with EMPTY detail and
+            # the real exception (e.g. UnboundLocalError) is invisible — a
+            # fail-silent violation of the no-silent-failure rule.
+            "reason_detail": detail,
             "finding": None,
             "execution_receipt": {
                 "status": "HARNESS_FAILED",
                 "reason_code": "HARNESS_FAILURE",
                 "detail": detail,
+                "reason_detail": detail,
                 "obligation_id": oid,
                 "selected_obligation_id": oid,
                 "experiment_id": eid,
