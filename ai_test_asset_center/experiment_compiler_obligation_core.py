@@ -1316,20 +1316,34 @@ def compile_experiment_for_obligation(
     if "http_api" not in adapters:
         return blocked_experiment(oid, "BLOCKED_UNSUPPORTED_ADAPTER", "http_api")
 
-    for gap in _list(ir.get("conflicts")):
-        if isinstance(gap, dict) and _text(gap.get("status")) == "conflicting":
-            # Conflict relevance is decided upstream by `_scoped_behavior_ir`
-            # (experiment_compiler.py): only conflicts relevant to this
-            # obligation survive into `ir["conflicts"]`. That rule covers
-            # operation-scoped, actor/role-scoped, and global conflicts.
-            # Re-deriving relevance here with an operation_ref-only check
-            # silently passes role-only and global conflicts, so any surviving
-            # conflicting row is a fail-closed block.
-            return blocked_experiment(
-                oid,
-                "BLOCKED_CONFLICTING_SOURCE",
-                _text(gap.get("id")),
-            )
+    # ── Schema conflicts between sources: evidence, not a freeze ────────────
+    # Multiple ingested documents may disagree on a field's type/enum for the
+    # same operation (16-source projects legitimately carry variant PRDs /
+    # schemas). The runtime response is the authority that adjudicates WHICH
+    # source told the truth — refusing to compile froze 1,271 obligations in
+    # CMP_77d5dfe1 r7 behind one cart-items field disagreement. Conflicts
+    # stay fully visible: attached to the compiled experiment as
+    # `conflicting_source_evidence` and logged; the merged schema is what the
+    # plan actually sends, and a target rejecting it surfaces as an honest
+    # validation finding instead of a silent coverage hole.
+    _relevant_conflicts = [
+        gap
+        for gap in _list(ir.get("conflicts"))
+        if isinstance(gap, dict) and _text(gap.get("status")) == "conflicting"
+    ]
+    if _relevant_conflicts:
+        _conflict_summary = ";".join(
+            f"{_text(g.get('typed_fields', {}).get('operation_ref')) or g.get('id')}"
+            f":{g.get('typed_fields', {}).get('field')}"
+            for g in _relevant_conflicts[:4]
+        )
+        logger.warning(
+            "[compile-trace] conflicting_source_evidence obligation=%s "
+            "count=%d conflicts=%s (runtime will adjudicate)",
+            oid,
+            len(_relevant_conflicts),
+            _conflict_summary,
+        )
 
     if not primary_op_id or primary_op_id not in ops:
         # ── Fallback: resolve primary operation from source_refs locators ──
@@ -3746,6 +3760,23 @@ def compile_experiment_for_obligation(
             "cleanup_present": bool(cleanup_plan) or not is_write,
         },
     )
+
+    # ── Schema-conflict evidence (option ①: runtime adjudicates) ──────────
+    # Conflicts between source documents on a field's type/enum for the same
+    # operation no longer freeze the obligation (CMP_77d5dfe1 r7: 1,271
+    # blocked behind one cart-items disagreement). They ride along as visible
+    # evidence; the merged schema is what the plan sends, and a target rejecting
+    # it surfaces as an honest validation finding instead of a coverage hole.
+    if _relevant_conflicts:
+        experiment["conflicting_source_evidence"] = [
+            {
+                "operation_ref": _text(c.get("typed_fields", {}).get("operation_ref")),
+                "field": c.get("typed_fields", {}).get("field"),
+                "conflict_paths": c.get("typed_fields", {}).get("conflict_paths"),
+                "conflict_status": "conflicting",
+            }
+            for c in _relevant_conflicts
+        ]
 
     # Persist compiled write_observers so the runtime step executor can fall back
     # to compiler-resolved observation paths when its own re-derivation fails
