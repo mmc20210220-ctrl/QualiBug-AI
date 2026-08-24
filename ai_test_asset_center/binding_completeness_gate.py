@@ -15,6 +15,8 @@ Schema: qualibug.binding-completeness-gate.v1
 """
 from __future__ import annotations
 
+import re
+
 from typing import Any
 
 from .binding_ledger import BindingLedger, BindingStatus, BINDING_TYPES
@@ -384,6 +386,23 @@ def _is_ir_node_ref(ref: str) -> bool:
     return lowered.startswith("bir_") or lowered.startswith("field:") or lowered.startswith("rel:")
 
 
+def _norm_role(role: str) -> str:
+    """Deterministic role→account normalization for the credential bridge.
+
+    Permission-matrix rows declare GENERIC roles (buyer, seller, admin) while
+    the operator's declared credentials name CONCRETE accounts (buyer01,
+    seller01, admin). The trailing digits/underscore are the account instance,
+    not a distinct role — stripping them makes the matrix role and the account
+    agree so a role-level obligation can bind to a declared account. Pure
+    convention, no fuzzy similarity: only the trailing [0-9_]+ suffix is
+    removed, and a 1-char base is never collapsed.
+    """
+    r = _text(role).strip().lower()
+    if len(r) <= 2:
+        return r
+    return re.sub(r"[\d_]+$", "", r)
+
+
 def _actor_role_has_runtime_bound_credentials(
     behavior_ir: dict[str, Any],
     actor_ref: str,
@@ -396,21 +415,29 @@ def _actor_role_has_runtime_bound_credentials(
     runtime credential proof remains the executor preflight's job. Without
     this bridge, every authorization obligation bound to a matrix-derived
     actor is blocked forever even though credentials exist (measured:
-    8,689 BLOCKED_MISSING_BINDING in CMP_77d5dfe1 round7, 84% of all blocks).
+    8,689 BLOCKED_MISSING_BINDING in CMP_77d5dfe1 round7, 84% of all blocks;
+    remained 8,020 after the first bridge pass because the matcher required an
+    EXACT role string and matrix role `buyer` != account role `buyer01`).
     """
     ir = _dict(behavior_ir)
     target_role = ""
+    target_bound_role = ""
     for actor in _list(ir.get("actors")):
         if isinstance(actor, dict) and _text(actor.get("id")) == actor_ref:
             target_role = _text(actor.get("role")).lower()
+            target_bound_role = _text(actor.get("bound_role")).lower()
             break
     if not target_role or target_role in {"anonymous", "public"}:
         return False
+    candidate_roles = {target_role, _norm_role(target_role)}
+    if target_bound_role:
+        candidate_roles.add(target_bound_role)
+        candidate_roles.add(_norm_role(target_bound_role))
     for actor in _list(ir.get("actors")):
-        if not isinstance(actor, dict):
+        if not isinstance(actor, dict) or actor.get("runtime_bound") is not True:
             continue
-        same_role = _text(actor.get("role")).lower() == target_role
-        if same_role and actor.get("runtime_bound") is True:
+        r = _text(actor.get("role")).lower()
+        if r in candidate_roles or _norm_role(r) in candidate_roles:
             return True
     return False
 
