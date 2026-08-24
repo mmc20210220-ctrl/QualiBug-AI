@@ -111,6 +111,19 @@ def _runtime_pair_problem(
         == "credential_gated_write"
     ):
         return ""
+    # Doc-less single-arm anonymous re-verification obligations (档位 D): the
+    # runtime visibility/auth exposure probes assert CONSISTENCY of an anonymous
+    # repeated read (一致开放/一致关闭=PASS; 混合=VIOLATION), not a control vs
+    # treatment contrast. They are single-arm by design (the obligation RE-verifies
+    # the observed inconsistent anonymous exposure under a controlled repeat of
+    # the SAME anonymous read) — there is no second principal, so the two-arm
+    # distinctness gate must not block them. Blocking them as actor_pair_missing
+    # silently drops real doc-less visibility/auth findings (原则6/原则14).
+    if _text(_dict(_dict(obligation).get("property")).get("template")) in (
+        "runtime_visibility_exposure_consistency",
+        "runtime_auth_decision_consistency",
+    ):
+        return ""
     control_ref, treatment_ref = _pair_refs(obligation)
     if not control_ref or not treatment_ref:
         return "actor_pair_missing"
