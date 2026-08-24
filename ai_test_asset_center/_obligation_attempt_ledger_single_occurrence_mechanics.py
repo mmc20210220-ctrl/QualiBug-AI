@@ -919,21 +919,18 @@ def build_obligation_attempt_ledger(
             )
             if _text(receipt.get("status")).upper() in TERMINAL_STATUSES
         ]
-        # When a gate receipt exists, execution DELIVERABLE is superseded by
-        # the gate decision and must not count as a separate terminal.
-        if (
-            len(terminals) == 2
-            and gate_receipt
-            and _text(gate_receipt.get("status")).upper() in TERMINAL_STATUSES
-        ):
-            terminals = [
-                (stage, receipt)
-                for stage, receipt in terminals
-                if not (
-                    stage == "execution"
-                    and _text(receipt.get("status")).upper() == "DELIVERABLE"
-                )
-            ]
+        # An obligation lives through compile → execution → gate. Across
+        # planning/expansion rounds more than one stage can legitimately end
+        # with its own terminal receipt for the SAME obligation (measured:
+        # CMP_f9c8b621 round2 seal crash where the mainline execution BLOCKED
+        # an obligation while a later expansion-round recompile emitted
+        # HARNESS_FAILED for it). The LATEST lifecycle stage owns the single
+        # terminal decision — gate supersedes execution supersedes compile —
+        # while every stage receipt stays visible in stage_records below, so a
+        # harness failure or an earlier block is never hidden from the funnel.
+        if len(terminals) > 1:
+            stage_order = {"compile": 0, "execution": 1, "gate": 2}
+            terminals = [max(terminals, key=lambda sr: stage_order[sr[0]])]
         if len(terminals) != 1:
             code = "terminal_receipt_missing" if not terminals else "duplicate_terminal_receipt"
             import sys
@@ -946,7 +943,10 @@ def build_obligation_attempt_ledger(
 
         compile_status = _text(compile_receipt.get("status")).upper()
         execution_status = _text(execution_receipt.get("status")).upper()
-        if execution_receipt and compile_status != "COMPILED":
+        if (
+            execution_status in ("EXECUTED", "DELIVERABLE")
+            and compile_status != "COMPILED"
+        ):
             raise ObligationAttemptLedgerError(
                 f"execution_without_compiled_obligation:{obligation_id}"
             )

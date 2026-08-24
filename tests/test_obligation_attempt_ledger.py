@@ -162,7 +162,13 @@ def test_attempt_ledger_preserves_terminal_reason_detail_for_blockers() -> None:
 
 
 def test_duplicate_or_missing_terminal_receipt_fails_fast() -> None:
-    with pytest.raises(ObligationAttemptLedgerError, match="duplicate_terminal_receipt:obl-1"):
+    # Cross-stage terminals resolve to the LATEST lifecycle stage (gate >
+    # execution > compile); an inconsistent chain still fails closed through
+    # the stage-order guards — here a gate receipt without any executed
+    # obligation cannot masquerade as the terminal.
+    with pytest.raises(
+        ObligationAttemptLedgerError, match="gate_without_executed_obligation:obl-1"
+    ):
         build_obligation_attempt_ledger(
             mainline_run=_mainline_run(),
             selected=[{"obligation_id": "obl-1"}],
@@ -183,6 +189,36 @@ def test_duplicate_or_missing_terminal_receipt_fails_fast() -> None:
             execution_results={"obl-1": {"status": "EXECUTED", "execution_id": "exec-1"}},
             gate_results={},
         )
+
+
+def test_cross_round_terminals_seal_with_latest_stage_and_keep_history() -> None:
+    """CMP_f9c8b621 round2 seal crash: mainline execution BLOCKED an
+    obligation while a later expansion-round recompile emitted HARNESS_FAILED.
+    The latest lifecycle stage owns the single terminal; every stage receipt
+    stays visible in stage_records so no harness failure is hidden."""
+    ledger = build_obligation_attempt_ledger(
+        mainline_run=_mainline_run(),
+        selected=[{"obligation_id": "obl-1"}],
+        compile_results={
+            "obl-1": {
+                "status": "HARNESS_FAILED",
+                "reason_code": "MAINLINE_RUNTIME_EXCEPTION",
+            }
+        },
+        execution_results={
+            "obl-1": {
+                "status": "BLOCKED",
+                "reason_code": "BLOCKED_MISSING_BINDING",
+            }
+        },
+        gate_results={},
+    )
+    attempt = ledger["attempts"][0]
+    assert attempt["terminal_status"] == "BLOCKED"
+    assert attempt["terminal_stage"] == "execution"
+    stage_statuses = {stage["stage"]: stage["status"] for stage in attempt["stages"]}
+    assert stage_statuses["compile"] == "HARNESS_FAILED"
+    assert stage_statuses["execution"] == "BLOCKED"
 
 
 def test_stage_receipts_must_follow_compile_execution_gate_order() -> None:
