@@ -807,6 +807,23 @@ def build_discovery_plan(
         db_schema_text=inputs.db_schema_text,
     )
     asset = merge_knowledge_asset_overlay(asset, runtime_source_overlay)
+    # Run-start capture of the runtime-materialization view. The builder wrapper
+    # (install_enterprise_asset_capture) only populates _CAPTURED_ASSET when the
+    # asset is freshly built; when the pinned understanding snapshot is loaded
+    # from cache (load_enterprise_business_knowledge_asset_ensuring_current)
+    # the builder is skipped and _CAPTURED_ASSET stays empty. The conservation /
+    # persistence experiment projection reads database_schema_view (derived from
+    # data_tables / field_dictionary) from that capture, so without it every
+    # schema-material-declared DB before/after observation falls back to the
+    # missing HTTP observer and is blocked as
+    # BLOCKED_DATABASE_NUMERIC_HTTP_FALLBACK_OBSERVER_MISSING. Re-capture here on
+    # the loaded+merged asset so the schema observer chain can bind. No fabrication:
+    # database_schema_view is derived only from the already-parsed source schema.
+    from .runtime_materialization_experiment_bridge import (
+        capture_enterprise_runtime_materializations,
+    )
+
+    capture_enterprise_runtime_materializations(inputs.project, asset)
     # Structurize any new rules from the overlay that lack causal chains
     from .enterprise_knowledge_center import _structurize_rule_causal_chains
     asset["rule_library"] = _structurize_rule_causal_chains(
