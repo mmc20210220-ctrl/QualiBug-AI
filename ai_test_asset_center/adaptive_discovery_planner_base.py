@@ -168,17 +168,30 @@ def score_obligation(
 # ── P0-5: Type minimum guarantees ──
 # Business obligation types that must receive minimum execution budget
 # to prevent authorization/http_status from monopolizing the plan.
+#
+# CRITICAL: keys MUST be the real risk_family values emitted by the planner
+# (CANONICAL_RISK_FAMILIES in test_obligation.py plus the runtime families
+# persistence_integrity / interface_contract). A prior version listed phantom
+# keys (causal_postcondition / state_transition / consistency /
+# cross_entity_consistency) that match NO obligation family, so their reserved
+# slots were silently dead and the real families visibility / concurrency /
+# persistence_integrity / privacy / interface_contract / temporal received
+# ZERO guaranteed execution — authorization (the only matching high-volume
+# family) consumed the whole budget and the discovery breadth collapsed to
+# access-control only. Every family present in a run now gets a floor.
 DEFAULT_TYPE_MINIMUM_GUARANTEES: dict[str, int] = {
-    "causal_postcondition": 20,
-    "conservation": 10,
-    "state_transition": 10,
-    "state": 10,
-    "authorization": 10,
-    "idempotency": 5,
-    "cross_entity_consistency": 5,
-    "consistency": 5,
-    "isolation": 5,
-    "validation": 5,
+    "authorization": 20,
+    "isolation": 20,
+    "state": 20,
+    "conservation": 20,
+    "idempotency": 20,
+    "concurrency": 20,
+    "validation": 20,
+    "visibility": 20,
+    "temporal": 15,
+    "privacy": 20,
+    "persistence_integrity": 15,
+    "interface_contract": 15,
 }
 
 # Reasons an obligation was not selected for the plan.
