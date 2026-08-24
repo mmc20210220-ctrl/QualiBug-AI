@@ -171,15 +171,44 @@ def _semantic_constraint_declared(
             )
         )
     if constraint in {"semantic:negative_value", "semantic:zero_quantity"}:
-        return any(
-            token in text
+        # Closed token lists missed common phrasings (库存必须≥0 / 不能小于
+        # 零 / cannot be negative …) and rejected 763 schema-inferred
+        # negative-value probes in CMP_77d5dfe1 r7. Symbolic numeric-bound
+        # detection generalizes the declaration match while staying
+        # fail-closed: text that does not express a zero/negative boundary
+        # still rejects.
+        compact = re.sub(r"\s+", "", text)
+        negative_declared = any(
+            token in text.lower()
             for token in (
                 "非负", "不能为负", "不得为负", "不允许为负",
-                "大于0", "大于 0", "正数", "不能为0", "不得为0",
                 "non-negative", "nonnegative", "must not be negative",
+                "cannot be negative", "should not be negative",
                 "positive", "greater than zero",
             )
+        ) or bool(
+            re.search(r"(?:不能|不得|不可|不允许|禁止|避免).{0,6}(?:为|是|出现|小于|低于|少于)?(?:负|零)", compact)
+        ) or bool(
+            re.search(r"(?:大于|高于|超过|至少|最低|最少)(?:等于)?0", compact)
+        ) or bool(
+            re.search(r"(?:≥|>=|>|＞)\s*0", compact)
         )
+        if constraint == "semantic:negative_value":
+            return negative_declared
+        # zero_quantity: additionally accepts explicit nonzero declarations
+        zero_declared = any(
+            token in text.lower()
+            for token in (
+                "不能为0", "不得为0", "不允许为0", "非0", "不为0",
+                "非零", "nonzero", "non-zero", "not zero",
+                "must not be zero",
+            )
+        ) or bool(
+            re.search(r"(?:≠|!=|<>)\s*0", compact)
+        ) or bool(
+            re.search(r"(?:不能|不得|不可|不允许).{0,4}等于?\s*0", compact)
+        )
+        return negative_declared or zero_declared
     if constraint == "semantic:weak_password":
         return any(
             token in text
