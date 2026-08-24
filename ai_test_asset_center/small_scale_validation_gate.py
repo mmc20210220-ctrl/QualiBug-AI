@@ -39,7 +39,7 @@ VALIDATION_GATE_SCHEMA = "qualibug.small-scale-validation-gate.v2"
 # ops) that a 200 cap starved.
 SMALL_SCALE_BUDGET = 20
 FORMAL_BUDGET = 100
-HARD_BUDGET_CAP = 600
+HARD_BUDGET_CAP = 3000
 
 # ── Phase sub-budgets ──
 PHASE_BUDGET_PREFLIGHT = 5

@@ -481,7 +481,7 @@ def test_hard_cap_enforced():
 
     budget = get_validation_budget({"experiment_budget": HARD_BUDGET_CAP + 300}, phase="formal")
     assert budget == HARD_BUDGET_CAP
-    budget2 = get_validation_budget({"experiment_budget": 999}, phase="small_scale")
+    budget2 = get_validation_budget({"experiment_budget": HARD_BUDGET_CAP + 399}, phase="small_scale")
     assert budget2 == HARD_BUDGET_CAP
 
 

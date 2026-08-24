@@ -49,6 +49,7 @@ def build_cli_campaign_context(args: Any) -> dict[str, Any]:
                     test_data_contract["disposable_scope_ref"] = scope_ref
     else:
         test_data_contract = default_scan_test_data_contract(body)
+    experiment_budget = int(getattr(args, "experiment_budget", 0) or 0)
     context = {
         "scope_id": getattr(args, "scope_id", ""),
         "environment_ref": getattr(args, "environment_ref", ""),
@@ -61,6 +62,8 @@ def build_cli_campaign_context(args: Any) -> dict[str, Any]:
         "execution_approval_id": getattr(args, "execution_approval_id", ""),
         "execution_mode": execution_mode,
     }
+    if experiment_budget > 0:
+        context["experiment_budget"] = experiment_budget
     if test_data_contract:
         context["test_data_contract"] = test_data_contract
     return context
@@ -87,6 +90,13 @@ def run_cli() -> None:
     parser.add_argument("--execution-approval-id", default="")
     parser.add_argument("--execution-mode", default="")
     parser.add_argument("--test-data-strategy", default="")
+    parser.add_argument(
+        "--experiment-budget",
+        type=int,
+        default=0,
+        help="Operator-declared experiment execution budget for this scan "
+        "(0 = phase default); capped by the shared hard-cap authority.",
+    )
     parser.add_argument("--ci-gate", action="store_true")
     parser.add_argument("--no-multi-layer", action="store_true")
     parser.add_argument("--output-dir")
