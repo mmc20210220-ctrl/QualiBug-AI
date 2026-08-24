@@ -275,6 +275,20 @@ def load_prior_planning_history_receipt(
         raise AdaptivePlanningHistoryError(
             f"planning_history_scan_result_invalid:{type(exc).__name__}"
         ) from exc
+    except ValueError as exc:
+        # A torn/incomplete store here is the CURRENT run's own in-progress
+        # shards (written before this load) or an aborted prior run — adaptive
+        # planning history is best-effort, so a cold start is the correct
+        # fail-open. The strict torn-store refusal stays in `load_scan_result`
+        # for forensic/analysis loads of COMPLETED runs, which call it
+        # directly and must not analyze half-written data.
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "[planning-history] prior store unavailable (%s); cold start",
+            exc,
+        )
+        return {}
     if not isinstance(value, dict):
         raise AdaptivePlanningHistoryError(
             "planning_history_scan_result_not_object"

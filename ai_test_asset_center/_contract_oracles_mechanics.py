@@ -371,6 +371,13 @@ def build_contract_oracle_activation_receipt(
     required = contract_activation_requirements(exp, evidence=ev)
     blockers: list[str] = []
     harness_failures: list[str] = []
+    # Post-test cleanup hygiene outcomes (compensation attempted but failed /
+    # blocked) are environment-residue records, never harness failures and
+    # never activation blockers: the executed control/treatment/observer
+    # evidence and the assertion verdict stay authoritative (root AGENTS.md
+    # 原则14 — a cleanup failure must not convert an executed test into a
+    # non-executed one or erase a proven violation).
+    cleanup_hygiene_notes: list[str] = []
 
     # Every verified requirement must resolve to a validated runtime receipt.
     source_refs = [
@@ -438,13 +445,21 @@ def build_contract_oracle_activation_receipt(
             continue
         contract_by_key[key] = validated
         status = _text(validated.get("status")).upper()
+        if key[0] == "cleanup" and status in {"FAILED", "BLOCKED"}:
+            # Post-test hygiene outcome (compensation attempted but failed or
+            # could not reach transport): recorded as a residue note, never a
+            # harness failure and never an activation blocker (原则14).
+            note = f"{key[0].upper()}_RECEIPT_{status}:{key[1]}"
+            if note not in cleanup_hygiene_notes:
+                cleanup_hygiene_notes.append(note)
+            continue
         if status == "FAILED":
             evidence_row = _dict(validated.get("evidence"))
             # Explicit zero-transport marks are binding/governance gaps, not
             # harness infrastructure failures. Keep FAILED→HF for transport-
             # reached requests that still could not produce a usable receipt.
             zero_transport_block = (
-                key[0] in {"control", "treatment", "cleanup"}
+                key[0] in {"control", "treatment"}
                 and int(evidence_row.get("status_code") or 0) <= 0
                 and evidence_row.get("write_reached_transport") is False
             )
@@ -811,6 +826,9 @@ def build_contract_oracle_activation_receipt(
     # required.treatment empty (activation_receipt_semantics_invalid).
     if not required["treatment"] and not _requires_treatment:
         payload["single_arm_read"] = True
+    if cleanup_hygiene_notes:
+        # Visible residue record — never affects activation status.
+        payload["cleanup_hygiene_notes"] = sorted(set(cleanup_hygiene_notes))
     if field_oracle_soft:
         # Optional enrichment — Trace-before-cleanup soft activation.
         payload["field_oracle_soft_activation"] = True
@@ -838,6 +856,7 @@ def validate_contract_oracle_activation_receipt(
         optional_fields = {
             "field_oracle_soft_activation",
             "single_arm_read",
+            "cleanup_hygiene_notes",
         }
         unexpected = sorted(set(row) - required_fields - optional_fields)
         absent = sorted(required_fields - set(row))

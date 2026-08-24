@@ -5088,6 +5088,32 @@ def build_behavior_ir_from_knowledge_asset(
                 confidence=0.9,
                 derivation="runtime-observed",
             ))
+        else:
+            # Runtime confirmation of an already-declared role upgrades THAT
+            # node in place instead of forking a second identity. The declared
+            # node keeps its permission-matrix source lineage and gains the
+            # runtime-bound flag, so downstream consumers (binding ledger,
+            # coverage accounting) see ONE role identity whose credentials the
+            # operator actually declared. Without this merge the matrix node
+            # stays unconfirmed forever and every obligation bound to it dies
+            # in the binding gate even though a real account exists.
+            _declared_actor_id = _stable_id("actor", role)
+            for _node in model["actors"]:
+                if _node.get("id") != _declared_actor_id:
+                    continue
+                if _node.get("runtime_bound") is not True:
+                    _node["runtime_bound"] = True
+                _node_refs = _node.get("source_refs")
+                if isinstance(_node_refs, list):
+                    if not any(
+                        isinstance(_ref, dict)
+                        and _text(_ref.get("kind")) == "runtime_actor"
+                        for _ref in _node_refs
+                    ):
+                        _node_refs.append(
+                            _source_ref("runtime_actors", locator=role, kind="runtime_actor")
+                        )
+                break
         account_ref = _text(actor.get("account_ref") or actor.get("email") or actor.get("username") or actor.get("id"))
         if not account_ref:
             continue

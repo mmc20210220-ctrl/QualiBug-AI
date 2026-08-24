@@ -203,7 +203,7 @@ def finalize_finding_evidence_after_delivery_gate(
     row["execution_status"] = _text(row.get("execution_status")) or "executed"
     refs = _dict(gate.get("receipt_refs"))
     cleanup_decision = _text(adjudication.get("cleanup")).upper()
-    if cleanup_decision in ("COMPLETED", "NOT_REQUIRED"):
+    if cleanup_decision in ("COMPLETED", "NOT_REQUIRED", "RESIDUE_ACCEPTED"):
         evidence_row = dict(_dict(row.get("evidence")))
         cleanup_refs = [
             _text(_dict(value).get("receipt_id"))
@@ -223,6 +223,22 @@ def finalize_finding_evidence_after_delivery_gate(
                     "status": "not_required",
                     "reason_code": "CLEANUP_NOT_REQUIRED_RECEIPT_ATTESTED",
                     "receipt_ref": execution_ref,
+                    "source": "delivery_gate_receipt_adjudication",
+                }
+        elif cleanup_decision == "RESIDUE_ACCEPTED":
+            # Accepted residue is a legitimate terminal hygiene state on
+            # declared non-production targets (原则14): the finding stands,
+            # the leftover stays visible through the referenced receipts.
+            residue_ref = (
+                cleanup_refs[0]
+                if cleanup_refs
+                else _text(_dict(refs.get("execution")).get("receipt_id"))
+            )
+            if residue_ref:
+                evidence_row["cleanup"] = {
+                    "status": "residue_accepted",
+                    "reason_code": "CLEANUP_RESIDUE_RECEIPT_ATTESTED",
+                    "receipt_ref": residue_ref,
                     "source": "delivery_gate_receipt_adjudication",
                 }
         row["evidence"] = evidence_row

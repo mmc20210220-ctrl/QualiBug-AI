@@ -813,6 +813,24 @@ def _cardinality_facts(span: dict[str, Any]) -> list[dict[str, Any]]:
     return rows
 
 
+def _rhs_has_arithmetic_operator(rhs: str) -> bool:
+    """Whether the right-hand side carries a real arithmetic operator.
+
+    ``+``/``*``/``×``/``÷`` and the Chinese operator words count anywhere.
+    ``-`` and ``/`` count only as STANDALONE tokens (not between two
+    word characters): word-internal hyphens (``date-time``, ``retry-after``)
+    and path slashes (``#/components/schemas/User``) are token punctuation,
+    never arithmetic. Without this boundary, every OpenAPI schema row such as
+    ``type=string format=date-time`` became a business DERIVED_VALUE fact,
+    all of them shared the literal subject "type", and the typed-conflict
+    reconciliation collapsed them into thousands of false
+    FORMULA_CONTRADICTION rows that blocked unrelated obligations downstream.
+    """
+    if re.search(r"\+|\*|×|÷|之和|之差|乘以|除以|减去|加上", rhs):
+        return True
+    return bool(re.search(r"(?<![\w])[-/](?![\w])", rhs))
+
+
 def _formula_facts(span: dict[str, Any]) -> list[dict[str, Any]]:
     text_value = _text(span.get("text"))
     rows: list[dict[str, Any]] = []
@@ -820,7 +838,7 @@ def _formula_facts(span: dict[str, Any]) -> list[dict[str, Any]]:
         lhs = _clean_entity(match.group("lhs"))
         rhs = _text(match.group("rhs"))
         raw = match.group(0)
-        if "等于" not in raw and not re.search(r"[+\-*/×÷]|之和|之差|乘以|除以|减去|加上", rhs):
+        if "等于" not in raw and not _rhs_has_arithmetic_operator(rhs):
             continue
         if not lhs or not rhs:
             continue

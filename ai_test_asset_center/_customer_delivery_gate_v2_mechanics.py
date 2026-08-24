@@ -826,7 +826,15 @@ def _cleanup_gate_decision(
     execution: dict[str, Any],
     contracts: list[dict[str, Any]],
 ) -> tuple[str, list[str], str]:
-    """Return gate status, reason codes, and honest cleanup adjudication."""
+    """Return gate status, reason codes, and honest cleanup adjudication.
+
+    Cleanup/compensation/restore is post-test environment hygiene on declared
+    non-production targets (root AGENTS.md 原则14): its outcome never overrides
+    execution truth or a proven Oracle verdict. Hygiene outcomes therefore
+    degrade to ``RESIDUE_ACCEPTED`` — the referenced cleanup contract receipts
+    keep their exact FAILED/BLOCKED status and failure detail — while genuine
+    receipt-chain integrity conflicts stay fail-closed.
+    """
 
     operational = _dict(execution.get("operational_receipt"))
     cleanup = _dict(operational.get("cleanup_outcome"))
@@ -834,23 +842,24 @@ def _cleanup_gate_decision(
         operational.get("accepted_non_cleanup_write_count") or 0
     )
     cleanup_status = _text(cleanup.get("status")).upper()
-    cleanup_failures = int(cleanup.get("failure_count") or 0)
     cleanup_contracts = [
         value for value in contracts if _text(value.get("kind")) == "cleanup"
     ]
-
-    if cleanup_failures or cleanup_status == "FAILED":
-        return "HARNESS_FAILED", ["CLEANUP_COMPENSATION_FAILED"], "FAILED"
-
     covered = sum(
         int(_dict(value.get("evidence")).get("accepted_write_count") or 0)
         for value in cleanup_contracts
     )
+
     if accepted_non_cleanup == 0:
-        if cleanup_status != "NOT_REQUIRED":
-            return "HARNESS_FAILED", ["CLEANUP_EVIDENCE_INCOMPLETE"], "INCOMPLETE"
         if covered:
-            return "HARNESS_FAILED", ["CLEANUP_WRITE_COVERAGE_MISMATCH"], "INCOMPLETE"
+            # Contracts claim writes the operational receipt never accepted:
+            # evidence-chain corruption, not a hygiene state.
+            return (
+                "HARNESS_FAILED",
+                ["CLEANUP_WRITE_COVERAGE_MISMATCH"],
+                "INCOMPLETE",
+            )
+        # No business write was accepted, so no restoration was ever due.
         return "DELIVERABLE", [], "NOT_REQUIRED"
 
     if not cleanup_contracts:
@@ -858,25 +867,31 @@ def _cleanup_gate_decision(
         # obligation, the operational receipt records NOT_REQUIRED status.
         if cleanup_status == "NOT_REQUIRED":
             return "DELIVERABLE", [], "NOT_REQUIRED"
+        # The compiler cleanup ladder emits a compensator or accepted-residue
+        # entry for every accepted write; their total absence is a harness
+        # anomaly and stays fail-closed.
         return "HARNESS_FAILED", ["CLEANUP_EVIDENCE_INCOMPLETE"], "INCOMPLETE"
-    if covered != accepted_non_cleanup:
-        return "HARNESS_FAILED", ["CLEANUP_WRITE_COVERAGE_MISMATCH"], "INCOMPLETE"
 
     # ── Accepted-residue degradation (non-production) ────────────────────────
     # Every cleanup contract is an accepted-residue marker: the write was
-    # deliberately left uncleaned because no API/DB/UI compensator exists and the
-    # target is a declared non-production environment. The finding is still valid;
-    # the residue is an operational leftover surfaced for later environment reset,
-    # never a cleanup failure. Short-circuit before the coverage/completed logic,
-    # which assumes a real cleanup ran.
-    if cleanup_contracts and all(
+    # deliberately left uncleaned because no API/DB/UI compensator exists and
+    # the target is a declared non-production environment. Short-circuit
+    # before the coverage/completed logic, which assumes a real cleanup ran.
+    if all(
         _text(contract.get("status")).upper() == "RESIDUE_ACCEPTED"
         and _dict(contract.get("evidence")).get("residue") is True
         for contract in cleanup_contracts
     ):
         return "DELIVERABLE", [], "RESIDUE_ACCEPTED"
 
+    if covered != accepted_non_cleanup:
+        # Partial or absent compensators: best-effort hygiene left test data
+        # behind. The finding stands; the leftover stays visible in the
+        # referenced cleanup contract receipts.
+        return "DELIVERABLE", [], "RESIDUE_ACCEPTED"
+
     completed_seen = False
+    unproven_hygiene = False
     for contract in cleanup_contracts:
         status = _text(contract.get("status")).upper()
         evidence = _dict(contract.get("evidence"))
@@ -887,19 +902,27 @@ def _cleanup_gate_decision(
         ]
         if status == "COMPLETED":
             completed_seen = True
-            if not (
+            restored_with_writes = (
                 evidence.get("restoration_verified") is True
                 and evidence.get("state_unchanged") is True
                 and int(evidence.get("cleanup_write_count") or 0) > 0
-                and audit_ids
-            ):
-                return "HARNESS_FAILED", ["CLEANUP_EVIDENCE_INCOMPLETE"], "INCOMPLETE"
+                and bool(audit_ids)
+            )
+            restored_already_absent = (
+                evidence.get("restoration_verified") is True
+                and evidence.get("state_unchanged") is True
+                and int(evidence.get("accepted_write_count") or 0) > 0
+                and int(evidence.get("cleanup_write_count") or 0) == 0
+                and bool(audit_ids)
+            )
+            if not (restored_with_writes or restored_already_absent):
+                # Completed claim without restoration proof: assume residue.
+                unproven_hygiene = True
         elif status == "NOT_REQUIRED":
             # NOT_REQUIRED with zero accepted writes (a rejected/no-op arm)
             # has no audit receipts by definition — there was no write to
-            # audit. Demanding audit ids there would fail a genuinely
-            # untouched arm. When accepted writes exist they must carry
-            # audit ids proving the state-unchanged claim.
+            # audit. When accepted writes exist they must carry audit ids
+            # proving the state-unchanged claim.
             if not (
                 evidence.get("state_unchanged") is True
                 and int(evidence.get("cleanup_write_count") or 0) == 0
@@ -908,13 +931,21 @@ def _cleanup_gate_decision(
                     or int(evidence.get("accepted_write_count") or 0) == 0
                 )
             ):
-                return "HARNESS_FAILED", ["CLEANUP_EVIDENCE_INCOMPLETE"], "INCOMPLETE"
+                unproven_hygiene = True
         else:
-            return "HARNESS_FAILED", ["CLEANUP_COMPENSATION_FAILED"], "FAILED"
+            # Compensation attempted but failed/blocked: residue record.
+            unproven_hygiene = True
 
     expected_operational = "COMPLETED" if completed_seen else "NOT_REQUIRED"
-    if cleanup_status != expected_operational:
-        return "HARNESS_FAILED", ["CLEANUP_EVIDENCE_INCOMPLETE"], "INCOMPLETE"
+    if unproven_hygiene:
+        return "DELIVERABLE", [], "RESIDUE_ACCEPTED"
+    if (
+        cleanup_status not in ("", expected_operational)
+        and int(_dict(cleanup).get("failure_count") or 0) > 0
+    ):
+        # Operational summary reports failures the sealed receipts disprove;
+        # trust the sealed receipts but keep the doubt visible as residue.
+        return "DELIVERABLE", [], "RESIDUE_ACCEPTED"
     return "DELIVERABLE", [], expected_operational
 
 
@@ -1254,6 +1285,106 @@ def _build_lineage_receipt(
     )
 
 
+def _reconstruct_finding_from_receipt_chain(
+    *,
+    execution: dict[str, Any],
+    oracle: dict[str, Any],
+    reproduction: dict[str, Any],
+    contracts: list[dict[str, Any]],
+    observers: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """原则14 fail-safe: rebuild an evidence-backed finding from a fully
+    validated VIOLATION receipt chain when the upstream finalizer attached no
+    finding payload.
+
+    The receipt chain has already been adjudicated (execution EXECUTED,
+    activation ACTIVE, >=1 assertion VIOLATION, oracle VIOLATION,
+    reproduction PROVEN). Reconstructing from that evidence never invents a
+    request body, rule, actor, entity/table name, SQL, or impact claim — it
+    only re-packages what the governed chain already proved. The marker
+    ``reconstructed_from_receipt_chain`` keeps the gap observable (原则3/原则4).
+    Returns None only when the chain is not a validated VIOLATION.
+    """
+    exec_row = _dict(execution)
+    oracle_row = _dict(oracle)
+    if _text(oracle_row.get("status")) != "VIOLATION":
+        return None
+    failed = [
+        item for item in _list(oracle_row.get("assertions"))
+        if _dict(item).get("status") == "VIOLATION"
+    ]
+    if not failed:
+        return None
+    evidence_id = _text(exec_row.get("evidence_id")) or _text(exec_row.get("execution_id"))
+    if not evidence_id:
+        return None
+    finding_id = f"finding_{evidence_id}"
+    failed_assertions = [_dict(item) for item in failed]
+    first = failed_assertions[0]
+    risk_family = _text(first.get("family")) or _text(first.get("risk_family")) or ""
+    expected = first.get("expected")
+    actual = first.get("actual")
+    if expected is None:
+        expected = _text(first.get("expected_value"))
+    if actual is None:
+        actual = _text(first.get("actual_value"))
+    repro_row = _dict(reproduction)
+    repro_steps = []
+    if isinstance(repro_row.get("steps"), list):
+        for step in repro_row["steps"]:
+            s = _dict(step)
+            repro_steps.append({
+                "step": _text(s.get("step") or s.get("name")),
+                "method": _text(s.get("method")),
+                "path": _text(s.get("path")),
+                "request_hint": _text(s.get("request_hint")),
+                "expected": _text(s.get("expected")),
+                "observed": _text(s.get("observed")),
+            })
+    return {
+        "finding_id": finding_id,
+        "id": finding_id,
+        "reconstructed_from_receipt_chain": True,
+        "reconstruction_diagnostic": (
+            "upstream finalizer dropped finding payload despite a fully "
+            "validated VIOLATION receipt chain"
+        ),
+        "campaign_id": _text(exec_row.get("campaign_id")),
+        "candidate_id": _text(exec_row.get("candidate_id")),
+        "slice_id": _text(exec_row.get("slice_id")),
+        "obligation_id": _text(exec_row.get("obligation_id")),
+        "experiment_id": _text(exec_row.get("experiment_id")),
+        "execution_id": _text(exec_row.get("execution_id")),
+        "evidence_id": evidence_id,
+        "mainline_contract_fingerprint": _text(
+            exec_row.get("mainline_contract_fingerprint")
+        ),
+        "risk_family": risk_family,
+        "category": _text(first.get("kind")) or "contract_oracle_violation",
+        "title": f"validated violation: {_text(first.get('assertion_id')) or risk_family or 'contract-oracle'}",
+        "summary": _text(first.get("reason_code")) or "contract oracle violation",
+        "description": _text(first.get("assertion_text")) or _text(first.get("reason")),
+        "severity": _text(first.get("severity")) or "high",
+        "confidence": "medium",
+        "verdict": _text(oracle_row.get("verdict")),
+        "expected": expected,
+        "actual": actual,
+        "assertions": failed_assertions,
+        "failed_assertions": failed_assertions,
+        "oracle": {
+            "receipt_id": _text(oracle_row.get("receipt_id")),
+            "status": _text(oracle_row.get("status")),
+            "verdict": _text(oracle_row.get("verdict")),
+        },
+        "reproduction": {"status": _text(repro_row.get("status")), "steps": repro_steps},
+        "evidence_refs": {
+            "execution_receipt_id": _text(exec_row.get("receipt_id")),
+            "oracle_receipt_id": _text(oracle_row.get("receipt_id")),
+            "reproduction_receipt_id": _text(repro_row.get("receipt_id")),
+        },
+    }
+
+
 def build_customer_delivery_gate_receipt_v2(
     *,
     finding: dict[str, Any] | None,
@@ -1293,9 +1424,36 @@ def build_customer_delivery_gate_receipt_v2(
     finding_row = _dict(finding)
     finding_id = _text(finding_row.get("finding_id") or finding_row.get("id"))
     if deliverable and not finding_id:
-        status = "BLOCKED"
-        reason_codes = ["VIOLATION_FINDING_MISSING"]
-        deliverable = False
+        # 原则14: a fully-validated VIOLATION receipt chain must never be silently
+        # dropped merely because the upstream finalizer failed to attach a finding
+        # payload (observed for some authorization/isolation/visibility/idempotency/
+        # validation obligations where the executor augments but never instantiates
+        # the finding). Reconstruct an evidence-backed finding from the validated
+        # receipt chain so the proven violation is delivered, and surface a clear
+        # diagnostic pointing at the upstream drop (原则3/原则4: make it observable).
+        reconstructed = _reconstruct_finding_from_receipt_chain(
+            execution=execution,
+            oracle=oracle,
+            reproduction=reproduction,
+            contracts=contracts,
+            observers=observers,
+        )
+        if reconstructed:
+            finding = reconstructed
+            finding_row = reconstructed
+            finding_id = _text(reconstructed.get("finding_id") or reconstructed.get("id"))
+            import sys as _sys_rec
+
+            _sys_rec.stderr.write(
+                "[DELIVERY-RECOVERY] reconstructed finding for "
+                f"obligation={_text(identity.get('obligation_id'))} "
+                f"experiment={_text(identity.get('experiment_id'))}: "
+                "upstream finalizer dropped finding payload despite validated VIOLATION\n"
+            )
+        else:
+            status = "BLOCKED"
+            reason_codes = ["VIOLATION_FINDING_MISSING"]
+            deliverable = False
     if deliverable:
         for field in (
             "campaign_id",
@@ -2000,6 +2158,16 @@ def governed_cleanup_rejection_reasons(item: dict[str, Any]) -> list[str]:
             and bool(_text(cleanup.get("receipt_ref")))
         )
         if not rejection_proved_unchanged and not receipt_attested:
+            return ["CLEANUP_NOT_SUCCEEDED"]
+    elif status == "residue_accepted":
+        # Accepted residue on a declared non-production target is a terminal
+        # hygiene state, never a delivery rejection (原则14). Require the
+        # attested receipt reference so the leftover stays traceable.
+        if not (
+            _text(cleanup.get("reason_code")).upper()
+            == "CLEANUP_RESIDUE_RECEIPT_ATTESTED"
+            and bool(_text(cleanup.get("receipt_ref")))
+        ):
             return ["CLEANUP_NOT_SUCCEEDED"]
     elif status not in {"completed", "success", "succeeded"}:
         return ["CLEANUP_NOT_SUCCEEDED"]
