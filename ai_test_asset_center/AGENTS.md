@@ -1086,6 +1086,18 @@ Evolution Contract):
   (`test_envelope_authority_rebuild_equals_whole_tree`).
   `_delivery_validation_cache.content_fingerprint` stays plain
   dumps+hash: iterencode streaming measured ~6× slower below ~100 MB.
+- Wrap-up observability contract ([wrapup-trace], 2026-08-25 incident: after
+  every artifact was persisted a scan process kept burning ~1h CPU with ZERO
+  log output, because all tail timings were only merged into
+  `scan_phase_timings` — visible at end of run, invisible during a hang):
+  every wrap-up phase logs `[wrapup-trace] phase=<key> ms=<n>` at WARNING the
+  moment it completes (`_phase_time` in `__main__.py`, plus explicit lines for
+  `archive_merge` / `persist_result` / `closed_loop_learning` which had no
+  timing coverage at all — the closed-loop learning block was the documented
+  ~20min silent zone), and `apply_scan_post_hooks` logs
+  `[wrapup-trace] post_hook=<name> ms=<n>` per hook live (`status=exception`
+  on hook failure). A hung or slow wrap-up must be attributable from logs
+  alone; new tail phases must extend `_phase_time`, never bare locals.
 
 ## Enterprise Comprehension — Implementation Anchors
 

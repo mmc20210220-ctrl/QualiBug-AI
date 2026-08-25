@@ -5,6 +5,7 @@ Repair/refresh installers register here instead of replacing ``scan``.
 from __future__ import annotations
 
 import importlib
+import logging
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -115,9 +116,22 @@ def apply_scan_post_hooks(
             next_payload = hook(payload, project=project, root=root)
         except Exception:
             # A post-hook must never mask the original scan result.
-            hook_timings[name] = round(_time.perf_counter() - _hook_start, 3)
+            _hook_ms = round(_time.perf_counter() - _hook_start, 3)
+            hook_timings[name] = _hook_ms
+            # 挂住/慢钩子必须仅凭日志归因（[wrapup-trace] 分段账本）。
+            logging.getLogger(__name__).warning(
+                "[wrapup-trace] post_hook=%s ms=%s status=exception",
+                name,
+                _hook_ms,
+            )
             continue
-        hook_timings[name] = round(_time.perf_counter() - _hook_start, 3)
+        _hook_ms = round(_time.perf_counter() - _hook_start, 3)
+        hook_timings[name] = _hook_ms
+        logging.getLogger(__name__).warning(
+            "[wrapup-trace] post_hook=%s ms=%s",
+            name,
+            _hook_ms,
+        )
         if isinstance(next_payload, dict):
             payload = next_payload
     try:

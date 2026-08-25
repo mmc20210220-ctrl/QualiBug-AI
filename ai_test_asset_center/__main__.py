@@ -188,11 +188,20 @@ from .scan_result_store import write_scan_result  # noqa: F401
 def _phase_time(result: dict[str, Any], key: str, started: float) -> None:
     """P1 收尾打点：段耗时并入 scan_phase_timings（纯观测，绝不影响结果）。"""
     try:
+        elapsed_ms = int((time.perf_counter() - started) * 1000)
         timings = result.get("scan_phase_timings")
         if not isinstance(timings, dict):
             timings = {}
             result["scan_phase_timings"] = timings
-        timings[key] = int((time.perf_counter() - started) * 1000)
+        timings[key] = elapsed_ms
+        # [wrapup-trace] 实时分段账本：收尾挂住必须能仅凭日志归因。
+        # 2026-08-25 事故：产物全部落盘后进程仍烧 ~1h CPU 且零日志输出，
+        # 因为各段耗时只写入 result、运行结束才可见——挂住时什么都没有。
+        _LOGGER.warning(
+            "[wrapup-trace] phase=%s ms=%s",
+            key,
+            elapsed_ms,
+        )
     except Exception:
         pass
 
@@ -1169,9 +1178,17 @@ def _scan_impl(project: str, root: Optional[Path] = None, *, prd_text: str = "",
         _persist_timing,
     )
     result.setdefault("scan_phase_timings", {})["archive_merge_ms"] = _archive_merge_ms
+    _LOGGER.warning(
+        "[wrapup-trace] phase=archive_merge ms=%s",
+        _archive_merge_ms,
+    )
     result.setdefault("scan_phase_timings", {})["planning_execution_ms"] = _planning_execution_ms
     result.setdefault("scan_phase_timings", {})["persist_result_ms"] = int(
         (time.time() - _persist_started) * 1000
+    )
+    _LOGGER.warning(
+        "[wrapup-trace] phase=persist_result ms=%s",
+        int((time.time() - _persist_started) * 1000),
     )
     increment_scan_counter(output_root / "scan_counter.json")
     _t_customer = time.perf_counter()
@@ -1219,6 +1236,7 @@ def _scan_impl(project: str, root: Optional[Path] = None, *, prd_text: str = "",
     # bloats the SQLite KB, adding ~20min of post-processing to a regression run
     # that discovered nothing new. A regression run with zero new formal
     # deliveries therefore skips learning entirely.
+    _t_closed_loop = time.perf_counter()
     try:
         from .closed_loop_feedback import build_closed_loop_context
         from .auto_learning_trigger import AutoLearningTrigger, LearningTriggerConfig
@@ -1414,6 +1432,7 @@ def _scan_impl(project: str, root: Optional[Path] = None, *, prd_text: str = "",
             "status": "FAILED",
             "failure": f"{type(exc).__name__}:{str(exc)[:200]}",
         }
+    _phase_time(result, "closed_loop_learning_ms", _t_closed_loop)
 
     return result
 
