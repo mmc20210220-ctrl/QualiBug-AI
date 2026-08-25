@@ -421,9 +421,17 @@ def make_obligation(
     ):
         family = resolution["declared"] or _text(risk_family).lower()
         status = "BLOCKED"
+    operations_key = ",".join(
+        sorted(_text(x) for x in (required_operations or []) if _text(x))
+    )
     oid = _text(obligation_id) or stable_obligation_id(
         family,
-        ",".join(sorted(_text(x) for x in subject_refs if _text(x))),
+        "|".join(
+            (
+                ",".join(sorted(_text(x) for x in subject_refs if _text(x))),
+                f"ops={operations_key}",
+            )
+        ),
         json_fingerprint(property_spec),
     )
     return {
@@ -474,3 +482,155 @@ def dedupe_obligations(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         seen.add(key)
         out.append(item)
     return out
+
+
+_CONSOLIDATION_ANCHOR_KEYS = (
+    "field",
+    "target_field",
+    "field_ids",
+    "expected_path",
+    "json_path",
+)
+
+
+def consolidate_unbound_invariant_obligations(
+    items: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Collapse field-less ``invariant_*`` obligations onto one representative
+    per (risk_family, required_operations, template), preserving every merged
+    rule's refs on the representative and emitting a visible receipt.
+
+    The compiler emits one obligation per (source invariant, operation) pair.
+    When the invariant never resolved a concrete decidable anchor (no field /
+    target / json-path binding — the canonical outcome-field identity contract),
+    dozens of near-identical rows pile onto one operation and starve the
+    family-fair execution budget without adding decisive assertions. Within one
+    group of such anchor-less rows the highest-signal member becomes the
+    representative; every member's invariant/fact/source/relation refs are
+    unioned onto it so no source rule silently disappears. Obligations carrying
+    any concrete anchor are never touched. Breadth loss stays visible via the
+    returned receipt (原则14).
+    """
+
+    def _anchors(prop: dict[str, Any]) -> bool:
+        return any(prop.get(key) for key in _CONSOLIDATION_ANCHOR_KEYS)
+
+    groups: dict[tuple[str, tuple[str, ...], str], list[int]] = {}
+    for idx, row in enumerate(items):
+        if not isinstance(row, dict):
+            continue
+        prop = row.get("property") if isinstance(row.get("property"), dict) else {}
+        template = _text(prop.get("template"))
+        if not template.startswith("invariant_") or _anchors(prop):
+            continue
+        key = (
+            _text(row.get("risk_family")),
+            tuple(sorted(_text(x) for x in row.get("required_operations") or [])),
+            template,
+        )
+        groups.setdefault(key, []).append(idx)
+
+    replacement: dict[int, dict[str, Any]] = {}
+    skip: set[int] = set()
+    consolidated_group_count = 0
+    collapsed_obligation_count = 0
+    preserved_invariant_refs: set[str] = set()
+    group_receipts: list[dict[str, Any]] = []
+
+    for key, idxs in groups.items():
+        members = [items[i] for i in idxs if isinstance(items[i], dict)]
+        if len(members) <= 1:
+            continue
+
+        def _rank(row: dict[str, Any]) -> tuple[int, float, str]:
+            prop = row.get("property") if isinstance(row.get("property"), dict) else {}
+            return (
+                len(_list(prop.get("subject_entity_refs"))),
+                float(row.get("confidence") or 0.0),
+                _text(row.get("obligation_id")),
+            )
+
+        representative = dict(max(members, key=_rank))
+        rep_prop = dict(
+            representative.get("property")
+            if isinstance(representative.get("property"), dict)
+            else {}
+        )
+        invariant_refs: set[str] = set()
+        fact_refs: list[str] = []
+        relation_refs: list[str] = []
+        source_seen: set[str] = set()
+        source_refs: list[Any] = []
+        for row in members:
+            prop = row.get("property") if isinstance(row.get("property"), dict) else {}
+            inv_ref = _text(prop.get("invariant_ref"))
+            if inv_ref:
+                invariant_refs.add(inv_ref)
+            for value in _list(row.get("fact_refs")):
+                text_value = _text(value)
+                if text_value:
+                    fact_refs.append(text_value)
+            for value in _list(row.get("relation_refs")):
+                text_value = _text(value)
+                if text_value:
+                    relation_refs.append(text_value)
+            for value in _list(row.get("source_refs")):
+                fp = json_fingerprint(value)
+                if fp not in source_seen:
+                    source_seen.add(fp)
+                    source_refs.append(value)
+        rep_prop["consolidated_invariant_refs"] = sorted(invariant_refs)
+        representative["property"] = rep_prop
+        representative["fact_refs"] = sorted(set(fact_refs))
+        representative["relation_refs"] = sorted(set(relation_refs))
+        representative["source_refs"] = source_refs
+        representative["confidence"] = max(
+            float(row.get("confidence") or 0.0) for row in members
+        )
+        representative["consolidation"] = {
+            "merged_obligation_count": len(members),
+            "merged_invariant_refs": sorted(invariant_refs),
+        }
+        consolidated_group_count += 1
+        collapsed_obligation_count += len(members) - 1
+        preserved_invariant_refs.update(invariant_refs)
+        group_receipts.append(
+            {
+                "risk_family": key[0],
+                "required_operations": list(key[1]),
+                "template": key[2],
+                "representative_obligation_id": _text(
+                    representative.get("obligation_id")
+                ),
+                "merged_count": len(members),
+                "merged_invariant_refs": sorted(invariant_refs),
+            }
+        )
+        head_idx = idxs[0]
+        replacement[head_idx] = representative
+        skip.update(idxs[1:])
+
+    out: list[dict[str, Any]] = []
+    for idx, row in enumerate(items):
+        if idx in skip:
+            continue
+        if idx in replacement:
+            out.append(replacement[idx])
+        else:
+            out.append(row)
+
+    receipt = {
+        "schema_version": "qualibug.obligation-consolidation-receipt.v1",
+        "input_count": len(items),
+        "output_count": len(out),
+        "collapsed_obligation_count": collapsed_obligation_count,
+        "consolidated_group_count": consolidated_group_count,
+        "preserved_invariant_ref_count": len(preserved_invariant_refs),
+        "policy": (
+            "one evidence-preserving representative per "
+            "(risk_family, required_operations, invariant_* template) among "
+            "anchor-less obligations; bound obligations untouched"
+        ),
+        "groups": group_receipts,
+    }
+    return out, receipt

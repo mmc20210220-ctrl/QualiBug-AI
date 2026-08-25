@@ -612,6 +612,23 @@ commercial rules stay in the root Discovery Harness Evolution Contract):
   envelope — no new budget expansion. Runtime binding probes are
   contract-gated and remain `PROBES_SKIPPED_CONTRACT_NOT_APPROVED` until
   the runtime contract is explicitly approved.
+- Obligation identity & anchor-less consolidation: `make_obligation` derives
+  `obligation_id` from (family, subject_refs, **required_operations**,
+  property fingerprint), so two obligations targeting different operations
+  never share an id — a shared id previously made `dedupe_obligations`
+  silently drop one operation's coverage. `compile_obligations_from_behavior_ir`
+  then runs `test_obligation.consolidate_unbound_invariant_obligations`:
+  `invariant_*`-template obligations with NO concrete decidable anchor (no
+  field/target_field/field_ids/expected_path/json_path binding) collapse onto
+  ONE evidence-preserving representative per
+  (risk_family, required_operations, template) — the highest-signal member
+  wins, every merged invariant/fact/source/relation ref is unioned onto it
+  (`property.consolidated_invariant_refs`, `consolidation` marker,
+  max confidence), and `qualibug.obligation-consolidation-receipt.v1`
+  (`obligation_consolidation_receipt` in the compile pack) makes the collapse
+  operator-visible (原则14: breadth loss visible, never silent). Bound
+  obligations and dedicated protocols (idempotency/concurrency/state) are
+  never touched. Measured on benchmark_mall_131: core compiler 1067 → 193.
 - Sequential precondition identity flow has one source-declared authority:
   `multi_level_dependency_chain.py` projects an
   `qualibug.identity-output-binding.v1` from the established entity's

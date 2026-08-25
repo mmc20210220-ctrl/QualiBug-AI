@@ -6,6 +6,7 @@ from . import obligation_compiler_mainline_base as _base
 from .schema_validation_seed_authority import (
     append_operation_schema_validation_seeds,
 )
+from .test_obligation import consolidate_unbound_invariant_obligations
 
 for _name in dir(_base):
     if not _name.startswith("__"):
@@ -25,11 +26,17 @@ def compile_obligations_from_behavior_ir(
         behavior_ir=behavior_ir,
         compiler_base=_base,
     )
+    rows, consolidation_receipt = consolidate_unbound_invariant_obligations(
+        list(seeded.get("obligations") or [])
+    )
+    result = dict(seeded)
+    result["obligations"] = rows
+    result["obligation_consolidation_receipt"] = consolidation_receipt
     # Breadth-loss visibility (原则14) is attached downstream in
     # build_discovery_plan, where the fully-enriched obligations list is the
     # authoritative set — attaching here would read the obligations before the
     # schema-seed pass rebuilds them.
-    return seeded
+    return result
 
 
 def __getattr__(name: str) -> Any:
