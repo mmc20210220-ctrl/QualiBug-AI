@@ -471,6 +471,19 @@ def _runtime_contract(context: dict[str, Any], base_url: str, manifest: dict[str
     _vp = str(context.get("validation_phase") or "").strip().lower()
     if _vp:
         contract["validation_phase"] = _vp
+    # Propagate the operator-declared experiment budget the same way: the scan
+    # CLI lands it in campaign_context and the scheduler reads it from THIS
+    # receipted contract (`get_validation_budget`, clamped by HARD_BUDGET_CAP).
+    # Measured CMP_f9c8b621 round3: a declared 3000 never reached execution
+    # because only validation_phase crossed this boundary — the run re-ran on
+    # the phase default while 13,498 compiled obligations were deferred
+    # OBLIGATION_NOT_IN_PLAN.
+    try:
+        _eb = int(context.get("experiment_budget") or 0)
+    except (TypeError, ValueError):
+        _eb = 0
+    if _eb > 0:
+        contract["experiment_budget"] = _eb
     return normalized_base, [], contract
 
 
