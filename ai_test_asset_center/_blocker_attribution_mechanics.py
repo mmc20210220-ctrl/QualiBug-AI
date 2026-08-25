@@ -56,6 +56,7 @@ ATTRIBUTION_CATEGORIES = frozenset({
     "DISCOVERY_DIAGNOSTIC",
     "EXECUTION_BUDGET",
     "PLANNING_DEFERRED",
+    "OPERATOR_INTERVENTION",
     "UNREGISTERED",
     "UNKNOWN",
 })
@@ -66,6 +67,7 @@ RECOVERABILITY_VALUES = frozenset({
     "ENVIRONMENT_DEPENDENT",
     "PERMANENTLY_BLOCKED",
     "UNKNOWN",
+    "NOT_APPLICABLE",
 })
 
 # ─── Reason Code → Attribution Mapping ────────────────────────────────────────
@@ -224,6 +226,82 @@ REASON_CODE_REGISTRY.update({
     "MULTI_LEVEL_DEPENDENCY_IDENTITY_SOURCE_MISSING": _reason_definition("BINDING_GRAPH_GAP", recoverability="SOURCE_DEPENDENT"),
     "MULTI_LEVEL_DEPENDENCY_IDENTITY_SOURCE_AMBIGUOUS": _reason_definition("BINDING_GRAPH_GAP", recoverability="SOURCE_DEPENDENT"),
     "BLOCKED_UNAUTHORIZED_ACTOR": _reason_definition("PERMISSION_GAP", recoverability="RECOVERABLE"),
+    "BLOCKED_RUNTIME_ACTOR_PAIR_NOT_DISTINCT": _reason_definition(
+        "BINDING_GRAPH_GAP", recoverability="RECOVERABLE"
+    ),
+    "BLOCKED_CLEANUP_EQUIVALENCE_MISSING": _reason_definition(
+        "CLEANUP_CAPABILITY_GAP", recoverability="RECOVERABLE"
+    ),
+    "BLOCKED_CLEANUP_EQUIVALENCE_NOT_APPLICABLE_UNPROVEN": _reason_definition(
+        "CLEANUP_CAPABILITY_GAP", recoverability="RECOVERABLE"
+    ),
+    "BLOCKED_CLEANUP_EQUIVALENCE_STATUS_INVALID": _reason_definition(
+        "COMPILER_GAP", recoverability="RECOVERABLE"
+    ),
+    "BLOCKED_ENTITY_NOT_MATERIALIZED": _reason_definition(
+        "FIXTURE_CAPABILITY_GAP", recoverability="RECOVERABLE"
+    ),
+    "BLOCKED_ENTITY_TENANT_MISMATCH": _reason_definition(
+        "FIXTURE_CAPABILITY_GAP", recoverability="SOURCE_DEPENDENT"
+    ),
+    "BLOCKED_ENTITY_TYPE_MISMATCH": _reason_definition(
+        "FIXTURE_CAPABILITY_GAP", recoverability="RECOVERABLE"
+    ),
+    "BLOCKED_UNRESOLVED_BODY_PLACEHOLDERS": _reason_definition(
+        "BINDING_GRAPH_GAP", recoverability="RECOVERABLE"
+    ),
+    "BLOCKED_UNRESOLVED_PATH_PLACEHOLDERS": _reason_definition(
+        "BINDING_GRAPH_GAP", recoverability="RECOVERABLE"
+    ),
+    "HARNESS_ASYNC_CONVERGENCE_TIMEOUT": _reason_definition(
+        "TARGET_SYSTEM_RESPONSE", recoverability="RECOVERABLE"
+    ),
+    "HARNESS_AUTH_INJECTION_FAILED": _reason_definition(
+        "BINDING_GRAPH_GAP", recoverability="RECOVERABLE"
+    ),
+    "HARNESS_BARRIER_EXECUTION_FAILED": _reason_definition(
+        "TARGET_SYSTEM_RESPONSE", recoverability="RECOVERABLE"
+    ),
+    "HARNESS_CLEANUP_RESPONSE_REJECTED": _reason_definition(
+        "CLEANUP_CAPABILITY_GAP", recoverability="RECOVERABLE"
+    ),
+    "HARNESS_FAILED": _reason_definition("TARGET_SYSTEM_RESPONSE"),
+    "HARNESS_OBSERVER_RESPONSE_UNREADABLE": _reason_definition(
+        "OBSERVER_CAPABILITY_GAP", recoverability="RECOVERABLE"
+    ),
+    "HARNESS_OBSERVER_TRANSPORT_FAILED": _reason_definition(
+        "OBSERVER_CAPABILITY_GAP", recoverability="ENVIRONMENT_DEPENDENT"
+    ),
+    "HARNESS_PARAMETER_BINDING_FAILED": _reason_definition(
+        "BINDING_GRAPH_GAP", recoverability="RECOVERABLE"
+    ),
+    "HARNESS_POST_OBSERVATION_FAILED": _reason_definition(
+        "OBSERVER_CAPABILITY_GAP", recoverability="RECOVERABLE"
+    ),
+    "HARNESS_PRE_OBSERVATION_FAILED": _reason_definition(
+        "OBSERVER_CAPABILITY_GAP", recoverability="RECOVERABLE"
+    ),
+    "HARNESS_REQUEST_BUILD_FAILED": _reason_definition(
+        "COMPILER_GAP", recoverability="RECOVERABLE"
+    ),
+    "HARNESS_RESPONSE_PARSE_FAILED": _reason_definition(
+        "OBSERVER_CAPABILITY_GAP", recoverability="RECOVERABLE"
+    ),
+    "HARNESS_ROUTE_FAILED": _reason_definition(
+        "SOURCE_GAP", recoverability="SOURCE_DEPENDENT"
+    ),
+    "HARNESS_RUNTIME_BINDING_LOST": _reason_definition(
+        "BINDING_GRAPH_GAP", recoverability="RECOVERABLE"
+    ),
+    "BLOCKED_AMBIGUOUS_OUTCOME_FINDING": _reason_definition(
+        "ORACLE_INPUT_GAP", recoverability="RECOVERABLE"
+    ),
+    "BLOCKED_CANONICAL_OUTCOME_IDENTITY_INCOMPLETE": _reason_definition(
+        "ORACLE_INPUT_GAP", recoverability="RECOVERABLE"
+    ),
+    "HARNESS_CLEANUP_FAILURE_UNATTRIBUTED": _reason_definition(
+        "CLEANUP_CAPABILITY_GAP", recoverability="ENVIRONMENT_DEPENDENT"
+    ),
 })
 
 
