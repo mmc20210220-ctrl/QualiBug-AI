@@ -50,6 +50,7 @@ def build_cli_campaign_context(args: Any) -> dict[str, Any]:
     else:
         test_data_contract = default_scan_test_data_contract(body)
     experiment_budget = int(getattr(args, "experiment_budget", 0) or 0)
+    validation_phase = str(getattr(args, "phase", "") or "").strip().lower()
     context = {
         "scope_id": getattr(args, "scope_id", ""),
         "environment_ref": getattr(args, "environment_ref", ""),
@@ -62,6 +63,8 @@ def build_cli_campaign_context(args: Any) -> dict[str, Any]:
         "execution_approval_id": getattr(args, "execution_approval_id", ""),
         "execution_mode": execution_mode,
     }
+    if validation_phase:
+        context["validation_phase"] = validation_phase
     if experiment_budget > 0:
         context["experiment_budget"] = experiment_budget
     if test_data_contract:
@@ -97,12 +100,31 @@ def run_cli() -> None:
         help="Operator-declared experiment execution budget for this scan "
         "(0 = phase default); capped by the shared hard-cap authority.",
     )
+    parser.add_argument(
+        "--executor-concurrency",
+        type=int,
+        default=None,
+        help="Operator-declared executor worker count for this scan "
+        "(default: QUALIBUG_EXECUTOR_CONCURRENCY or 16); clamped to [2, 32].",
+    )
+    parser.add_argument(
+        "--phase",
+        default="",
+        choices=["", "small_scale", "formal"],
+        help="Execution phase: small_scale runs the bounded high-value sweep "
+        "(minutes-level feedback loop); formal is the full thorough scan "
+        "(default when omitted).",
+    )
     parser.add_argument("--ci-gate", action="store_true")
     parser.add_argument("--no-multi-layer", action="store_true")
     parser.add_argument("--output-dir")
     parser.add_argument("--no-report", action="store_true")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
+    if getattr(args, "executor_concurrency", None) is not None:
+        from .experiment_batch_concurrent_scheduler import declare_cli_concurrency
+
+        declare_cli_concurrency(args.executor_concurrency)
     from .__main__ import scan
 
     context = build_cli_campaign_context(args)

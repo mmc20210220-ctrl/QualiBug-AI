@@ -46,10 +46,71 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_CONCURRENCY = 8
+DEFAULT_CONCURRENCY = 16
 MIN_CONCURRENCY = 2
-MAX_CONCURRENCY = 16
+MAX_CONCURRENCY = 32
 CONCURRENCY_ENV = "QUALIBUG_EXECUTOR_CONCURRENCY"
+
+
+def resolve_concurrency() -> tuple[int, str]:
+    """Resolved (workers, source) with the operator-visible provenance.
+
+    Source is ``cli`` when ``QUALIBUG_EXECUTOR_CONCURRENCY`` was set by the
+    CLI declaration channel, ``env`` when set by the operator environment,
+    else ``default``.
+    """
+    raw = _text(os.environ.get(CONCURRENCY_ENV))
+    if raw == f"__cli__{DEFAULT_CONCURRENCY}":
+        return DEFAULT_CONCURRENCY, "default"
+    if raw.startswith("__cli__"):
+        return _clamp(raw[len("__cli__"):]), "cli"
+    if raw:
+        return _clamp(raw), "env"
+    return DEFAULT_CONCURRENCY, "default"
+
+
+def _clamp(raw: str) -> int:
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        logger.warning(
+            "%s invalid (%r), using default %d",
+            CONCURRENCY_ENV,
+            raw,
+            DEFAULT_CONCURRENCY,
+        )
+        return DEFAULT_CONCURRENCY
+    return max(MIN_CONCURRENCY, min(value, MAX_CONCURRENCY))
+
+
+def declare_cli_concurrency(value: int | None) -> None:
+    """Operator declaration channel (`--executor-concurrency`).
+
+    Stages the declared value under the same env key with a marker prefix so
+    the scheduler can distinguish an explicit CLI declaration from ambient
+    environment configuration in the concurrency receipt.
+    """
+    if value is None:
+        return
+    int(value)
+    os.environ[CONCURRENCY_ENV] = f"__cli__{int(value)}"
+
+
+def get_concurrency() -> int:
+    """Concurrency from QUALIBUG_EXECUTOR_CONCURRENCY, clamped to [2, 32].
+
+    Invalid / unset values fall back to the default 16. Never silently degrades
+    below 2 (a serial fallback would look like a dead executor on a slow batch).
+    Measured 2026-08-25 (run killed mid-execution): 1067 executed experiments,
+    210 min serial work over 841 resource groups with top_group_sizes
+    [95,16,16,15,13] — 8 workers were the binding constraint (wall ~50 min,
+    effective parallelism ~4-7x). Raising workers toward 32 approaches the
+    structural floor set by the largest serial group (~95 x mean experiment
+    duration); the floor itself is contract-bound (same-resource experiments
+    must not interleave writes/observations).
+    """
+    workers, _source = resolve_concurrency()
+    return workers
 
 _READ_METHODS = frozenset({"GET", "HEAD"})
 _BINDING_PLACEHOLDER_RE = re.compile(r"\{(\w+)\}|:(\w+)")
@@ -65,26 +126,6 @@ def _list(value: Any) -> list[Any]:
 
 def _text(value: Any) -> str:
     return str(value or "").strip()
-
-
-def get_concurrency() -> int:
-    """Concurrency from QUALIBUG_EXECUTOR_CONCURRENCY, clamped to [2, 16].
-
-    Invalid / unset values fall back to the default 8. Never silently degrades
-    below 2 (a serial fallback would look like a dead executor on a slow batch).
-    """
-    raw = _text(os.environ.get(CONCURRENCY_ENV))
-    if not raw:
-        return DEFAULT_CONCURRENCY
-    try:
-        value = int(raw)
-    except (TypeError, ValueError):
-        logger.warning(
-            "%s invalid (%r), using default %d",
-            CONCURRENCY_ENV, raw, DEFAULT_CONCURRENCY,
-        )
-        return DEFAULT_CONCURRENCY
-    return max(MIN_CONCURRENCY, min(value, MAX_CONCURRENCY))
 
 
 # ── 资源域分组 ──────────────────────────────────────────────────────────────
@@ -643,6 +684,7 @@ def _merge_group_batches(
         ),
         "concurrency": {
             "mode": "concurrent",
+            "resolved": resolve_concurrency(),
             "max_workers": get_concurrency(),
             "group_count": len(group_batches),
             "barrier_group_count": _barrier_group_count(

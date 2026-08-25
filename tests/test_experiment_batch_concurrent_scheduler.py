@@ -200,15 +200,33 @@ def _run(selected, exps, monkeypatch, **options) -> tuple[dict, dict]:
 
 def test_concurrency_default_and_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("QUALIBUG_EXECUTOR_CONCURRENCY", raising=False)
-    assert get_concurrency() == 8
+    assert get_concurrency() == 16
     monkeypatch.setenv("QUALIBUG_EXECUTOR_CONCURRENCY", "4")
     assert get_concurrency() == 4
     monkeypatch.setenv("QUALIBUG_EXECUTOR_CONCURRENCY", "abc")
-    assert get_concurrency() == 8  # invalid → default
+    assert get_concurrency() == 16  # invalid → default
     monkeypatch.setenv("QUALIBUG_EXECUTOR_CONCURRENCY", "100")
-    assert get_concurrency() == 16  # clamped
+    assert get_concurrency() == 32  # clamped
     monkeypatch.setenv("QUALIBUG_EXECUTOR_CONCURRENCY", "1")
     assert get_concurrency() == 2  # floor
+
+
+def test_concurrency_cli_declaration_channel(monkeypatch: pytest.MonkeyPatch) -> None:
+    from ai_test_asset_center.experiment_batch_concurrent_scheduler import (
+        declare_cli_concurrency,
+        resolve_concurrency,
+    )
+
+    monkeypatch.delenv("QUALIBUG_EXECUTOR_CONCURRENCY", raising=False)
+    assert resolve_concurrency() == (16, "default")
+    monkeypatch.setenv("QUALIBUG_EXECUTOR_CONCURRENCY", "12")
+    assert resolve_concurrency() == (12, "env")
+    declare_cli_concurrency(24)
+    assert resolve_concurrency() == (24, "cli")
+    declare_cli_concurrency(1000)
+    assert resolve_concurrency() == (32, "cli")  # clamped at the new ceiling
+    with pytest.raises(ValueError):
+        declare_cli_concurrency("not-an-int")  # type: ignore[arg-type]
 
 
 # ── grouping correctness ────────────────────────────────────────────────────
@@ -388,7 +406,7 @@ def test_aggregation_envelope_present(monkeypatch: pytest.MonkeyPatch) -> None:
     assert isinstance(batch.get("validation_gate"), dict)
     assert batch["campaign_validation_receipt"]["campaign_validation_status"] == "PASSED"
     assert batch["concurrency"]["mode"] == "concurrent"
-    assert batch["concurrency"]["max_workers"] == 8
+    assert batch["concurrency"]["max_workers"] == 16
     assert batch["compile_results"] and batch["execution_results"]
 
 
