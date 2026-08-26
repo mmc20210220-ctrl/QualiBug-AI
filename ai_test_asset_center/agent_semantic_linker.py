@@ -72,6 +72,7 @@ import re
 from copy import deepcopy
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
+from contextvars import ContextVar
 from typing import Any, Protocol
 
 from .artifact_redactor import redact_and_validate
@@ -126,6 +127,15 @@ MIN_CANDIDATES_PER_RULE = 3
 MAX_SUPPORTING_FACTS_PER_RULE = 20
 MAX_TRANSITIONS_PER_REQUEST = 200
 CACHE_DIRECTORY_ENV = "QUALIBUG_SEMANTIC_CACHE_DIR"
+
+# Product wiring override (set once at the visible-failure wrapper in
+# discovery_runtime_semantic_binding): lets the scan pass its workspace-shared
+# cache path WITHOUT threading a kwarg through the authority/legacy wrapper
+# layers (measured: a kwarg threaded only to the impl missed the production
+# chain and crashed the quick run at startup).
+_CACHE_DIRECTORY_OVERRIDE: ContextVar[str | None] = ContextVar(
+    "agent_linker_cache_directory_override", default=None
+)
 
 # ── 输入预算守卫（20260821 成本事故根因修复）─────────────────────────────
 # 该次运行中 linker 以 ~102K token/请求的巨型 prompt 反复调用，直至供应商
@@ -1653,13 +1663,20 @@ def enrich_knowledge_asset_with_agent_relationships(
     resolved_client = client or _default_client()
     lexicon = _semantic_lexicon()
     recall_basis = "semantic_lexicon" if lexicon else "lexicon_unavailable"
-    cache = _SemanticLinkCache(
-        directory=(
-            cache_directory
-            if cache_directory is not None
+    # Resolution order: explicit param > product wiring override (ContextVar,
+    # set once at the visible-failure wrapper so the kwarg does not need to
+    # thread through the authority/legacy wrapper layers) > env > in-memory.
+    _effective_cache_dir: str | None
+    if cache_directory is not None:
+        _effective_cache_dir = cache_directory
+    else:
+        _override = _CACHE_DIRECTORY_OVERRIDE.get()
+        _effective_cache_dir = (
+            _override
+            if _override is not None
             else os.environ.get(CACHE_DIRECTORY_ENV) or None
         )
-    )
+    cache = _SemanticLinkCache(directory=_effective_cache_dir)
     model_fingerprint = _model_config_fingerprint(resolved_client)
     signals = _build_asset_signals(knowledge_asset, lexicon)
     interface_signals = _interface_signal_map(interfaces, lexicon)

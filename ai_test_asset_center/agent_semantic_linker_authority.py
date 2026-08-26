@@ -781,12 +781,11 @@ if not getattr(_base._candidate_paged_enrichment, "_qualibug_relationship_paging
     _base._candidate_paged_enrichment = _candidate_paged_enrichment
 
 
-def enrich_knowledge_asset_with_agent_relationships(knowledge_asset: dict[str, Any], *, client: Any | None = None, cache_directory: str | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
+def enrich_knowledge_asset_with_agent_relationships(knowledge_asset: dict[str, Any], *, client: Any | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
     with _CONFIDENCE_RECOVERY_LOCK:
         return _base.enrich_knowledge_asset_with_agent_relationships(
             knowledge_asset,
             client=client,
-            cache_directory=cache_directory,
         )
 
 

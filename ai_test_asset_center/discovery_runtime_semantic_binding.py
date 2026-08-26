@@ -346,11 +346,16 @@ def _agent_semantic_linker_with_visible_failure(
     output failures keep the source-only plan alive with an explicit receipt.
     """
     try:
-        return _governed_agent_semantic_linker(
-            knowledge_asset,
-            client=client,
-            cache_directory=cache_directory,
-        )
+        from .agent_semantic_linker import _CACHE_DIRECTORY_OVERRIDE
+
+        _token = _CACHE_DIRECTORY_OVERRIDE.set(cache_directory)
+        try:
+            return _governed_agent_semantic_linker(
+                knowledge_asset,
+                client=client,
+            )
+        finally:
+            _CACHE_DIRECTORY_OVERRIDE.reset(_token)
     except AgentSemanticLinkerError as exc:
         detail = str(exc)
         fatal_prefixes = (
