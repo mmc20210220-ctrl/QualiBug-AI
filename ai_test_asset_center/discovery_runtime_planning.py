@@ -669,7 +669,21 @@ def _enrich_with_agent_semantic_reuse_gate(
         )
         return reused, receipt
 
-    asset, receipt = enrich_knowledge_asset_with_agent_relationships(asset)
+    # Cross-run unit-response persistence: without it every scan re-burns the
+    # identical provider windows even when the enterprise input is unchanged
+    # (the pass-level reuse gate below only replays VERIFIED passes, so a
+    # single mid-run provider row abort used to repeat the full cost forever).
+    # Default to the workspace-shared cache unless the operator set an explicit
+    # QUALIBUG_SEMANTIC_CACHE_DIR; entries are re-validated on read, so a
+    # corrupt file degrades to a miss instead of bypassing the contract.
+    default_cache_dir = str(
+        Path(root) / "platform_workspace" / "_shared" / "semantic_link_cache"
+    )
+    asset, receipt = enrich_knowledge_asset_with_agent_relationships(
+        asset,
+        cache_directory=os.environ.get("QUALIBUG_SEMANTIC_CACHE_DIR")
+        or default_cache_dir,
+    )
     elapsed_ms = int((time.perf_counter() - started) * 1000)
     _planning_logger.info(
         "[plan-trace] agent_link stage=executed elapsed_ms=%d status=%s accepted=%s windows=%s",

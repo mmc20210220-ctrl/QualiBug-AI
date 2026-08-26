@@ -816,6 +816,17 @@ Evolution Contract):
   poisoned state. Kill switch `QUALIBUG_AGENT_LINKER_REUSE_DISABLED=1`. This
   is the linker's slice of the Enterprise Understanding Lifecycle Contract:
   unchanged enterprises cost near-zero comprehension LLM per scan.
+  Unit-response persistence (2026-08-25): `_SemanticLinkCache` now defaults
+  for product runs to `platform_workspace/_shared/semantic_link_cache`
+  (planning wrapper wires it; `QUALIBUG_SEMANTIC_CACHE_DIR` overrides; entries
+  are re-validated on read so a corrupt file degrades to a miss) — an
+  in-memory cache re-burns every paid provider response next run. Single-row
+  provider noise (`fields_invalid`) is receipted per-assessment as
+  `PROVIDER_ASSESSMENT_FIELDS_INVALID` with observed keys (isolation precedent
+  of `PROVIDER_OMITTED_RULE` / `LINKED_WITHOUT_RELATIONSHIPS`) instead of
+  aborting the pass, which discarded all paid windows and re-burned identical
+  calls every subsequent run (measured CMP_f9c8b621). Inner structural
+  validation (disposition token, reason, relationship shapes) stays fail-fast.
   Latent-bug note: the supporting-fact closure loop had referenced `_text`
   without a definition since extraction (NameError on any big-fact-pool run);
   a delegating helper now exists.

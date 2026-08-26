@@ -1599,12 +1599,19 @@ def enrich_knowledge_asset_with_agent_relationships(
     knowledge_asset: dict[str, Any],
     *,
     client: AgentJsonClient | None = None,
+    cache_directory: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Add validated rule-to-interface intent edges and a complete audit receipt.
 
     Three-tier incremental linking (structured recall -> candidate-scoped LLM
     -> deterministic contract validation) with content-addressed caching and
     per-batch independent success/failure. See the module docstring.
+
+    ``cache_directory`` explicitly wires the cross-run unit-response cache;
+    when omitted, ``QUALIBUG_SEMANTIC_CACHE_DIR`` decides (unset = in-memory
+    only). Callers that own a workspace path should pass one: an in-memory
+    cache re-burns every paid provider response on the next run, which is the
+    repeated-token-cost defect this parameter exists to close.
     """
 
     if not isinstance(knowledge_asset, dict):
@@ -1647,7 +1654,11 @@ def enrich_knowledge_asset_with_agent_relationships(
     lexicon = _semantic_lexicon()
     recall_basis = "semantic_lexicon" if lexicon else "lexicon_unavailable"
     cache = _SemanticLinkCache(
-        directory=os.environ.get(CACHE_DIRECTORY_ENV) or None
+        directory=(
+            cache_directory
+            if cache_directory is not None
+            else os.environ.get(CACHE_DIRECTORY_ENV) or None
+        )
     )
     model_fingerprint = _model_config_fingerprint(resolved_client)
     signals = _build_asset_signals(knowledge_asset, lexicon)
@@ -2293,9 +2304,28 @@ def enrich_knowledge_asset_with_agent_relationships(
             "reason",
             "relationships",
         }:
-            raise AgentSemanticLinkerError(
-                f"agent_semantic_assessment_fields_invalid:{assessment_index}"
+            # One shape-invalid assessment is provider noise on a single row,
+            # not an untrustworthy output contract. Aborting the whole run
+            # here discarded every paid window and, because failed passes
+            # persist no reuse state, re-burned the identical provider calls
+            # on EVERY subsequent run (measured: CMP_f9c8b621 rounds burned
+            # the linker budget repeatedly on `fields_invalid:91` alone).
+            # Mirror PROVIDER_OMITTED_RULE / LINKED_WITHOUT_RELATIONSHIPS:
+            # receipt the row as rejected with its observed keys and keep the
+            # other valid edges.
+            observed_keys = (
+                sorted(str(key) for key in raw_assessment)
+                if isinstance(raw_assessment, dict)
+                else []
             )
+            rejections.append({
+                "assessment_index": assessment_index,
+                "relationship_index": -1,
+                "reason_code": "PROVIDER_ASSESSMENT_FIELDS_INVALID",
+                "provider_assessment_keys": observed_keys,
+                "proposal_fingerprint": _fingerprint({"rule_id": rule_id}),
+            })
+            continue
         accepted_for_assessment, handled = accept_relationships(
             subject_id=_text(raw_assessment.get("rule_id")),
             subject_kind="rule",
@@ -2338,9 +2368,31 @@ def enrich_knowledge_asset_with_agent_relationships(
             "reason",
             "relationships",
         }:
-            raise AgentSemanticLinkerError(
-                "agent_semantic_assessment_fields_invalid:extra"
+            # Same single-row isolation as the scheduled loop above: an
+            # unscheduled assessment with an invalid shape is receipted as
+            # rejected (with its observed keys) instead of aborting every
+            # valid edge in the run.
+            observed_keys = (
+                sorted(str(key) for key in raw_assessment)
+                if isinstance(raw_assessment, dict)
+                else []
             )
+            rejections.append({
+                "assessment_index": len(scheduled) + extra_index,
+                "relationship_index": -1,
+                "reason_code": "PROVIDER_ASSESSMENT_FIELDS_INVALID",
+                "provider_assessment_keys": observed_keys,
+                "proposal_fingerprint": _fingerprint(
+                    {
+                        "rule_id": _text(
+                            raw_assessment.get("rule_id")
+                            if isinstance(raw_assessment, dict)
+                            else ""
+                        )
+                    }
+                ),
+            })
+            continue
         subject_id = _text(raw_assessment.get("rule_id"))
         unit = unit_by_rule_id.get(subject_id)
         assessment_index = len(scheduled) + extra_index
