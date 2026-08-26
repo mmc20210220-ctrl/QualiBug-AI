@@ -55,7 +55,9 @@ def test_concurrency_env_default_and_clamp(monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.setenv("QUALIBUG_COMPILE_CONCURRENCY", "3")
     assert get_concurrency() == 3
     monkeypatch.setenv("QUALIBUG_COMPILE_CONCURRENCY", "1")
-    assert get_concurrency() == 2  # clamped at the floor
+    # 1 is the documented exact-serial kill-switch (the wrapper delegates
+    # to the serial base); the [2,16] clamp applies to values >= 2.
+    assert get_concurrency() == 1
     monkeypatch.setenv("QUALIBUG_COMPILE_CONCURRENCY", "99")
     assert get_concurrency() == 16  # clamped at the cap
     monkeypatch.setenv("QUALIBUG_COMPILE_CONCURRENCY", "banana")
@@ -186,6 +188,10 @@ def test_concurrent_serial_fallback_single_obligation() -> None:
 
 def test_rescue_concurrent_equals_serial() -> None:
     """V1.8-rescue loop: concurrent per-row rescue reproduces the serial pack."""
+    from ai_test_asset_center.rescue_dedupe import compile_rescue_cache_clear
+    # Process-global rescue dedupe cache is shared by design; reset around
+    # each leg so cumulative unique_count stats stay order-independent.
+    compile_rescue_cache_clear()
     obligations, behavior_ir = _fixture_pack()
     compile_pack = serial_compile(
         copy.deepcopy(obligations),
@@ -193,6 +199,7 @@ def test_rescue_concurrent_equals_serial() -> None:
         compile_one=compile_experiment_for_obligation,
         **_COMPILE_KW,
     )
+    compile_rescue_cache_clear()
     serial_out = serial_rescue(
         json.loads(json.dumps(compile_pack, default=str)),
         obligations=copy.deepcopy(obligations),
@@ -200,6 +207,7 @@ def test_rescue_concurrent_equals_serial() -> None:
         compile_one=compile_experiment_for_obligation,
         **_COMPILE_KW,
     )
+    compile_rescue_cache_clear()
     concurrent_out = materialize_and_recompile_abstract_pack_concurrent(
         json.loads(json.dumps(compile_pack, default=str)),
         obligations=copy.deepcopy(obligations),

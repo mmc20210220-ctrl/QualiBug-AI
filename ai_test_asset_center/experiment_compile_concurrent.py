@@ -91,29 +91,35 @@ def _text(value: Any) -> str:
     return str(value or "").strip()
 
 
-def _submit_with_batch_indexes(pool: ThreadPoolExecutor, fn, /, *args, behavior_ir=None, **kwargs):
-    """Submit ``fn`` under a private context snapshot that carries the
-    per-batch Behavior-IR index bundle (SPEC-11 4.2).
+def _submit_with_batch_indexes(
+    pool: ThreadPoolExecutor,
+    fn,
+    /,
+    *args,
+    fn_kwargs: dict | None = None,
+    behavior_ir=None,
+):
+    """Submit fn under a PRIVATE context snapshot carrying the per-batch
+    Behavior-IR index bundle (SPEC-11 4.2).
 
-    The serial batch establishes the bundle once via
-    ``set_batch_indexes(build_batch_indexes(behavior_ir))``; without it the
-    concurrent path silently lost rescue semantics (measured rescued 42→0,
-    which is why this wrapper had been unwired). Snapshotting AFTER installing
-    the bundle gives every worker the same O(1)-lookup indexes the serial loop
-    sees, while each task keeps an isolated context (module docstring).
+    Serial batch establishes the bundle once via set_batch_indexes(
+    build_batch_indexes(behavior_ir)); without it the concurrent path silently
+    lost rescue semantics (measured rescued 42->0, why this wrapper had been
+    unwired). Each task snapshots the caller context FRESH, primes it with the
+    shared immutable indexes, then runs fn inside that private context -
+    tasks stay mutually isolated (module docstring).
     """
-    from .compile_batch_context import (
-        build_batch_indexes,
-        reset_batch_indexes,
-        set_batch_indexes,
-    )
+    from .compile_batch_context import build_batch_indexes, set_batch_indexes
 
-    token = set_batch_indexes(build_batch_indexes(behavior_ir or {}))
-    try:
+    indexes = build_batch_indexes(behavior_ir or {})
+    kwargs = dict(fn_kwargs or {})
+
+    def _task():
         ctx = contextvars.copy_context()
-    finally:
-        reset_batch_indexes(token)
-    return pool.submit(ctx.run, fn, *args, behavior_ir=behavior_ir, **kwargs)
+        ctx.run(set_batch_indexes, indexes)
+        return ctx.run(fn, *args, **kwargs)
+
+    return pool.submit(_task)
 
 
 def get_concurrency() -> int:
@@ -313,11 +319,14 @@ def compile_experiments_concurrent(
                 _compile_one_obligation,
                 index,
                 obligation,
+                fn_kwargs={
+                    "behavior_ir": behavior_ir,
+                    "environment_type": environment_type,
+                    "policy_version": policy_version,
+                    "compile_one": compiler,
+                    "available_adapters": available_adapters,
+                },
                 behavior_ir=behavior_ir,
-                environment_type=environment_type,
-                policy_version=policy_version,
-                compile_one=compiler,
-                available_adapters=available_adapters,
             )
             for index, obligation in enumerate(rows)
         ]
@@ -497,6 +506,8 @@ def _rescue_one_abstract(
             "row": concrete,
             "receipt": receipt,
             "patch": True,
+            "fingerprint": fingerprint,
+            "cache_hit": False,
         }
     if is_capability_gap_reason(concrete_receipt.get("reason_code")):
         retained = promote_blocked_to_abstract(concrete, obligation)
@@ -511,6 +522,8 @@ def _rescue_one_abstract(
             "row": retained,
             "receipt": receipt,
             "patch": False,
+            "fingerprint": fingerprint,
+            "cache_hit": False,
         }
     concrete = dict(concrete)
     concrete["materialization_receipt"] = receipt
@@ -519,6 +532,8 @@ def _rescue_one_abstract(
         "row": concrete,
         "receipt": receipt,
         "patch": False,
+        "fingerprint": fingerprint,
+        "cache_hit": False,
     }
 
 
@@ -635,14 +650,17 @@ def materialize_and_recompile_abstract_pack_concurrent(
                 _rescue_one_abstract,
                 index,
                 abstract_exp,
-                obligations_by_id=obligations_by_id,
+                fn_kwargs={
+                    "obligations_by_id": obligations_by_id,
+                    "behavior_ir": behavior_ir,
+                    "compile_one": compile_one,
+                    "environment_type": environment_type,
+                    "policy_version": policy_version,
+                    "available_adapters": available_adapters,
+                    "planning_context": context,
+                    "_actor_tokens": _actor_tokens,
+                },
                 behavior_ir=behavior_ir,
-                compile_one=compile_one,
-                environment_type=environment_type,
-                policy_version=policy_version,
-                available_adapters=available_adapters,
-                planning_context=context,
-                _actor_tokens=_actor_tokens,
             )
             for index, abstract_exp in enumerate(abstract)
         ]
