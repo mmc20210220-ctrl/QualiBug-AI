@@ -364,6 +364,25 @@ def _pending_scan_cancel(root: Path, project: str) -> dict[str, Any]:
         return {}
 
 
+def _is_nonreceipt_oracle_block(verdict: dict[str, Any]) -> bool:
+    """True for deliberately-minimal oracle verdicts that must never be
+    validated as sealed receipts: completeness-gate blocks, authorization
+    delivery blocks, and oracle-VALIDITY INDETERMINATE outcomes. All three
+    carry a named reason and no schema_version/receipt_id by design."""
+    has_seal = bool(
+        _text(verdict.get("schema_version")) or _text(verdict.get("receipt_id"))
+    )
+    blocked_marker = bool(
+        verdict.get("oracle_blocked_by_completeness_gate")
+        or verdict.get("authorization_delivery_gate")
+        or (
+            _text(verdict.get("oracle_validity_gate")) == "INDETERMINATE"
+            and _text(verdict.get("status")) == "INDETERMINATE"
+        )
+    )
+    return blocked_marker and not has_seal
+
+
 def execute_selected_experiments(
     selected: list[Any],
     *,
@@ -936,16 +955,22 @@ def execute_selected_experiments(
         # Anything CLAIMING to be a receipt is still validated strictly. Only a verdict
         # that carries neither schema_version nor receipt_id, and says why it was blocked,
         # is carried through as the block it is.
-        _is_gate_block = (
-            bool(
-                oracle_verdict.get("oracle_blocked_by_completeness_gate")
-                or oracle_verdict.get("authorization_delivery_gate")
-            )
-            and not (
-                _text(oracle_verdict.get("schema_version"))
-                or _text(oracle_verdict.get("receipt_id"))
-            )
-        )
+        _is_gate_block = _is_nonreceipt_oracle_block(oracle_verdict)
+        if _is_gate_block:
+            # Validity-gate INDETERMINATE is an EXECUTED experiment whose
+            # contrast could not be proven (e.g. VACUOUS_CONTRAST): it must
+            # surface as terminal REJECTED with the reason codes intact —
+            # never as HARNESS_FAILURE (measured: 10 concurrency experiments
+            # in RUN_0b9157bc were discarded as harness failures purely
+            # because their non-sealed verdict failed receipt validation).
+            if (
+                _text(oracle_verdict.get("oracle_validity_gate")) == "INDETERMINATE"
+                and _text(outcome.get("status")) == "HARNESS_FAILURE"
+            ):
+                outcome["status"] = "REJECTED"
+                _exec_rc = _dict(outcome.get("execution_receipt"))
+                _exec_rc["status"] = "REJECTED"
+                outcome["execution_receipt"] = _exec_rc
         if oracle_verdict and not _is_gate_block:
             try:
                 validated_oracle = validate_contract_oracle_receipt(oracle_verdict)
