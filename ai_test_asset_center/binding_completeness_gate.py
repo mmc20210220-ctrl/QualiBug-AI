@@ -323,6 +323,17 @@ def _check_dimension(
         if found:
             continue
 
+        # Anonymous actors are executable WITHOUT credentials by contract:
+        # the executor sends the request with no Authorization header
+        # (account-enumeration guard, credential-gated-write guard, doc-less
+        # single-arm probes all name this actor deliberately). Measured:
+        # CMP_f9c8b621 RUN_0b9157bc blocked 1,682 guard obligations on
+        # `anonymous(no_binding)` — a planning gate stricter than the
+        # documented executor behavior.
+        if dimension == "actor" and _actor_ref_is_anonymous(ir, ref):
+            source_authoritative_count += 1
+            continue
+
         if dimension == "field" and any(
             _source_declared_field_binding_is_authoritative(b, ref, obl)
             for b in all_of_type
@@ -520,6 +531,26 @@ def _ir_node_by_id(ir: dict[str, Any], collection: str, node_id: str) -> dict[st
             if isinstance(node, dict) and _text(node.get("id")) == node_id:
                 return node
     return None
+
+
+_ANONYMOUS_ROLES = frozenset({"anonymous", "public", "anon"})
+
+
+def _actor_ref_is_anonymous(behavior_ir: dict[str, Any], actor_ref: str) -> bool:
+    """True when the ref names the credential-free anonymous actor — either
+    directly (the injected literal ``anonymous``) or via an IR actor node
+    whose declared role is the anonymous/public class."""
+    ref = _text(actor_ref)
+    if not ref:
+        return False
+    if ref.lower() in _ANONYMOUS_ROLES:
+        return True
+    node = _ir_node_by_id(_dict(behavior_ir), "actors", ref)
+    if not node:
+        return False
+    fields = node.get("typed_fields") if isinstance(node.get("typed_fields"), dict) else node
+    role = _text(fields.get("role") if isinstance(fields, dict) else "").lower()
+    return role in _ANONYMOUS_ROLES
 
 
 def _get_needed_refs(

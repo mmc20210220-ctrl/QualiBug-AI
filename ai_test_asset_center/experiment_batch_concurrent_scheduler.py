@@ -402,10 +402,15 @@ def _apply_global_budget(
     """
     from . import _experiment_batch_executor_single_finding_mechanics as _core
     from .safe_experiment_prioritizer import prioritize_experiments
-    from .small_scale_validation_gate import HARD_BUDGET_CAP, get_validation_budget
+    from .small_scale_validation_gate import (
+        HARD_BUDGET_CAP,
+        SMALL_SCALE_BUDGET,
+        get_validation_budget,
+    )
 
     phase = _phase_of(runtime_contract, validation_phase)
     budget = get_validation_budget(runtime_contract, phase=phase)
+    declared_budget = int(_dict(runtime_contract).get("experiment_budget") or 0)
     budget = max(1, min(budget, HARD_BUDGET_CAP))
     budget = _core._operation_coverage_budget(
         selected, budget, hard_cap=HARD_BUDGET_CAP
@@ -413,6 +418,17 @@ def _apply_global_budget(
     budget = _core._family_coverage_budget(
         selected, budget, hard_cap=HARD_BUDGET_CAP
     )
+    # Operator-declared budgets are CEILINGS, never widened by the
+    # operation/family coverage tiers (2026-08-25 incident: `--phase
+    # small_scale` with no declared budget asked for ≤20 and the coverage
+    # tiers widened it to 115 selected + ~740 more across adaptive expansion
+    # rounds — the minutes-level feedback loop executed a formal-scale batch).
+    # The formal phase DEFAULT (≤100) keeps its coverage widening; the
+    # small_scale phase DEFAULT stays a hard ≤20 so the fast loop is real.
+    if declared_budget > 0:
+        budget = min(budget, max(1, min(declared_budget, HARD_BUDGET_CAP)))
+    elif phase == "small_scale":
+        budget = min(budget, max(1, SMALL_SCALE_BUDGET))
 
     receipt: dict[str, Any] = {}
     try:
@@ -494,6 +510,13 @@ def _harness_failed_batch(
         compile_results[oid] = {
             "status": "HARNESS_FAILED",
             "reason_code": "HARNESS_FAILURE",
+            # The mainline ledger keys the attempt's reason fields off the
+            # TERMINAL stage receipt. Without these the 73 HARNESS_FAILURE
+            # rows in CMP_f9c8b621 RUN_0b9157bc sealed with EMPTY
+            # reason_detail — real group exceptions invisible, violating the
+            # no-silent-failure rule.
+            "detail": detail,
+            "reason_detail": detail,
             "experiment_id": eid,
             "receipt_id": _core._stable_id(
                 "compile", project, campaign_id, oid, batch_nonce
