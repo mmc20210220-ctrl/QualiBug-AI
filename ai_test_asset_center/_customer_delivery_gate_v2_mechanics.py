@@ -1471,8 +1471,16 @@ def build_customer_delivery_gate_receipt_v2(
         ):
             if _text(finding_row.get(field)) != _text(execution.get(field)):
                 raise DeliveryGateV2Error(f"finding_execution_identity_mismatch:{field}")
-        observed_mainline = _text(
-            _dict(finding_row.get("mainline_run")).get("contract_fingerprint")
+        # The fingerprint may ride in EITHER carrier: nested
+        # mainline_run.contract_fingerprint (hand-built findings) or the flat
+        # mainline_contract_fingerprint that _reconstruct_finding_from_receipt_chain
+        # stamps when it rebuilds a dropped finding. Measured
+        # (CMP_f9c8b621 RUN_0b9157bc): 8 group-level HARNESS_FAILURE losses
+        # came solely from reading only the nested carrier while every
+        # reconstructed finding carried the flat one.
+        observed_mainline = (
+            _text(_dict(finding_row.get("mainline_run")).get("contract_fingerprint"))
+            or _text(finding_row.get("mainline_contract_fingerprint"))
         )
         if observed_mainline != _text(
             execution.get("mainline_contract_fingerprint")
