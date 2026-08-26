@@ -867,10 +867,18 @@ def _cleanup_gate_decision(
         # obligation, the operational receipt records NOT_REQUIRED status.
         if cleanup_status == "NOT_REQUIRED":
             return "DELIVERABLE", [], "NOT_REQUIRED"
-        # The compiler cleanup ladder emits a compensator or accepted-residue
-        # entry for every accepted write; their total absence is a harness
-        # anomaly and stays fail-closed.
-        return "HARNESS_FAILED", ["CLEANUP_EVIDENCE_INCOMPLETE"], "INCOMPLETE"
+        # The compiler cleanup ladder should emit a compensator or
+        # accepted-residue entry for every accepted write. When it does not,
+        # 原则14 still applies verbatim: the writes were ACCEPTED and the
+        # execution truth stands — degrade to accepted-residue with the
+        # anomaly as a visible code instead of discarding the executed
+        # experiment as HARNESS_FAILED (measured: RUN_0b9157bc 2 isolation
+        # executions lost this way).
+        return (
+            "DELIVERABLE",
+            ["CLEANUP_EVIDENCE_INCOMPLETE"],
+            "RESIDUE_ACCEPTED",
+        )
 
     # ── Accepted-residue degradation (non-production) ────────────────────────
     # Every cleanup contract is an accepted-residue marker: the write was

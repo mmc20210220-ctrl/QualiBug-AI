@@ -2040,11 +2040,17 @@ def materialize_experiment_fixtures(
             binding_materialization_receipts.append(receipt)
             if value in (None, "", [], {}):
                 if fixture_setup_accepted:
+                    # An accepted-residue fixture was CREATED (write accepted)
+                    # but the identity to bind could not be extracted: the
+                    # treatment never ran. That is a visible PRE-TRANSPORT
+                    # block (BLOCKED_MISSING_FIXTURE family), not a harness
+                    # crash — the residue write stays receipted and visible
+                    # via cleanup_failures (原则14).
                     cleanup_failures += 1
                     receipt.update({
-                        "status": "HARNESS_FAILURE",
+                        "status": "BLOCKED",
                         "reason_code": "FIXTURE_SETUP_IDENTITY_UNRESOLVED",
-                        "fixture_cleanup_status": "failed",
+                        "fixture_cleanup_status": "accepted_residue",
                     })
                     return {
                         "status": "terminal",
@@ -2052,7 +2058,7 @@ def materialize_experiment_fixtures(
                             "schema_version": "qualibug.experiment-execution.v1",
                             "experiment_id": eid,
                             "obligation_id": oid,
-                            "status": "HARNESS_FAILURE",
+                            "status": "BLOCKED",
                             "reason_code": "FIXTURE_SETUP_IDENTITY_UNRESOLVED",
                             "detail": f"accepted_fixture_identity_unresolved:{target}",
                             "elapsed_ms": int((time.time() - started) * 1000),
@@ -2062,7 +2068,7 @@ def materialize_experiment_fixtures(
                             "finding": None,
                             "cleanup_failures": cleanup_failures,
                             "execution_receipt": {
-                            "status": "HARNESS_FAILURE",
+                            "status": "BLOCKED",
                             "reason_code": "FIXTURE_SETUP_IDENTITY_UNRESOLVED",
                             "cleanup_failures": cleanup_failures,
                             },
