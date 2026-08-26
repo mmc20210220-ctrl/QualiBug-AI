@@ -442,6 +442,9 @@ def _apply_global_budget(
             behavior_ir=behavior_ir,
             budget=budget,
             family_quota=family_quota,
+            family_cap_shares=_dict(runtime_contract).get(
+                "family_execution_cap_shares"
+            ),
         )
         # Canonical prioritizer output is the "prioritized" scored list; the
         # scheduler must consume it or the ordering never reaches the budget.

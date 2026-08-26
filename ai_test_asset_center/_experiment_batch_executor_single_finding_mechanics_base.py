@@ -511,6 +511,9 @@ def execute_selected_experiments(
             behavior_ir=behavior_ir,
             budget=_budget,
             family_quota=_family_quota,
+            family_cap_shares=_dict(runtime_contract).get(
+                "family_execution_cap_shares"
+            ),
         )
         # The prioritizer's canonical output is the "prioritized" scored list
         # (obligation_id per row); reading a non-existent key silently disabled

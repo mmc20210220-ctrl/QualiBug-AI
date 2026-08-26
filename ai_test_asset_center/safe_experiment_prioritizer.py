@@ -185,6 +185,19 @@ def score_experiment_priority(
     }
 
 
+# ─── Family share caps (receipted default) ───────────────────────────────────
+# Ceiling complement to the tier-1 family-fair floor. Without it the
+# authorization base floods the executed budget with role-variant occurrences
+# of one violation class while validation/state/idempotency pools starve
+# (measured: CMP_f9c8b621 RUN_0b9157bc — 503 of 615 deliveries authorization;
+# 52 of 54 canonical defects one assertion_kind; validation delivered 2).
+# Operator-declarable via runtime contract key ``family_execution_cap_shares``;
+# this default is a registered intentional constant (package AGENTS.md).
+DEFAULT_FAMILY_CAP_SHARES: dict[str, float] = {
+    "authorization": 0.4,
+}
+
+
 # ─── Batch Prioritization ─────────────────────────────────────────────────────
 
 
@@ -196,6 +209,7 @@ def prioritize_experiments(
     historical_findings: list[dict[str, Any]] | None = None,
     budget: int = 100,
     family_quota: int = 1,
+    family_cap_shares: dict[str, float] | None = None,
 ) -> dict[str, Any]:
     """Prioritize experiments for execution within a budget.
 
@@ -207,6 +221,20 @@ def prioritize_experiments(
       2. Operation-fair: the top scored row of every operation not already
          promoted by the family tier — one experiment per operation minimum.
       3. Remaining rows by score.
+
+    Family share caps (the ceiling complement to the tier-1 floor): a family
+    named in ``family_cap_shares`` (share of budget, 0<share<=1) may occupy at
+    most ``max(quota, floor(share*budget))`` WITHIN-BUDGET slots beyond its
+    guaranteed tier-1 quota. Measured without it (CMP_f9c8b621 RUN_0b9157bc):
+    authorization consumed the overwhelming majority of executed slots while
+    validation/state/idempotency pools stayed starved — hundreds of
+    role-variant occurrences of one violation class is low enterprise value
+    compared with breadth across business-invariant families. Deferred rows
+    stay ordered after admitted ones (visible in the funnel, never dropped);
+    when no other family has admissible rows the cap backfills rather than
+    idling the budget. Caps are operator-declarable via runtime contract key
+    ``family_execution_cap_shares``; the built-in default caps only
+    authorization.
 
     Guarantees (for any pool, any target): with budget >= family_quota ×
     <distinct families> every family has at least its quota inside the
@@ -301,6 +329,65 @@ def prioritize_experiments(
         item["within_budget"] = i < budget
         item["execution_rank"] = i + 1
 
+    # ── Family share caps (ceiling complement to the tier-1 floor) ──
+    caps = dict(DEFAULT_FAMILY_CAP_SHARES)
+    for key, share in _dict(family_cap_shares).items():
+        try:
+            value = float(share)
+        except (TypeError, ValueError):
+            continue
+        if 0.0 < value <= 1.0:
+            caps[_text(key)] = value
+    cap_limits: dict[str, int] = {}
+    for family, share in caps.items():
+        limit = int(share * budget)
+        cap_limits[family] = max(quota, limit)
+
+    admitted: list[dict[str, Any]] = []
+    overflow: list[dict[str, Any]] = []
+    taken_in_budget: dict[str, int] = {}
+    deferred_by_cap: dict[str, int] = {}
+    backfilled_by_cap: dict[str, int] = {}
+    for item in ordered:
+        family = _text(item.get("risk_family"))
+        in_tier1 = _text(item.get("obligation_id")) in family_tier_ids
+        limit = cap_limits.get(family)
+        if (
+            len(admitted) < budget
+            and limit is not None
+            and not in_tier1
+            and taken_in_budget.get(family, 0) >= limit
+        ):
+            overflow.append(item)
+            deferred_by_cap[family] = deferred_by_cap.get(family, 0) + 1
+            item["within_budget"] = False
+            continue
+        if len(admitted) < budget:
+            item["within_budget"] = True
+            admitted.append(item)
+            if family and not in_tier1:
+                taken_in_budget[family] = taken_in_budget.get(family, 0) + 1
+        else:
+            overflow.append(item)
+            item["within_budget"] = False
+    # Backfill: a cap must not idle the budget when nothing else admits.
+    if len(admitted) < budget and overflow:
+        moved_ids: set[int] = set()
+        for item in overflow:
+            if len(admitted) >= budget:
+                break
+            item["within_budget"] = True
+            admitted.append(item)
+            moved_ids.add(id(item))
+            fam_bf = _text(item.get("risk_family"))
+            backfilled_by_cap[fam_bf] = backfilled_by_cap.get(fam_bf, 0) + 1
+        overflow = [item for item in overflow if id(item) not in moved_ids]
+    ordered = admitted + sorted(
+        overflow, key=lambda x: (-float(x["score"]), _text(x["obligation_id"]))
+    )
+    for i, item in enumerate(ordered):
+        item["execution_rank"] = i + 1
+
     # Family coverage within the budget (operator-visible, generic).
     family_coverage: dict[str, int] = {}
     for item in ordered[:budget]:
@@ -316,5 +403,9 @@ def prioritize_experiments(
         "within_budget_count": min(len(ordered), budget),
         "family_coverage": family_coverage,
         "families_present": sorted(family_taken),
+        "family_cap_shares": caps,
+        "family_cap_limits": cap_limits,
+        "family_cap_deferred": deferred_by_cap,
+        "family_cap_backfilled": backfilled_by_cap,
         "prioritized": ordered,
     }
