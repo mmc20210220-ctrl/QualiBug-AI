@@ -376,20 +376,38 @@ def compile_experiments(
     from .rescue_dedupe import compile_rescue_cache_stats
 
     _compile_rescue_before = compile_rescue_cache_stats()
-    # Serial compile base (batch-context aware). The concurrent wrapper
-    # (experiment_compile_concurrent) is NOT wired here: real-scan measurement
-    # showed it changes compile semantics (rescued=True 42 -> 0) because it
-    # does not establish the per-batch Behavior-IR index bundle the compile
-    # chain consumes; wiring it requires fixing that first. QUALIBUG_COMPILE_CONCURRENCY=1
-    # is not consulted on this path.
-    pack = _base._base.compile_experiments(
-        obligations,
-        behavior_ir=behavior_ir,
-        environment_type=environment_type,
-        policy_version=policy_version,
-        compile_one=compile_experiment_for_obligation,
-        available_adapters=available_adapters,
-    )
+    # Concurrent compile base — NOW WIRED: the wrapper installs the same
+    # per-batch Behavior-IR index bundle the serial path establishes (via
+    # _submit_with_batch_indexes context snapshots), which was the root cause
+    # of the earlier semantics drift (rescued 42→0) that kept this path
+    # unwired and compile single-threaded (~1-2s/obligation dominating the
+    # planning budget). Kill-switch: QUALIBUG_COMPILE_CONCURRENCY=1 forces
+    # the exact serial path; the concurrent entry itself also delegates to
+    # serial for <=1 obligation / concurrency<=1.
+    import os as _os
+
+    _cc = _os.environ.get("QUALIBUG_COMPILE_CONCURRENCY", "").strip()
+    if _cc.isdigit() and int(_cc) > 1 and len(obligations) >= 50:
+        from .experiment_compile_concurrent import compile_experiments_concurrent
+
+        pack = compile_experiments_concurrent(
+            obligations,
+            behavior_ir=behavior_ir,
+            environment_type=environment_type,
+            policy_version=policy_version,
+            compile_one=compile_experiment_for_obligation,
+            available_adapters=available_adapters,
+        )
+    else:
+        # Serial compile base (batch-context aware).
+        pack = _base._base.compile_experiments(
+            obligations,
+            behavior_ir=behavior_ir,
+            environment_type=environment_type,
+            policy_version=policy_version,
+            compile_one=compile_experiment_for_obligation,
+            available_adapters=available_adapters,
+        )
     # Abstract → Runtime Materialization → concrete recompile (serial,
     # content-addressed rescue dedupe inside the materialization loop).
     from .experiment_runtime_materialization import (

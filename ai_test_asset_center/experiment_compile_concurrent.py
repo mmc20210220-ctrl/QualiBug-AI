@@ -54,6 +54,7 @@ from __future__ import annotations
 import logging
 import os
 import time
+import contextvars
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from typing import Any
@@ -88,6 +89,31 @@ def _list(value: Any) -> list[Any]:
 
 def _text(value: Any) -> str:
     return str(value or "").strip()
+
+
+def _submit_with_batch_indexes(pool: ThreadPoolExecutor, fn, /, *args, behavior_ir=None, **kwargs):
+    """Submit ``fn`` under a private context snapshot that carries the
+    per-batch Behavior-IR index bundle (SPEC-11 4.2).
+
+    The serial batch establishes the bundle once via
+    ``set_batch_indexes(build_batch_indexes(behavior_ir))``; without it the
+    concurrent path silently lost rescue semantics (measured rescued 42→0,
+    which is why this wrapper had been unwired). Snapshotting AFTER installing
+    the bundle gives every worker the same O(1)-lookup indexes the serial loop
+    sees, while each task keeps an isolated context (module docstring).
+    """
+    from .compile_batch_context import (
+        build_batch_indexes,
+        reset_batch_indexes,
+        set_batch_indexes,
+    )
+
+    token = set_batch_indexes(build_batch_indexes(behavior_ir or {}))
+    try:
+        ctx = contextvars.copy_context()
+    finally:
+        reset_batch_indexes(token)
+    return pool.submit(ctx.run, fn, *args, behavior_ir=behavior_ir, **kwargs)
 
 
 def get_concurrency() -> int:
@@ -282,7 +308,8 @@ def compile_experiments_concurrent(
         max_workers=concurrency, thread_name_prefix="qualibug-compile"
     ) as pool:
         futures = [
-            pool.submit(
+            _submit_with_batch_indexes(
+                pool,
                 _compile_one_obligation,
                 index,
                 obligation,
@@ -603,7 +630,8 @@ def materialize_and_recompile_abstract_pack_concurrent(
         max_workers=concurrency, thread_name_prefix="qualibug-rescue"
     ) as pool:
         futures = [
-            pool.submit(
+            _submit_with_batch_indexes(
+                pool,
                 _rescue_one_abstract,
                 index,
                 abstract_exp,
