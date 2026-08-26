@@ -336,6 +336,7 @@ def _agent_semantic_linker_with_visible_failure(
     knowledge_asset: dict[str, Any],
     *,
     client: Any | None = None,
+    cache_directory: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Run the single governed linker and preserve provider failures as data.
 
@@ -348,6 +349,7 @@ def _agent_semantic_linker_with_visible_failure(
         return _governed_agent_semantic_linker(
             knowledge_asset,
             client=client,
+            cache_directory=cache_directory,
         )
     except AgentSemanticLinkerError as exc:
         detail = str(exc)
