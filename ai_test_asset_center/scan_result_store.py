@@ -222,6 +222,41 @@ def _shard_file_name(dotted_path: str) -> str:
     return dotted_path.replace(".", "_") + ".json"
 
 
+QUALIBUG_PERSIST_SHARD_REDACT_WORKERS_ENV = "QUALIBUG_PERSIST_SHARD_REDACT_WORKERS"
+
+
+def _persist_redact_worker(task: dict[str, Any]) -> dict[str, Any]:
+    """One shard's load→redact→reseal→scan→dump, executed in a worker process.
+
+    Runs in the spawned interpreter for THIS module (side-effect-free import),
+    so every helper below resolves normally. The parent only ships the tmp
+    path in / small receipts back out — the payload itself never crosses the
+    process boundary.
+    """
+    dotted = str(task["dotted"])
+    tmp = Path(str(task["tmp_path"]))
+    final_path = Path(str(task["final_path"]))
+    try:
+        with open(tmp, "r", encoding="utf-8") as handle:
+            value = json.load(handle)
+    finally:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+    redacted, piece_receipt = redact_artifact(value, inplace=True)
+    if piece_receipt.get("redaction_applied"):
+        redacted = _reseal_attempt_ledgers(redacted)
+    piece_scan = scan_for_secrets(redacted, skip_value_patterns=True)
+    _stream_dump(redacted, final_path, indent=None)
+    return {
+        "dotted": dotted,
+        "size": final_path.stat().st_size,
+        "events": list(piece_receipt.get("events") or []),
+        "scan": piece_scan,
+    }
+
+
 def _shard_spec(dotted: str, file_path: Path, size: int) -> dict[str, Any]:
     return {
         "file": file_path.name,
@@ -516,52 +551,96 @@ def write_scan_result(
             _discard_temp(tmp, temps)
     _mark("partition")
     # ── 逐片脱敏（A）：分片先行、逐片 redact，完整性校验逐片 fail-closed ──
+    # 每片完全独立（独立 tmp/最终文件/回执），是持久化管线最大单一耗时段
+    # （实测 RUN_0b9157bc：shard_redact ~436s，占 persist 的 ~49%）。工作负载
+    # 为纯 Python CPU 密集（json 装载+脱敏 walk+扫描+序列化），线程受 GIL
+    # 限制——用进程池获得近线性加速。worker 进程各自从磁盘 tmp 装载、写
+    # 最终分片，跨进程只回传小回执（events/scan），不搬载荷。
     manifest_shards: dict[str, dict[str, Any]] = {}
     piece_events: list[dict[str, Any]] = []
     piece_scans: list[dict[str, Any]] = []
-    for dotted, tmp, raw_size in pieces:
-        try:
-            with open(tmp, "r", encoding="utf-8") as handle:
-                value = json.load(handle)
-        finally:
+
+    _workers_env = str(os.environ.get(QUALIBUG_PERSIST_SHARD_REDACT_WORKERS_ENV) or "").strip()
+    _workers = int(_workers_env) if _workers_env.isdigit() else min(8, os.cpu_count() or 4)
+    _use_parallel_shard_redact = (
+        post_redaction_validator is None
+        and _workers >= 2
+        and len(pieces) >= 2
+    )
+    if _use_parallel_shard_redact:
+        from concurrent.futures import ProcessPoolExecutor
+
+        tasks = [
+            {
+                "dotted": dotted,
+                "tmp_path": str(tmp),
+                "final_path": str(parts_dir / _shard_file_name(dotted)),
+                "indent": indent,
+            }
+            for dotted, tmp, raw_size in pieces
+        ]
+        with ProcessPoolExecutor(max_workers=_workers) as pool:
+            shard_results = list(pool.map(_persist_redact_worker, tasks))
+        for res in shard_results:  # map 保持原始分片顺序 → 收据顺序确定
+            dotted = res["dotted"]
+            scan = res["scan"]
+            if not scan.get("safe"):
+                raise ArtifactSecretLeakError(
+                    f"artifact secret scan failed with {scan.get('issue_count')} issue(s) "
+                    f"in shard {dotted}",
+                    scan_result={
+                        "shard": dotted,
+                        "secret_scan": scan,
+                    },
+                )
+            final_path = parts_dir / _shard_file_name(dotted)
+            manifest_shards[dotted] = _shard_spec(dotted, final_path, res["size"])
+            piece_events.extend(res["events"])
+            piece_scans.append(scan)
+    else:
+        for dotted, tmp, raw_size in pieces:
             try:
-                tmp.unlink()
-            except OSError:
-                pass
-        # In-place redaction: the shard payload is a freshly loaded transient,
-        # so containers are reused instead of re-allocated (measured hotspot
-        # on multi-GB shards; copy mode halves throughput).
-        redacted, piece_receipt = redact_artifact(value, inplace=True)
-        # 密封 ledger 分片在这里完成 reseal（attempt/ledger 指纹链自洽）。
-        # Reseal 只修复脱敏改写造成的指纹断裂：零脱敏事件 ⇒ 分片字节未变 ⇒
-        # 既有密封仍然有效，跳过整棵 ledger 的重复内容指纹
-        # （实测收尾段热点：>16k attempt 的 ledger 每次 reseal 都要全量序列化）。
-        if piece_receipt.get("redaction_applied"):
-            redacted = _reseal_attempt_ledgers(redacted)
-        # The redactor's combined pattern is a superset of the scanner's six
-        # string patterns and just ran on this exact payload (any hit would
-        # already have been redacted, so no residual pattern can match). Only
-        # the sensitive-key residual check is kept — the fail-closed backstop.
-        # Removes the redundant 6-pattern pass over every string in
-        # multi-hundred-MB shards (measured ~33s of shard_redact).
-        piece_scan = scan_for_secrets(redacted, skip_value_patterns=True)
-        if not piece_scan.get("safe"):
-            raise ArtifactSecretLeakError(
-                f"artifact secret scan failed with {piece_scan.get('issue_count')} issue(s) "
-                f"in shard {dotted}",
-                scan_result={
-                    "shard": dotted,
-                    "secret_scan": piece_scan,
-                    "redaction": piece_receipt,
-                },
-            )
-        if post_redaction_validator is not None:
-            post_redaction_validator(redacted)
-        final_path = parts_dir / _shard_file_name(dotted)
-        _stream_dump(redacted, final_path, indent=None)
-        manifest_shards[dotted] = _shard_spec(dotted, final_path, final_path.stat().st_size)
-        piece_events.extend(list(piece_receipt.get("events") or []))
-        piece_scans.append(piece_scan)
+                with open(tmp, "r", encoding="utf-8") as handle:
+                    value = json.load(handle)
+            finally:
+                try:
+                    tmp.unlink()
+                except OSError:
+                    pass
+            # In-place redaction: the shard payload is a freshly loaded transient,
+            # so containers are reused instead of re-allocated (measured hotspot
+            # on multi-GB shards; copy mode halves throughput).
+            redacted, piece_receipt = redact_artifact(value, inplace=True)
+            # 密封 ledger 分片在这里完成 reseal（attempt/ledger 指纹链自洽）。
+            # Reseal 只修复脱敏改写造成的指纹断裂：零脱敏事件 ⇒ 分片字节未变 ⇒
+            # 既有密封仍然有效，跳过整棵 ledger 的重复内容指纹
+            # （实测收尾段热点：>16k attempt 的 ledger 每次 reseal 都要全量序列化）。
+            if piece_receipt.get("redaction_applied"):
+                redacted = _reseal_attempt_ledgers(redacted)
+            # The redactor's combined pattern is a superset of the scanner's six
+            # string patterns and just ran on this exact payload (any hit would
+            # already have been redacted, so no residual pattern can match). Only
+            # the sensitive-key residual check is kept — the fail-closed backstop.
+            # Removes the redundant 6-pattern pass over every string in
+            # multi-hundred-MB shards (measured ~33s of shard_redact).
+            piece_scan = scan_for_secrets(redacted, skip_value_patterns=True)
+            if not piece_scan.get("safe"):
+                raise ArtifactSecretLeakError(
+                    f"artifact secret scan failed with {piece_scan.get('issue_count')} issue(s) "
+                    f"in shard {dotted}",
+                    scan_result={
+                        "shard": dotted,
+                        "secret_scan": piece_scan,
+                        "redaction": piece_receipt,
+                    },
+                )
+            if post_redaction_validator is not None:
+                post_redaction_validator(redacted)
+            final_path = parts_dir / _shard_file_name(dotted)
+            _stream_dump(redacted, final_path, indent=None)
+            manifest_shards[dotted] = _shard_spec(dotted, final_path, final_path.stat().st_size)
+            piece_events.extend(list(piece_receipt.get("events") or []))
+            piece_scans.append(piece_scan)
     _mark("shard_redact")
     # ── 骨架脱敏（小；内联 ledger 的 reseal 与内联 authority 重建在此完成）──
     redacted_skeleton, skeleton_receipt = redact_and_validate(skeleton)
