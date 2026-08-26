@@ -221,6 +221,30 @@ def _build_occurrence(
         reproduction_receipt=reproduction,
     )
     if _text(gate.get("status")) == "DELIVERABLE":
+        # 原则14 recovery handoff: when the gate reconstructed the finding
+        # from the validated receipt chain (identity id minted as
+        # finding_<evidence_id>), ADOPT that identity onto the payload and
+        # backfill the execution-identity fields the gate compares — without
+        # this, _authority_findings sees a DELIVERABLE receipt referencing a
+        # finding id absent from raw_findings and fails the whole run
+        # (measured: formal-800 RUN crash
+        # deliverable_gate_finding_missing:finding_evidence_22456a57…).
+        gid = _text(_dict(_dict(gate.get("identity"))).get("finding_id"))
+        fid = _text(stamped.get("finding_id") or stamped.get("id"))
+        if gid and gid != fid:
+            for _field in (
+                "campaign_id",
+                "candidate_id",
+                "slice_id",
+                "obligation_id",
+                "experiment_id",
+                "execution_id",
+                "evidence_id",
+            ):
+                if not _text(stamped.get(_field)):
+                    stamped[_field] = _text(delivery_execution.get(_field))
+            stamped["finding_id"] = gid
+            stamped.setdefault("id", gid)
         stamped = _core.finalize_finding_evidence_after_delivery_gate(
             stamped,
             gate_receipt=gate,
