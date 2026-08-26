@@ -820,13 +820,19 @@ Evolution Contract):
   for product runs to `platform_workspace/_shared/semantic_link_cache`
   (planning wrapper wires it; `QUALIBUG_SEMANTIC_CACHE_DIR` overrides; entries
   are re-validated on read so a corrupt file degrades to a miss) — an
-  in-memory cache re-burns every paid provider response next run. Single-row
-  provider noise (`fields_invalid`) is receipted per-assessment as
-  `PROVIDER_ASSESSMENT_FIELDS_INVALID` with observed keys (isolation precedent
-  of `PROVIDER_OMITTED_RULE` / `LINKED_WITHOUT_RELATIONSHIPS`) instead of
-  aborting the pass, which discarded all paid windows and re-burned identical
-  calls every subsequent run (measured CMP_f9c8b621). Inner structural
-  validation (disposition token, reason, relationship shapes) stays fail-fast.
+  in-memory cache re-burns every paid provider response next run. Single-unit
+  provider noise is receipted and isolated class-level (2026-08-25):
+  `PROVIDER_ASSESSMENT_FIELDS_INVALID` / `PROVIDER_TRANSITION_ASSESSMENT_FIELDS_INVALID`
+  (with observed keys), `PROVIDER_DISPOSITION_INVALID`,
+  `PROVIDER_ASSESSMENT_REASON_MISSING`, `PROVIDER_RELATIONSHIPS_NOT_LIST`,
+  `PROVIDER_RELATIONSHIP_FIELDS_INVALID` (with observed keys),
+  `PROVIDER_CONFIDENCE_INVALID`, `PROVIDER_RELATIONSHIP_REASON_MISSING`,
+  `PROVIDER_EVIDENCE_REFS_INVALID` — the pass completes
+  (`VERIFIED_WITH_REJECTIONS`) instead of aborting, which discarded all paid
+  windows and re-burned identical calls every subsequent run (measured
+  CMP_f9c8b621). Only container/envelope breakage stays fail-fast: responses
+  not a list, response schema invalid, duplicate scheduled identities,
+  provider transport exhaustion, evaluator-private context guard.
   Latent-bug note: the supporting-fact closure loop had referenced `_text`
   without a definition since extraction (NameError on any big-fact-pool run);
   a delegating helper now exists.

@@ -2032,18 +2032,24 @@ def enrich_knowledge_asset_with_agent_relationships(
         expected_ids: set[str],
         allowed_interface_ids: set[str],
         valid_refs: set[str],
-    ) -> tuple[int, bool]:
+        ) -> tuple[int, bool]:
         """Validate one assessment's relationships under the shared contract.
 
         Returns ``(accepted_count, handled)``. ``handled=False`` means the
-        assessment was identity-invalid, a duplicate, or disposition-
-        inconsistent, so the caller must not count it toward the
-        provider-completeness check. Single-assessment defects (unknown
-        identity, duplicates, disposition/relationships mismatch) are receipted
-        as rejections; only structural schema violations (invalid disposition
-        token, missing reason, relationships not a list, wrong relationship
-        field set, invalid confidence/evidence shape) raise, because those mean
-        the provider output contract itself is untrustworthy.
+        assessment was identity-invalid, a duplicate, disposition-
+        inconsistent, or shape/value-invalid, so the caller must not count it
+        toward the provider-completeness check. EVERY single-unit defect —
+        unknown identity, duplicates, disposition/relationships mismatch, an
+        invalid disposition token, a missing reason, a non-list relationships
+        value, a wrong relationship field set, an invalid confidence/evidence
+        shape — is receipted as a rejection and isolated to its own row.
+        Raising for these aborted the whole run over one noisy unit,
+        discarded every paid window and, because failed passes persist no
+        reuse state, re-burned identical provider calls on every subsequent
+        run (measured: CMP_f9c8b621 `fields_invalid:91`). Only container- or
+        envelope-level breakage (responses not a list, response schema
+        invalid, duplicate scheduled identities) still raises: there the
+        unit boundary itself is lost, so isolation is impossible.
         """
         nonlocal proposal_count, rejected_low_confidence
         nonlocal rejected_invalid_identity, rejected_non_candidate
@@ -2051,17 +2057,29 @@ def enrich_knowledge_asset_with_agent_relationships(
         nonlocal rejected_duplicates, rejected_rule_limit, existing_count
         nonlocal rejected_inconsistent_disposition
         if disposition not in _DISPOSITIONS:
-            raise AgentSemanticLinkerError(
-                f"agent_semantic_disposition_invalid:{assessment_index}"
+            reject(
+                assessment_index,
+                -1,
+                raw_assessment,
+                "PROVIDER_DISPOSITION_INVALID",
             )
+            return 0, False
         if not reason:
-            raise AgentSemanticLinkerError(
-                f"agent_semantic_assessment_reason_missing:{assessment_index}"
+            reject(
+                assessment_index,
+                -1,
+                raw_assessment,
+                "PROVIDER_ASSESSMENT_REASON_MISSING",
             )
+            return 0, False
         if not isinstance(relationships, list):
-            raise AgentSemanticLinkerError(
-                f"agent_semantic_relationships_not_list:{assessment_index}"
+            reject(
+                assessment_index,
+                -1,
+                raw_assessment,
+                "PROVIDER_RELATIONSHIPS_NOT_LIST",
             )
+            return 0, False
         if disposition == "LINKED" and not relationships:
             # A single assessment self-contradiction (LINKED with no
             # relationship) is a per-assessment quality defect, not a batch
@@ -2123,10 +2141,17 @@ def enrich_knowledge_asset_with_agent_relationships(
                 "reason",
                 "evidence_refs",
             }:
-                raise AgentSemanticLinkerError(
-                    "agent_semantic_relationship_fields_invalid:"
-                    f"{assessment_index}:{relationship_index}"
+                reject(
+                    assessment_index,
+                    relationship_index,
+                    raw if isinstance(raw, dict) else {},
+                    "PROVIDER_RELATIONSHIP_FIELDS_INVALID",
                 )
+                if isinstance(raw, dict):
+                    rejections[-1]["provider_relationship_keys"] = sorted(
+                        str(key) for key in raw
+                    )
+                continue
             interface_id = _text(raw.get("interface_id"))
             if interface_id not in interfaces:
                 rejected_invalid_identity += 1
@@ -2148,32 +2173,44 @@ def enrich_knowledge_asset_with_agent_relationships(
                 continue
             try:
                 confidence = float(raw.get("confidence"))
-            except (TypeError, ValueError) as exc:
-                raise AgentSemanticLinkerError(
-                    "agent_semantic_confidence_invalid:"
-                    f"{assessment_index}:{relationship_index}"
-                ) from exc
-            if not 0.0 <= confidence <= 1.0:
-                raise AgentSemanticLinkerError(
-                    "agent_semantic_confidence_invalid:"
-                    f"{assessment_index}:{relationship_index}"
+            except (TypeError, ValueError):
+                reject(
+                    assessment_index,
+                    relationship_index,
+                    raw,
+                    "PROVIDER_CONFIDENCE_INVALID",
                 )
+                continue
+            if not 0.0 <= confidence <= 1.0:
+                reject(
+                    assessment_index,
+                    relationship_index,
+                    raw,
+                    "PROVIDER_CONFIDENCE_INVALID",
+                )
+                continue
             rationale = _prompt_safe_text(raw.get("reason"), limit=600)
             if not rationale:
-                raise AgentSemanticLinkerError(
-                    "agent_semantic_reason_missing:"
-                    f"{assessment_index}:{relationship_index}"
+                reject(
+                    assessment_index,
+                    relationship_index,
+                    raw,
+                    "PROVIDER_RELATIONSHIP_REASON_MISSING",
                 )
+                continue
             evidence_refs = raw.get("evidence_refs")
             if (
                 not isinstance(evidence_refs, list)
                 or not evidence_refs
                 or any(not _text(ref) for ref in evidence_refs)
             ):
-                raise AgentSemanticLinkerError(
-                    "agent_semantic_evidence_refs_invalid:"
-                    f"{assessment_index}:{relationship_index}"
+                reject(
+                    assessment_index,
+                    relationship_index,
+                    raw,
+                    "PROVIDER_EVIDENCE_REFS_INVALID",
                 )
+                continue
             evidence_refs = list(dict.fromkeys(
                 _text(ref) for ref in evidence_refs
             ))
@@ -2444,10 +2481,32 @@ def enrich_knowledge_asset_with_agent_relationships(
                 "reason",
                 "relationships",
             }:
-                raise AgentSemanticLinkerError(
-                    "agent_semantic_transition_assessment_fields_invalid:"
-                    f"{assessment_index}"
+                # Same single-row isolation as the rule-assessment loop: one
+                # shape-invalid transition assessment is provider noise, and
+                # aborting here re-burned every paid window on every rerun.
+                observed_keys = (
+                    sorted(str(key) for key in raw_transition)
+                    if isinstance(raw_transition, dict)
+                    else []
                 )
+                rejections.append({
+                    "assessment_index": assessment_index,
+                    "relationship_index": -1,
+                    "reason_code": (
+                        "PROVIDER_TRANSITION_ASSESSMENT_FIELDS_INVALID"
+                    ),
+                    "provider_assessment_keys": observed_keys,
+                    "proposal_fingerprint": _fingerprint(
+                        {
+                            "transition_id": _text(
+                                raw_transition.get("transition_id")
+                                if isinstance(raw_transition, dict)
+                                else ""
+                            )
+                        }
+                    ),
+                })
+                continue
             transition_id = _text(raw_transition.get("transition_id"))
             tunit = transition_units_by_id.get(transition_id)
             accepted_for_assessment, handled = accept_relationships(
