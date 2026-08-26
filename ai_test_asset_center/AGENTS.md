@@ -1355,6 +1355,19 @@ Contract. This section pins only the package-local anchors:
   semaphore: nested pools must never multiply the declared concurrency limit.
   `qualibug.semantic-extraction-batch.v1` receipts bind target, attempted,
   completed, skipped and gap source counts plus scheduling/concurrency policy.
+  Extraction cache (2026-08-25, two-tier): product callers wire
+  `cache_directory` to the workspace-shared
+  `platform_workspace/_shared/semantic_extraction_cache` (`QUALIBUG_SEMANTIC_CACHE_DIR`
+  overrides). Tier 1 whole-source (source_id + text digest + prompt + MODEL)
+  replays a zero-edit rebuild with zero provider calls; Tier 2 chunk-level
+  (source_id + prompt + model + chunk-text digest) re-extracts ONLY edited
+  chunks on a partial revision — replayed candidates are re-stamped from the
+  CURRENT chunk position and re-validated deterministically, so locators stay
+  exact. Model identity in every key prevents stale replay after a model
+  upgrade. Deterministic malformed responses are banked per chunk and replayed
+  as `*_CACHED`; transport-class failures are never banked. The prior
+  whole-source-only key re-burned every chunk of any revised document and,
+  without a default directory, every build.
   Incremental refresh must preserve the same downstream closure as a full
   build: regex rules for the changed source come from its freshly parsed row;
   eligible LLM rules attach to that row before source replacement (never to a

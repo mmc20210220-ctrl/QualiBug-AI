@@ -915,6 +915,10 @@ class SemanticExtractionReceipt:
         self.rule_candidates_raw: list[dict[str, Any]] = []
         self.rule_candidates_validated: list[dict[str, Any]] = []
         self.rule_candidates_rejected: list[dict[str, Any]] = []
+        # Chunk-tier cache observability (Enterprise Understanding Lifecycle:
+        # unchanged chunks must be reused, and the reuse must be visible).
+        self.chunk_cache_hits: int = 0
+        self.chunk_cache_misses: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         receipt_id = "semantic-extraction:" + hashlib.sha256(
@@ -990,6 +994,87 @@ class SemanticExtractionReceipt:
         }
 
 
+def _fresh_enrich_and_validate(
+    raw_candidates: list[Any],
+    *,
+    chunk: dict[str, Any],
+    source_id: str,
+    model_name: str,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    """Enrich raw LLM candidates for THIS chunk's current position and run the
+    deterministic validators. Single code path for live extraction AND cache
+    replay: replayed candidates are re-validated against their CURRENT chunk
+    text/offset, so locators stay exact even when earlier edits shifted the
+    chunk inside the source."""
+    locator = _text(chunk.get("locator"))
+    enriched_raw: list[Any] = []
+    for candidate in raw_candidates:
+        if isinstance(candidate, dict):
+            copied = dict(candidate)
+            copied.pop("source_locator", None)
+            copied.pop("_chunk_start", None)
+            copied.pop("_chunk_end", None)
+            copied.setdefault("source_locator", locator)
+            copied["_chunk_start"] = chunk.get("start")
+            copied["_chunk_end"] = chunk.get("end")
+            enriched_raw.append(copied)
+        else:
+            enriched_raw.append(candidate)
+
+    validated, rejected = validate_semantic_candidates(
+        enriched_raw,
+        str(chunk.get("text") or ""),
+        source_id,
+        locator_prefix=locator,
+        source_offset=int(chunk.get("start") or 0),
+    )
+    # Business-rule candidates are validated by the deterministic rule
+    # validator (SPEC P0-3) — same entry point, same chunk budget, same
+    # rejection discipline; never a second extraction engine.
+    rule_raw = [
+        row
+        for row in enriched_raw
+        if isinstance(row, dict) and _text(row.get("kind")).lower() == "rule"
+    ]
+    if rule_raw:
+        rule_validated, rule_rejected = validate_rule_candidates(
+            rule_raw,
+            str(chunk.get("text") or ""),
+            source_id,
+            locator_prefix=locator,
+            source_offset=int(chunk.get("start") or 0),
+        )
+        for row in rule_validated:
+            row["extractor_receipt"] = {
+                "extractor_type": "llm",
+                "model": model_name,
+                "schema_version": "qualibug.rule-candidate.v1",
+            }
+        validated = [row for row in validated if _text(row.get("kind")) != "rule"]
+        validated.extend(rule_validated)
+        rejected = [row for row in rejected if _text(row.get("kind")) != "rule"]
+        rejected.extend(rule_rejected)
+    return (
+        [candidate for candidate in enriched_raw if isinstance(candidate, dict)],
+        validated,
+        rejected,
+    )
+
+
+def _strip_for_store(raw_candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Position-independent payload for the chunk cache: position fields are
+    re-stamped from the CURRENT chunk on every load."""
+    stripped: list[dict[str, Any]] = []
+    for candidate in raw_candidates:
+        if isinstance(candidate, dict):
+            copied = dict(candidate)
+            copied.pop("source_locator", None)
+            copied.pop("_chunk_start", None)
+            copied.pop("_chunk_end", None)
+            stripped.append(copied)
+    return stripped
+
+
 def run_semantic_extraction(
     text: str,
     *,
@@ -1000,6 +1085,7 @@ def run_semantic_extraction(
     existing_permissions: int = 0,
     force: bool = False,
     max_chunks: int | None = None,
+    cache_directory: str | None = None,
 ) -> SemanticExtractionReceipt:
     """Run semantic extraction without a default product-side breadth ceiling.
 
@@ -1007,12 +1093,26 @@ def run_semantic_extraction(
     is available to coverage-ledger callers that need semantic extraction for an
     uncovered span even when another part of the source produced a table or field.
 
-    Results are cached per (source_id, source-text digest) under the semantic
-    cache directory — successes are reused verbatim, failures are NOT retried
-    on every build (measured: 12 of 13 sources FAILED_LLM_ERROR every run,
-    each retried at minutes of latency; the model output is deterministic
-    until the environment changes). ``QUALIBUG_SEMANTIC_EXTRACTION_FORCE=1``
+    Results are cached at TWO content-addressed granularities under the
+    semantic cache directory — successes are reused verbatim, deterministic
+    malformed-response failures are banked per chunk, transport failures are
+    never cached (retry is legitimate). ``QUALIBUG_SEMANTIC_EXTRACTION_FORCE=1``
     bypasses the cache for diagnosis.
+
+    Tier 1 — whole source (source_id + text digest + prompt + model): a
+    zero-edit rebuild replays the entire receipt with zero provider calls.
+    Tier 2 — single chunk (source_id + prompt + model + chunk-text digest):
+    editing one paragraph of a PRD re-extracts ONLY that chunk; every
+    unchanged chunk is replayed from cache and re-validated deterministically
+    against its CURRENT position, so locators stay exact. This is the
+    Enterprise Understanding Lifecycle rule "unchanged blocks are reused" —
+    the previous whole-source-only key re-burned every chunk of a revised
+    document.
+
+    ``cache_directory`` explicitly wires persistence; when omitted,
+    ``QUALIBUG_SEMANTIC_CACHE_DIR`` decides (unset = in-memory only for that
+    build). Product callers pass their workspace-shared path so paid provider
+    responses survive across builds.
     """
     if max_chunks is not None:
         try:
@@ -1045,16 +1145,13 @@ def run_semantic_extraction(
     receipt.unprocessed_ranges = skipped
 
     # ── Extraction result cache ──
-    # Keyed by source identity + content digest: source edits change the key,
-    # LLM/model upgrades force a rebuild via the FORCE env (diagnostic only).
+    # Two tiers keyed by content + prompt + MODEL identity: a model upgrade
+    # must never replay old model output. ``QUALIBUG_SEMANTIC_EXTRACTION_FORCE=1``
+    # bypasses both tiers for diagnosis.
     _force_bypass = (
         str(os.environ.get("QUALIBUG_SEMANTIC_EXTRACTION_FORCE") or "").strip()
         in {"1", "true", "yes"}
     )
-    if not _force_bypass:
-        _cached = _load_extraction_cache(source_id, text, max_chunks=max_chunks)
-        if _cached is not None:
-            return _cached
 
     try:
         from ..llm_reasoning import _get_client
@@ -1092,6 +1189,29 @@ def run_semantic_extraction(
             source_id,
         )
         return receipt
+
+    _model_fingerprint = hashlib.sha256(
+        "|".join(
+            str(
+                getattr(client.config, key, None)
+            )
+            for key in ("model", "base_url", "temperature")
+        ).encode("utf-8")
+    ).hexdigest()[:16]
+    _prompt_fingerprint = hashlib.sha256(
+        f"{_SYSTEM_PROMPT}\n{_USER_PROMPT_TEMPLATE}".encode("utf-8")
+    ).hexdigest()[:16]
+
+    if not _force_bypass:
+        _cached = _load_extraction_cache(
+            source_id,
+            text,
+            max_chunks=max_chunks,
+            cache_directory=cache_directory,
+            model_fingerprint=_model_fingerprint,
+        )
+        if _cached is not None:
+            return _cached
 
     raw_all: list[dict[str, Any]] = []
     validated_all: list[dict[str, Any]] = []
@@ -1173,52 +1293,18 @@ def run_semantic_extraction(
                 "raw": [],
                 "validated": [],
                 "rejected": [],
+                "_cacheable": True,
+                "_raw_for_cache": [],
+                "_failure_status": "FAILED_MALFORMED_RESPONSE",
+                "_failure_error": str(chunk_receipt["error"]),
             }
 
-        enriched_raw: list[dict[str, Any]] = []
-        for candidate in raw_candidates:
-            if isinstance(candidate, dict):
-                copied = dict(candidate)
-                copied.setdefault("source_locator", locator)
-                copied["_chunk_start"] = chunk.get("start")
-                copied["_chunk_end"] = chunk.get("end")
-                enriched_raw.append(copied)
-            else:
-                enriched_raw.append(candidate)
-
-        validated, rejected = validate_semantic_candidates(
-            enriched_raw,
-            str(chunk.get("text") or ""),
-            source_id,
-            locator_prefix=locator,
-            source_offset=int(chunk.get("start") or 0),
+        enriched_raw, validated, rejected = _fresh_enrich_and_validate(
+            raw_candidates,
+            chunk=chunk,
+            source_id=source_id,
+            model_name=_text(getattr(client.config, "model", "")),
         )
-        # Business-rule candidates are validated by the deterministic rule
-        # validator (SPEC P0-3) — same entry point, same chunk budget, same
-        # rejection discipline; never a second extraction engine.
-        rule_raw = [
-            row
-            for row in enriched_raw
-            if isinstance(row, dict) and _text(row.get("kind")).lower() == "rule"
-        ]
-        if rule_raw:
-            rule_validated, rule_rejected = validate_rule_candidates(
-                rule_raw,
-                str(chunk.get("text") or ""),
-                source_id,
-                locator_prefix=locator,
-                source_offset=int(chunk.get("start") or 0),
-            )
-            for row in rule_validated:
-                row["extractor_receipt"] = {
-                    "extractor_type": "llm",
-                    "model": _text(getattr(client.config, "model", "")),
-                    "schema_version": "qualibug.rule-candidate.v1",
-                }
-            validated = [row for row in validated if _text(row.get("kind")) != "rule"]
-            validated.extend(rule_validated)
-            rejected = [row for row in rejected if _text(row.get("kind")) != "rule"]
-            rejected.extend(rule_rejected)
         chunk_receipt.update(
             {
                 "status": "COMPLETED",
@@ -1232,23 +1318,148 @@ def run_semantic_extraction(
             "chunk_index": chunk.get("index"),
             "receipt": chunk_receipt,
             "ok": True,
-            "raw": [candidate for candidate in enriched_raw if isinstance(candidate, dict)],
+            "raw": enriched_raw,
             "validated": validated,
             "rejected": rejected,
+            "_cacheable": True,
+            "_raw_for_cache": _strip_for_store(enriched_raw),
         }
 
-    if len(chunks) == 1:
-        results = [_process_chunk(chunks[0])]
-    else:
+    # ── Tier 2: chunk-level content-addressed cache ──
+    # A source edit re-extracts ONLY the changed chunks; unchanged chunks are
+    # replayed from cache and RE-VALIDATED against their current position
+    # (locators stay exact). Transport failures are never banked — retry is
+    # legitimate; deterministic malformed responses are.
+    _chunk_cache_dir = (
+        str(cache_directory or "").strip()
+        or str(os.environ.get("QUALIBUG_SEMANTIC_CACHE_DIR") or "").strip()
+    )
+
+    def _chunk_key(chunk: dict[str, Any]) -> str:
+        return _chunk_cache_key(
+            source_id,
+            str(chunk.get("text") or ""),
+            prompt_fingerprint=_prompt_fingerprint,
+            model_fingerprint=_model_fingerprint,
+        )
+
+    def _chunk_key_from_text(chunk_text: str) -> str:
+        return _chunk_cache_key(
+            source_id,
+            chunk_text,
+            prompt_fingerprint=_prompt_fingerprint,
+            model_fingerprint=_model_fingerprint,
+        )
+
+    def _replay_cached_chunk(entry: dict[str, Any], chunk: dict[str, Any]) -> dict[str, Any] | None:
+        status = _text(entry.get("status"))
+        locator = _text(chunk.get("locator"))
+        base_receipt = {
+            "chunk_index": chunk.get("index"),
+            "start": chunk.get("start"),
+            "end": chunk.get("end"),
+            "locator": locator,
+            "status": f"{status}_CACHED",
+            "model": _text(entry.get("model")),
+        }
+        if status == "COMPLETED":
+            raw_entry = entry.get("raw")
+            if not isinstance(raw_entry, list):
+                return None
+            enriched_raw, validated, rejected = _fresh_enrich_and_validate(
+                raw_entry,
+                chunk=chunk,
+                source_id=source_id,
+                model_name=_text(entry.get("model")),
+            )
+            base_receipt.update({
+                "raw_count": len(enriched_raw),
+                "validated_count": len(validated),
+                "rejected_count": len(rejected),
+            })
+            return {
+                "chunk_index": chunk.get("index"),
+                "receipt": base_receipt,
+                "ok": True,
+                "raw": enriched_raw,
+                "validated": validated,
+                "rejected": rejected,
+            }
+        if status == "FAILED_MALFORMED_RESPONSE":
+            base_receipt["error"] = _text(entry.get("error"))
+            return {
+                "chunk_index": chunk.get("index"),
+                "receipt": base_receipt,
+                "ok": False,
+                "raw": [],
+                "validated": [],
+                "rejected": [],
+            }
+        return None
+
+    cached_chunk_results: dict[int, dict[str, Any]] = {}
+    pending_chunks: list[dict[str, Any]] = []
+    for chunk in chunks:
+        if _force_bypass:
+            pending_chunks.append(chunk)
+            continue
+        entry = _load_chunk_cache(_chunk_cache_dir, _chunk_key(chunk))
+        if entry is not None:
+            replayed = _replay_cached_chunk(entry, chunk)
+        else:
+            replayed = None
+        if replayed is not None:
+            key = int(chunk.get("index") or 0)
+            cached_chunk_results[key] = replayed
+            receipt.chunk_cache_hits += 1
+        else:
+            pending_chunks.append(chunk)
+            receipt.chunk_cache_misses += 1
+
+    if len(pending_chunks) == 1:
+        results = [_process_chunk(pending_chunks[0])]
+    elif pending_chunks:
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
         with ThreadPoolExecutor(max_workers=_chunk_worker_count) as _pool:
-            _futures = [_pool.submit(_process_chunk, chunk) for chunk in chunks]
+            _futures = [_pool.submit(_process_chunk, chunk) for chunk in pending_chunks]
             results = [f.result() for f in as_completed(_futures)]
+    else:
+        results = []
 
-    # Re-order by chunk index for deterministic receipts and candidate order.
-    results.sort(key=lambda row: (row.get("chunk_index") is None, row.get("chunk_index") or 0))
-    for outcome in results:
+    # Bank deterministic per-chunk outcomes so a rebuild never re-pays them.
+    if not _force_bypass and _chunk_cache_dir:
+        for outcome in results:
+            if outcome.get("_cacheable") is not True:
+                continue
+            chunk_text = ""
+            for chunk in pending_chunks:
+                if int(chunk.get("index") or 0) == int(outcome.get("chunk_index") or 0):
+                    chunk_text = str(chunk.get("text") or "")
+                    break
+            payload: dict[str, Any]
+            if outcome.get("ok"):
+                payload = {
+                    "status": "COMPLETED",
+                    "model": _text(getattr(client.config, "model", "")),
+                    "raw": outcome.get("_raw_for_cache") or [],
+                }
+            else:
+                failure_status = _text(outcome.get("_failure_status"))
+                if failure_status != "FAILED_MALFORMED_RESPONSE":
+                    continue  # transport-class failure: retry next build
+                payload = {
+                    "status": failure_status,
+                    "model": _text(getattr(client.config, "model", "")),
+                    "error": _text(outcome.get("_failure_error")),
+                }
+            _store_chunk_cache(_chunk_cache_dir, _chunk_key_from_text(chunk_text), payload)
+
+    # Re-order ALL outcomes (cache replays + freshly extracted) by chunk index
+    # for deterministic receipts and candidate order.
+    all_outcomes = list(cached_chunk_results.values()) + list(results)
+    all_outcomes.sort(key=lambda row: (row.get("chunk_index") is None, row.get("chunk_index") or 0))
+    for outcome in all_outcomes:
         receipt.chunks_attempted += 1
         chunk_receipt = outcome["receipt"]
         if not outcome["ok"]:
@@ -1342,6 +1553,8 @@ def run_semantic_extraction(
             text,
             receipt,
             max_chunks=max_chunks,
+            cache_directory=cache_directory,
+            model_fingerprint=_model_fingerprint,
         )
     return receipt
 
@@ -1351,6 +1564,7 @@ def run_semantic_extraction_batch(
     *,
     max_workers: int = _SEMANTIC_PROVIDER_CONCURRENCY_LIMIT,
     max_chunks_per_source: int | None = None,
+    cache_directory: str | None = None,
 ) -> tuple[
     list[tuple[dict[str, Any], SemanticExtractionReceipt]],
     dict[str, Any],
@@ -1377,6 +1591,7 @@ def run_semantic_extraction_batch(
             source_id=_text(source.get("source_id")),
             filename=_text(source.get("original_name") or source.get("filename")),
             max_chunks=max_chunks_per_source,
+            cache_directory=cache_directory,
         )
 
     if not target_rows:
@@ -1437,16 +1652,25 @@ def _extraction_cache_path(
     text: str,
     *,
     max_chunks: int | None,
+    cache_directory: str | None = None,
+    model_fingerprint: str = "",
 ) -> Path | None:
-    """Cache file for (source_id, text digest, prompt fingerprint).
+    """Cache file for (source_id, text digest, prompt fingerprint, model).
 
     The prompt is a first-class extraction variable: changing the system/user
     prompt changes what the model should recall, so a cache key that ignores it
     would return stale receipts after a prompt edit (the measured "changed the
-    prompt, output unchanged" failure). The prompt fingerprint is folded into
-    the digest so any prompt change naturally invalidates prior entries.
+    prompt, output unchanged" failure). The prompt AND the model identity are
+    folded into the digest so either change naturally invalidates prior
+    entries — a model upgrade must never replay old model output.
+
+    ``cache_directory`` (product callers pass their workspace-shared path)
+    wins; otherwise ``QUALIBUG_SEMANTIC_CACHE_DIR`` decides; unset disables
+    persistence for that build.
     """
-    cache_root = str(os.environ.get("QUALIBUG_SEMANTIC_CACHE_DIR") or "").strip()
+    cache_root = str(cache_directory or "").strip() or str(
+        os.environ.get("QUALIBUG_SEMANTIC_CACHE_DIR") or ""
+    ).strip()
     if not cache_root:
         return None
     import hashlib as _hashlib
@@ -1455,9 +1679,59 @@ def _extraction_cache_path(
         f"{_SYSTEM_PROMPT}\n{_USER_PROMPT_TEMPLATE}".encode("utf-8")
     ).hexdigest()[:16]
     digest = _hashlib.sha256(
-        f"{source_id}\n{text}\n{prompt_fingerprint}\nmax_chunks={max_chunks}".encode("utf-8")
+        f"v2:{source_id}\n{text}\n{prompt_fingerprint}\n{model_fingerprint}\nmax_chunks={max_chunks}".encode("utf-8")
     ).hexdigest()
     return Path(cache_root) / "semantic_extraction" / f"{digest}.json"
+
+
+def _chunk_cache_key(
+    source_id: str,
+    chunk_text: str,
+    *,
+    prompt_fingerprint: str,
+    model_fingerprint: str,
+) -> str:
+    import hashlib as _hashlib
+
+    return _hashlib.sha256(
+        f"{source_id}\n{prompt_fingerprint}\n{model_fingerprint}\n"
+        f"{_hashlib.sha256(str(chunk_text or '').encode('utf-8')).hexdigest()}"
+        .encode("utf-8")
+    ).hexdigest()
+
+
+def _load_chunk_cache(
+    cache_directory: str | None,
+    key: str,
+) -> dict[str, Any] | None:
+    if not cache_directory:
+        return None
+    path = Path(cache_directory) / "semantic_extraction_chunks" / f"{key}.json"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return payload if isinstance(payload, dict) and payload.get("status") else None
+
+
+def _store_chunk_cache(
+    cache_directory: str | None,
+    key: str,
+    payload: dict[str, Any],
+) -> None:
+    if not cache_directory:
+        return
+    path = Path(cache_directory) / "semantic_extraction_chunks" / f"{key}.json"
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_suffix(".tmp")
+        temporary.write_text(
+            json.dumps(payload, ensure_ascii=False, default=str),
+            encoding="utf-8",
+        )
+        os.replace(temporary, path)
+    except OSError:
+        logger.warning("Semantic extraction chunk-cache write failed (%s…)", key[:12])
 
 
 def _load_extraction_cache(
@@ -1465,8 +1739,16 @@ def _load_extraction_cache(
     text: str,
     *,
     max_chunks: int | None,
+    cache_directory: str | None = None,
+    model_fingerprint: str = "",
 ) -> SemanticExtractionReceipt | None:
-    path = _extraction_cache_path(source_id, text, max_chunks=max_chunks)
+    path = _extraction_cache_path(
+        source_id,
+        text,
+        max_chunks=max_chunks,
+        cache_directory=cache_directory,
+        model_fingerprint=model_fingerprint,
+    )
     if path is None or not path.is_file():
         return None
     try:
@@ -1491,8 +1773,16 @@ def _store_extraction_cache(
     receipt: SemanticExtractionReceipt,
     *,
     max_chunks: int | None,
+    cache_directory: str | None = None,
+    model_fingerprint: str = "",
 ) -> None:
-    path = _extraction_cache_path(source_id, text, max_chunks=max_chunks)
+    path = _extraction_cache_path(
+        source_id,
+        text,
+        max_chunks=max_chunks,
+        cache_directory=cache_directory,
+        model_fingerprint=model_fingerprint,
+    )
     if path is None:
         return
     try:

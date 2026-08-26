@@ -1026,6 +1026,10 @@ def build_enterprise_business_knowledge_asset(
         _sem_results, _batch_receipt = run_semantic_extraction_batch(
             _sem_targets,
             max_chunks_per_source=_max_chunks,
+            cache_directory=(
+                str(os.environ.get("QUALIBUG_SEMANTIC_CACHE_DIR") or "").strip()
+                or str(Path(root) / "platform_workspace" / "_shared" / "semantic_extraction_cache")
+            ),
         )
         semantic_receipts.append(_batch_receipt)
         for _source, _sem_receipt in _sem_results:

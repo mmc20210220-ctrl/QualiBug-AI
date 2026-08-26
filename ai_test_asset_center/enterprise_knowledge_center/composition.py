@@ -1197,9 +1197,15 @@ def _incremental_run_semantic_extraction(
     max_chunks = options.get("semantic_max_chunks_per_source")
     if max_chunks in (None, ""):
         max_chunks = None
+    # Operator env wins; otherwise persist paid provider responses in the
+    # workspace-shared cache so rebuilds re-extract only changed chunks.
+    _semantic_cache_dir = str(os.environ.get("QUALIBUG_SEMANTIC_CACHE_DIR") or "").strip() or str(
+        Path(root) / "platform_workspace" / "_shared" / "semantic_extraction_cache"
+    )
     results, batch_receipt = run_semantic_extraction_batch(
         targets,
         max_chunks_per_source=max_chunks,
+        cache_directory=_semantic_cache_dir,
     )
     receipts.append(batch_receipt)
     for _, receipt in results:
