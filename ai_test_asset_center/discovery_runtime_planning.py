@@ -138,6 +138,43 @@ def _target_service_name_from_base_url(base_url: str) -> str:
     return _SERVICE_PORT_MAP.get(port, "")
 
 
+def _hypothesis_content_key(obligation: dict[str, Any]) -> str:
+    """Content identity for a reasoner-minted obligation.
+
+    Two mints that agree on family + operations + actors + full source
+    provenance + the exact Behavior IR reference set + title are THE SAME
+    test surface regardless of their freshly generated ids. Measured
+    (CMP_f9c8b621 RUN_0b9157bc): GET /api/cart/items alone carried 5,201
+    distinct-id obligations over only 216 actor-pair tuples — ~24 byte-equal
+    re-mints per surface — because the previous dedupe keyed solely on
+    ``obligation_id``, which every mint regenerates.
+    """
+    def _sig(values: Any) -> list[str]:
+        return sorted(_text(v) for v in _list(values))
+
+    src_rows = sorted(
+        f"{_text(s.get('kind'))}:{_text(s.get('locator'))}"
+        for s in _list(obligation.get("source_refs"))
+        if isinstance(s, dict)
+    )
+    parts = [
+        "fam:" + _text(obligation.get("risk_family")),
+        "ops:" + "|".join(_sig(obligation.get("operation_refs"))),
+        "act:"
+        + "|".join(
+            _sig(obligation.get("actor_refs"))
+            or _sig(obligation.get("required_actors"))
+        ),
+        "src:" + "|".join(src_rows),
+        "ir:" + "|".join(_sig(obligation.get("behavior_ir_refs"))),
+        "t:"
+        + _text(obligation.get("title") or obligation.get("summary"))[:200],
+    ]
+    import hashlib as _hashlib
+
+    return _hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
+
+
 def _apply_mainline_reasoner_hypotheses(
     *,
     hypotheses: list[dict],
@@ -167,6 +204,15 @@ def _apply_mainline_reasoner_hypotheses(
         _text(o.get("obligation_id")) for o in obligations if isinstance(o, dict)
     }
     _reasoner_obligations = []
+    # Seed content keys with the EXISTING pool so re-mints across planning
+    # rounds / REUSED replays collapse against what is already there, not
+    # only against siblings inside this one bridge batch.
+    _seen_content_keys: set[str] = {
+        _hypothesis_content_key(o)
+        for o in obligations
+        if isinstance(o, dict)
+    }
+    _content_duplicates_collapsed = 0
     for _r_obl in _list(_adapted.get("obligations")):
         if not isinstance(_r_obl, dict):
             continue
@@ -177,10 +223,25 @@ def _apply_mainline_reasoner_hypotheses(
             and _text(_r_obl.get("obligation_id")) in _existing_ids
         ):
             continue
+        _content_key = _hypothesis_content_key(_r_obl)
+        if _content_key in _seen_content_keys:
+            _content_duplicates_collapsed += 1
+            continue
+        _seen_content_keys.add(_content_key)
         _reasoner_obligations.append(_r_obl)
         _existing_ids.add(_text(_r_obl.get("obligation_id")))
     obligations.extend(_reasoner_obligations)
     report["obligations_added"] = len(_reasoner_obligations)
+    if _content_duplicates_collapsed:
+        # Byte-equal re-mints of one test surface must be visible, never a
+        # silent shrink — the count rides the receipt and the plan trace.
+        report["content_duplicates_collapsed"] = _content_duplicates_collapsed
+        _planning_logger.warning(
+            "[plan-trace] reasoner bridge collapsed %d content-duplicate "
+            "obligations (%d unique surfaces kept)",
+            _content_duplicates_collapsed,
+            len(_reasoner_obligations),
+        )
     report["bridge_funnel"] = {
         key: _bridge_funnel.get(key)
         for key in (
