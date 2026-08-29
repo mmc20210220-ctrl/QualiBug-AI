@@ -620,6 +620,13 @@ def derive_unit_execution_arms(
 # QUALIBUG_AGENT_LINKER_REUSE_DISABLED=1.
 
 _AGENT_LINKER_REUSE_STATE_SCHEMA = "qualibug.agent-linker-reuse-state.v1"
+# An account-level provider refusal (401/402/403) recorded against the linker
+# fingerprint. It is a *reusable terminal state*, not a retryable failure: as
+# long as the source fingerprint is unchanged the answer cannot change, so
+# re-asking is pure waste (Enterprise Understanding Lifecycle Contract:
+# unchanged material must not be resent to an LLM). Any source edit moves the
+# fingerprint and lifts the block automatically.
+_AGENT_LINKER_PROVIDER_UNAVAILABLE_STATUS = "PROVIDER_UNAVAILABLE"
 _AGENT_LINKER_VERIFIED_STATUSES = frozenset({
     "VERIFIED",
     "VERIFIED_WITH_REJECTIONS",
@@ -694,6 +701,48 @@ def _load_agent_linker_state(root: Path, project: str) -> dict[str, Any]:
     return raw if isinstance(raw, dict) else {}
 
 
+def _save_agent_linker_provider_unavailable_state(
+    root: Path,
+    project: str,
+    fingerprint: str,
+    *,
+    reason_code: str,
+    detail: str,
+) -> None:
+    """Record "the provider refused and cannot succeed" for this source state.
+
+    An account-level refusal (401/402/403) is recorded against the *linker
+    fingerprint* so that later runs on unchanged enterprise material skip the
+    enrichment entirely instead of paying for the same doomed calls again.
+    Best-effort: a write failure must never block planning — the next run
+    simply retries, which is the pre-existing behaviour.
+    """
+    try:
+        payload = {
+            "schema_version": _AGENT_LINKER_REUSE_STATE_SCHEMA,
+            "fingerprint": fingerprint,
+            "status": _AGENT_LINKER_PROVIDER_UNAVAILABLE_STATUS,
+            "persisted_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "relationships": [],
+            "receipt": {
+                "status": _AGENT_LINKER_PROVIDER_UNAVAILABLE_STATUS,
+                "reason_code": reason_code,
+                "detail": str(detail)[:300],
+                "provider_calls": 0,
+            },
+        }
+        path = _agent_linker_state_path(root, project)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".json.tmp")
+        tmp.write_text(
+            json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str),
+            encoding="utf-8",
+        )
+        tmp.replace(path)
+    except (OSError, TypeError, ValueError):
+        return
+
+
 def _enrich_with_agent_semantic_reuse_gate(
     asset: dict[str, Any],
     *,
@@ -730,6 +779,56 @@ def _enrich_with_agent_semantic_reuse_gate(
         )
         return reused, receipt
 
+    # Operator kill-switch for offline / out-of-balance runs: skip the agent
+    # semantic linker entirely (zero LLM calls) and degrade to no relationships.
+    # The linker is enrichment-only (proposes rule->interface intent); the
+    # rule-based oracle path does not depend on it, so a skipped linker must
+    # never block the scan or burn a paid provider call on a 402. Visible by
+    # design (fail-loud, never silent).
+    if (
+        str(os.environ.get("QUALIBUG_AGENT_LINKER_OFFLINE") or "")
+        .strip()
+        .lower()
+        in {"1", "true", "yes", "on"}
+    ):
+        _planning_logger.warning(
+            "[plan-trace] agent_link stage=skipped_offline reason=QUALIBUG_AGENT_LINKER_OFFLINE"
+        )
+        return dict(asset), {
+            "schema_version": AGENT_SEMANTIC_LINK_RECEIPT_SCHEMA,
+            "status": "SKIPPED",
+            "reason_code": "agent_semantic_linking_offline",
+            "accepted_relationship_count": 0,
+            "provider_calls": 0,
+        }
+
+    # A previous run already proved the provider refuses at the account level
+    # for EXACTLY this source state. Re-asking cannot produce a different
+    # answer, so skip instead of repeating the doomed calls (measured: 469
+    # rejected calls in one planning phase, repeated 7x). Any change to the
+    # enterprise material moves the fingerprint and lifts the block, so this
+    # never hides a real retry opportunity. Force one via
+    # QUALIBUG_AGENT_LINKER_REUSE_DISABLED=1.
+    if (
+        state.get("schema_version") == _AGENT_LINKER_REUSE_STATE_SCHEMA
+        and state.get("fingerprint") == fingerprint
+        and state.get("status") == _AGENT_LINKER_PROVIDER_UNAVAILABLE_STATUS
+    ):
+        _planning_logger.warning(
+            "[plan-trace] agent_link stage=skipped_provider_unavailable "
+            "fingerprint=%s reason=%s persisted_at=%s",
+            fingerprint[:16],
+            _dict(state.get("receipt")).get("reason_code"),
+            state.get("persisted_at_utc"),
+        )
+        return dict(asset), {
+            "schema_version": AGENT_SEMANTIC_LINK_RECEIPT_SCHEMA,
+            "status": "SKIPPED",
+            "reason_code": "agent_semantic_linking_provider_unavailable",
+            "accepted_relationship_count": 0,
+            "provider_calls": 0,
+        }
+
     # Cross-run unit-response persistence: without it every scan re-burns the
     # identical provider windows even when the enterprise input is unchanged
     # (the pass-level reuse gate below only replays VERIFIED passes, so a
@@ -740,11 +839,40 @@ def _enrich_with_agent_semantic_reuse_gate(
     default_cache_dir = str(
         Path(root) / "platform_workspace" / "_shared" / "semantic_link_cache"
     )
-    asset, receipt = enrich_knowledge_asset_with_agent_relationships(
-        asset,
-        cache_directory=os.environ.get("QUALIBUG_SEMANTIC_CACHE_DIR")
-        or default_cache_dir,
-    )
+    from .agent_semantic_linker import _is_unrecoverable_provider_error
+
+    try:
+        asset, receipt = enrich_knowledge_asset_with_agent_relationships(
+            asset,
+            cache_directory=os.environ.get("QUALIBUG_SEMANTIC_CACHE_DIR")
+            or default_cache_dir,
+        )
+    except Exception as _enrich_exc:
+        # Absorb ONLY an account-level refusal (401/402/403) and remember it
+        # against this fingerprint. Every other failure keeps its original
+        # semantics and propagates (fail loud, never silently degraded).
+        if not _is_unrecoverable_provider_error(_enrich_exc):
+            raise
+        _save_agent_linker_provider_unavailable_state(
+            root,
+            project,
+            fingerprint,
+            reason_code=f"provider_unrecoverable:{type(_enrich_exc).__name__}",
+            detail=str(_enrich_exc),
+        )
+        _planning_logger.warning(
+            "[plan-trace] agent_link stage=provider_unavailable_recorded "
+            "fingerprint=%s err=%s",
+            fingerprint[:16],
+            str(_enrich_exc)[:200],
+        )
+        return dict(asset), {
+            "schema_version": AGENT_SEMANTIC_LINK_RECEIPT_SCHEMA,
+            "status": "SKIPPED",
+            "reason_code": "agent_semantic_linking_provider_unavailable",
+            "accepted_relationship_count": 0,
+            "provider_calls": 0,
+        }
     elapsed_ms = int((time.perf_counter() - started) * 1000)
     _planning_logger.info(
         "[plan-trace] agent_link stage=executed elapsed_ms=%d status=%s accepted=%s windows=%s",

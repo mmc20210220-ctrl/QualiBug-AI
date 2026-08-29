@@ -608,6 +608,62 @@ def _complete_batch(
     ) from last_error
 
 
+# Account-level provider refusals: no remaining unit can succeed no matter how
+# many are left, so every further attempt is pure waste. Request-level failures
+# (429 rate limit, 5xx, timeouts) are deliberately absent — those stay on the
+# graceful-degradation path.
+_UNRECOVERABLE_PROVIDER_MARKERS = (
+    "insufficient balance",
+    "http 402",
+    "invalid api key",
+    "incorrect api key",
+    "http 401",
+    "http 403",
+)
+
+
+def _is_unrecoverable_provider_error(exc: BaseException) -> bool:
+    """True when the provider refusal is account-level and can never succeed.
+
+    Request-level failures (429 rate limit / 5xx / timeouts) return False so they
+    keep the graceful-degradation path instead of being treated as final.
+    """
+    message = str(exc).lower()
+    return any(marker in message for marker in _UNRECOVERABLE_PROVIDER_MARKERS)
+
+
+def _raise_if_provider_unrecoverable(
+    exc: BaseException, *, unit_kind: str
+) -> None:
+    """Abort the enrichment when the provider failure can never recover.
+
+    A transient provider hiccup (timeout, 5xx, rate limit) must degrade
+    gracefully: remaining units are still attempted, because another unit may
+    well succeed. A non-transient failure (401 invalid credential, 402
+    insufficient balance) cannot succeed for ANY remaining unit, so continuing
+    only burns the run.
+
+    Measured cost of not doing this: one planning phase spent ~12h re-attempting
+    every paged unit against a provider that had already refused with 402 —
+    and the whole enrichment was then repeated 7 more times (7 consecutive
+    ``enriched_asset_persisted`` writes), because each repetition failed the
+    same way. A 95.6 MB asset write is only ~5s, so the time was spent in the
+    doomed per-unit provider attempts, not in persistence.
+
+    Note this deliberately does NOT reuse `_is_transient_provider_error`: that
+    helper classifies every HTTP failure (including 429/500/503/timeouts) as
+    non-transient, so gating on it would abort the whole enrichment on a
+    routine blip. Only account-level refusals, which cannot succeed for any
+    unit no matter how many remain, justify aborting.
+    """
+    if not _is_unrecoverable_provider_error(exc):
+        return
+    raise AgentSemanticLinkerError(
+        f"agent_semantic_provider_unrecoverable:{unit_kind}:"
+        f"{type(exc).__name__}:{str(exc)[:300]}"
+    ) from exc
+
+
 # ---------------------------------------------------------------------------
 # Tier 1: deterministic structured candidate recall (no LLM)
 # ---------------------------------------------------------------------------
@@ -1834,6 +1890,9 @@ def enrich_knowledge_asset_with_agent_relationships(
                     "rule_ids": [unit["rule_id"] for unit in batch],
                 },
             }
+            # A doomed provider cannot succeed for any remaining batch, so stop
+            # here instead of walking every paged unit (fail fast).
+            _raise_if_provider_unrecoverable(exc, unit_kind="rule_batch")
             return
         try:
             _validate_rule_response_shape(response)
@@ -1847,6 +1906,19 @@ def enrich_knowledge_asset_with_agent_relationships(
                 },
             }
             return
+        # Persist paid provider output the moment it validates. Deferring the
+        # write to the post-run aggregation loop meant a later batch aborting
+        # the run (e.g. an account-level 402) discarded every earlier
+        # successful batch — measured: 2 provider calls paid for, 0 cache
+        # entries written. Every call must leave a reusable artifact, so the
+        # write belongs inside the batch that paid for it. Keys are
+        # content-addressed and distinct per unit, so the concurrent pool
+        # cannot race on the same entry.
+        _batch_units_by_rule = {unit["rule_id"]: unit for unit in batch}
+        for assessment in response["assessments"]:
+            _unit = _batch_units_by_rule.get(_text(assessment.get("rule_id")))
+            if _unit is not None:
+                cache.put(_unit["_cache_key"], assessment)
         _batch_results[index] = {
             "ok": {
                 "attempts": attempts,
@@ -1893,7 +1965,8 @@ def enrich_knowledge_asset_with_agent_relationships(
             rule_id = _text(assessment.get("rule_id"))
             unit = batch_units_by_rule.get(rule_id)
             if unit is not None:
-                cache.put(unit["_cache_key"], assessment)
+                # Cache write already happened inside ``_run_batch`` so an
+                # aborting later batch can never discard a paid earlier one.
                 responses_by_rule[rule_id] = assessment
 
     # --- state transitions: one dedicated unit, sent once, never per batch ---
@@ -1951,6 +2024,8 @@ def enrich_knowledge_asset_with_agent_relationships(
                         "reason_code": "provider_failure",
                         "error": str(exc)[:300],
                     })
+                    # Same fail-fast rule as the rule batches above.
+                    _raise_if_provider_unrecoverable(exc, unit_kind="transition")
                 else:
                     provider_attempt_count += attempts
                     provider_retry_count += retries

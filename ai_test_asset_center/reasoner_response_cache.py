@@ -30,9 +30,46 @@ _SUBDIR = "reasoner_engine"
 
 _MEMORY_CACHE: dict[str, str] = {}
 
+# Workspace fallback directory, set by the mainline once the scan root is known.
+# Without it the reasoner was the only cache layer in the product that stayed
+# off unless an operator exported QUALIBUG_SEMANTIC_CACHE_DIR by hand: the
+# semantic linker and the semantic extractor both fall back to
+# ``<root>/platform_workspace/_shared/...``, so every run paid for all 11
+# engine calls again while those two layers reused their work.
+_INJECTED_CACHE_DIRECTORY: str = ""
+
+
+def set_default_cache_directory(value: str | os.PathLike | None) -> None:
+    """Declare the workspace cache directory for the current run.
+
+    Takes effect only when the operator did not pin
+    ``QUALIBUG_SEMANTIC_CACHE_DIR``; an explicit operator declaration always
+    wins so a shared cache root stays under operator control.
+    """
+    global _INJECTED_CACHE_DIRECTORY
+    _INJECTED_CACHE_DIRECTORY = str(value or "").strip()
+
+
+def _package_relative_cache_dir() -> str:
+    """Last-resort fallback: the workspace sibling of this package.
+
+    Only used when neither the operator nor the mainline declared a directory,
+    so a source checkout still persists cross-run reuse instead of silently
+    re-paying for every engine call.
+    """
+    try:
+        root = Path(__file__).resolve().parent.parent
+        return str(root / "platform_workspace" / "_shared" / "reasoner_cache")
+    except OSError:
+        return ""
+
 
 def _cache_dir() -> Path | None:
     raw = os.environ.get(CACHE_DIRECTORY_ENV, "").strip()
+    if not raw:
+        raw = _INJECTED_CACHE_DIRECTORY
+    if not raw:
+        raw = _package_relative_cache_dir()
     if not raw:
         return None
     try:

@@ -3,9 +3,49 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections import OrderedDict
 from typing import Any
 
 from .observed_product_scan_protocol import find_evaluator_private_context_paths
+
+
+# The evaluator-private scan walks the entire nested structure handed to
+# ``build_agent_intent_plan``. ``behavior_ir`` is by far the larger half of that
+# structure, and it is read-only on this path (Behavior IR contract, AGENTS.md),
+# yet it was re-scanned from scratch on every obligation round — py-spy sampling
+# measured ``find_evaluator_private_context_paths`` at 64.1% of inclusive
+# execution CPU. Its scan result is therefore cached; the map is bounded so
+# retained references stay finite.
+_BEHAVIOR_IR_PRIVATE_SCAN_CACHE: "OrderedDict[int, tuple[Any, tuple[str, ...], tuple[int, frozenset]]]" = OrderedDict()
+_BEHAVIOR_IR_PRIVATE_SCAN_CACHE_MAX = 8
+
+
+def _scan_behavior_ir_private_paths(behavior_ir: dict[str, Any]) -> list[str]:
+    """Recursive scan of ``behavior_ir`` for evaluator-private keys, cached.
+
+    Paths are returned relative to ``behavior_ir`` (``$.<key>``); the caller
+    re-prefixes them so the joined result matches a single full scan.
+
+    Shape guard: this is a security boundary check, so the cache must never
+    silently return a stale verdict. Besides the identity comparison (which
+    rules out ``id()`` reuse) each entry records the top-level shape, so an
+    in-place add/remove/rename of any top-level key invalidates the entry
+    instead of being served from cache. Deep in-place edits remain covered by
+    the Behavior IR read-only contract documented in AGENTS.md.
+    """
+    source = behavior_ir if isinstance(behavior_ir, dict) else {}
+    shape = (len(source), frozenset(source.keys()))
+    key = id(source)
+    entry = _BEHAVIOR_IR_PRIVATE_SCAN_CACHE.get(key)
+    if entry is not None and entry[0] is source and entry[2] == shape:
+        return list(entry[1])
+    found = find_evaluator_private_context_paths(source)
+    _BEHAVIOR_IR_PRIVATE_SCAN_CACHE[key] = (source, tuple(found), shape)
+    while len(_BEHAVIOR_IR_PRIVATE_SCAN_CACHE) > _BEHAVIOR_IR_PRIVATE_SCAN_CACHE_MAX:
+        _BEHAVIOR_IR_PRIVATE_SCAN_CACHE.popitem(last=False)
+    return found
+
+
 from .pipeline_slices import _ABS_MAX_SLICE_BUDGET
 from .real_id_resolver import normalize_path_placeholders
 
@@ -1063,12 +1103,24 @@ def build_agent_intent_plan(
 ) -> dict[str, Any]:
     """Bind planner intent to existing IR nodes and compiled experiment receipts."""
 
-    private_paths = find_evaluator_private_context_paths({
-        "adaptive_plan": adaptive_plan,
-        "obligations": obligations,
-        "experiments": experiments_by_obligation,
-        "behavior_ir": behavior_ir,
-    })
+    # ``behavior_ir`` is the run-stable, read-only half of this structure, so it
+    # is scanned once and cached; the per-round inputs are always scanned fresh.
+    # Cached paths are re-prefixed and the union re-sorted/deduped so the
+    # reported paths are byte-identical to a single full scan of the combined
+    # structure (this is a security boundary check — nothing may be skipped).
+    private_paths = sorted(
+        set(
+            find_evaluator_private_context_paths({
+                "adaptive_plan": adaptive_plan,
+                "obligations": obligations,
+                "experiments": experiments_by_obligation,
+            })
+        )
+        | {
+            f"$.behavior_ir{path[1:]}" if path.startswith("$") else f"$.behavior_ir.{path}"
+            for path in _scan_behavior_ir_private_paths(behavior_ir)
+        }
+    )
     if private_paths:
         raise AgentIntentError(
             "evaluator_private_context_forbidden:" + ",".join(private_paths)

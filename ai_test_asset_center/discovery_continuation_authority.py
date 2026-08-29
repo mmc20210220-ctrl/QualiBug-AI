@@ -184,10 +184,20 @@ def _consume_pending_obligation_rounds(
         oid: _text(exp.get("experiment_id"))
         for oid, exp in experiments.items()
     }
+    # close_capture MUST stay False here. Closing the capture at the *start* of
+    # a continuation drains the resume authority and makes
+    # ``_capture_continuation_execution_receipts`` silently drop every receipt
+    # produced by the rounds executed below (experiment_executor.py returns
+    # early for closed campaigns). The next continuation domain then reads an
+    # empty terminal-done set and re-dispatches obligations that already ran —
+    # measured at 7.6x duplicate executions (6022 executions for 792 distinct
+    # experiments, up to 9 runs each) with `schedule ... deferred=<n>` stuck at
+    # the same value across consecutive rounds. Capture is released by
+    # finalization (``clear_continuation_retry_receipts``), not here.
     captured_initial_rows = consume_continuation_execution_receipts(
         campaign_id,
         allowed_experiment_ids_by_obligation=allowed_experiment_ids,
-        close_capture=True,
+        close_capture=False,
     )
     captured_terminal_done_ids: set[str] = set()
     initial_requeue_ids: list[str] = []

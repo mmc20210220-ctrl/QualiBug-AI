@@ -465,8 +465,56 @@ class AutonomousDiscoveryEngine:
             documents=prd_text[:8000],
             api_contracts=api_spec_text[:8000],
             current_matches=context_hint)
+        # Content-addressed Reader cache: the Reader prompt is a pure function of
+        # (PRD text + API text + structured hints + model + temperature), so
+        # unchanged enterprise material must not be re-sent to the LLM on every
+        # run (Enterprise Understanding Lifecycle Contract). Provider failures
+        # raise before the store below, so only real responses are ever cached,
+        # and any cache-layer error degrades to a normal call (fail-open).
+        # Absolute import (this module lives in the ``discovery_engine``
+        # subpackage, the cache module sits one level up) and deliberately
+        # outside the try below: an import failure is a code defect and must
+        # surface, not silently degrade into "cache always misses".
+        from ai_test_asset_center.reasoner_response_cache import (
+            cache_key as _reader_cache_key,
+            load as _reader_cache_load,
+            store as _reader_cache_store,
+        )
+
+        _reader_cfg = self.client.config
+        _reader_model = str(getattr(_reader_cfg, "model", "") or "")
+        _reader_temperature = str(getattr(_reader_cfg, "temperature", "") or "")
+        _reader_key = ""
+        _cached_raw = None
+        try:
+            _reader_key = _reader_cache_key(
+                "stage_read",
+                prompt,
+                READER_SYSTEM_PROMPT,
+                _reader_model,
+                _reader_temperature,
+            )
+            _cached_raw = _reader_cache_load(_reader_key)
+        except Exception:
+            _reader_key = ""
+            _cached_raw = None
+        if _cached_raw:
+            try:
+                return self.client._parse_json(_cached_raw)
+            except Exception:
+                pass  # unusable entry → fall through to a real call
         try:
             raw = self.client._chat(prompt, system_prompt=READER_SYSTEM_PROMPT)
+            if _reader_key and raw:
+                try:
+                    _reader_cache_store(
+                        _reader_key,
+                        str(raw),
+                        model=_reader_model,
+                        temperature=_reader_temperature,
+                    )
+                except Exception:
+                    pass
             return self.client._parse_json(raw)
         except Exception as e:
             # Truncation salvage: when the LLM output is cut mid-object (e.g. by a
