@@ -547,7 +547,12 @@ class MoneyOracle(BaseOracle):
             if isinstance(val, str):
                 try:
                     return float(val.strip())
-                except (ValueError, TypeError):
+                except (ValueError, TypeError) as _conv_exc:
+                    # Expected: observed fields are not always numeric.
+                    _log.debug(
+                        "%s: non-numeric value for %r skipped (%s)",
+                        type(self).__name__, name, type(_conv_exc).__name__,
+                    )
                     continue
         return None
 
@@ -569,9 +574,14 @@ class MoneyOracle(BaseOracle):
                         try:
                             if float(val) < 0:
                                 return OracleResult(False, "MoneyOracle", "L3", "negative_amount",
-                                    f"{field} >= 0", f"{field} = {val}", "P0", 0.95, f"负金额: {field}={val}")
-                        except (ValueError, TypeError, AttributeError):
-                            pass  # non-numeric value — can't compare, skip
+                                    f"{field} >= 0", f"{field} = {val}", "P0", 0.95,                                     f"负金额: {field}={val}")
+                        except (ValueError, TypeError, AttributeError) as _conv_exc:
+                            # Expected: MoneyOracle scans every candidate money
+                            # field, and not all of them are numeric.
+                            _log.debug(
+                                "MoneyOracle: non-numeric %s=%r skipped (%s)",
+                                field, val, type(_conv_exc).__name__,
+                            )
 
         # Successful pay/refund whose request amount disagrees with the resource
         # payable/paid field — classic money_quantity_conservation defect.
@@ -683,9 +693,12 @@ class InventoryOracle(BaseOracle):
                         try:
                             if float(val) < 0:
                                 return OracleResult(False, "InventoryOracle", "L3", "negative_stock",
-                                    f"{field} >= 0", f"{field} = {val}", "P0", 0.95, f"负库存: {field}={val}")
-                        except (ValueError, TypeError, AttributeError):
-                            pass  # non-numeric value — skip
+                                    f"{field} >= 0", f"{field} = {val}", "P0", 0.95,                                     f"负库存: {field}={val}")
+                        except (ValueError, TypeError, AttributeError) as _conv_exc:
+                            _log.debug(
+                                "InventoryOracle: non-numeric %s=%r skipped (%s)",
+                                field, val, type(_conv_exc).__name__,
+                            )
         if snapshots and hasattr(snapshots, "diff"):
             for field, change in getattr(snapshots, "diff", {}).items():
                 if "stock" in field.lower():
@@ -838,9 +851,12 @@ class QuotaOracle(BaseOracle):
                         try:
                             if float(val) < 0:
                                 return OracleResult(False, "QuotaOracle", "L3", "quota_negative",
-                                    f"{field} >= 0", f"{field} = {val}", "P0", 0.90, f"配额异常: {field}={val}")
-                        except (ValueError, TypeError, AttributeError):
-                            pass  # non-numeric value — skip
+                                    f"{field} >= 0", f"{field} = {val}", "P0", 0.90,                                     f"配额异常: {field}={val}")
+                        except (ValueError, TypeError, AttributeError) as _conv_exc:
+                            _log.debug(
+                                "QuotaOracle: non-numeric %s=%r skipped (%s)",
+                                field, val, type(_conv_exc).__name__,
+                            )
         return OracleResult(True, "QuotaOracle", "L3")
 
 
@@ -861,8 +877,14 @@ class TemporalOracle(BaseOracle):
                             if dt < datetime.datetime.now():
                                 return OracleResult(False, "TemporalOracle", "L3", "expired_entity",
                                     "过期实体不应返回", f"{field}={val}", "P1", 0.85)
-                        except (ValueError, TypeError, AttributeError):
-                            pass  # non-numeric value — skip
+                        except (ValueError, TypeError, AttributeError) as _dt_exc:
+                            # Not a parseable ISO timestamp. The old comment said
+                            # "non-numeric", which was wrong — this branch is
+                            # date parsing, not number parsing.
+                            _log.debug(
+                                "TemporalOracle: unparseable timestamp %s=%r skipped (%s)",
+                                field, val, type(_dt_exc).__name__,
+                            )
         return OracleResult(True, "TemporalOracle", "L3")
 
 
@@ -927,8 +949,12 @@ class CouponOracle(BaseOracle):
                         f"订单金额需 >= {minimum}", f"valid=true, totalAmount={total_amount}", "P0", 0.95,
                         "未达到优惠券门槛金额，但校验接口仍返回 valid=true"
                     )
-            except (TypeError, ValueError):
-                pass
+            except (TypeError, ValueError) as _cmp_exc:
+                _log.debug(
+                    "CouponOracle: threshold comparison skipped, "
+                    "minimum=%r total_amount=%r (%s)",
+                    minimum, total_amount, type(_cmp_exc).__name__,
+                )
         return OracleResult(True, "CouponOracle", "L3")
 
 
@@ -1069,7 +1095,16 @@ def _contract_activation_for_business_oracle(scenario: dict) -> bool:
     try:
         from .contract_oracles import scenario_has_contract_activation
         return scenario_has_contract_activation(scenario if isinstance(scenario, dict) else {})
-    except Exception:
+    except Exception as _probe_exc:
+        # False means "no contract activation", so a failure here silently
+        # switches the business oracle off: no findings are produced and the
+        # run looks clean. That is invisible breadth loss (AGENTS.md principle
+        # 14) — the one failure mode a preflight must never hide.
+        _log.warning(
+            "contract activation probe failed; business oracle will not "
+            "activate for this scenario (%s): %s",
+            type(_probe_exc).__name__, _probe_exc,
+        )
         return False
 
 
@@ -1231,8 +1266,11 @@ class AuditOracle(BaseOracle):
                 try:
                     if int(audit_after) > int(audit_before):
                         audit_growth_detected = True
-                except (ValueError, TypeError):
-                    pass
+                except (ValueError, TypeError) as _audit_exc:
+                    _log.debug(
+                        "audit log growth comparison skipped, before=%r after=%r (%s)",
+                        audit_before, audit_after, type(_audit_exc).__name__,
+                    )
 
         # Verdict logic (audit endpoint presence takes priority over trace_id)
         if audit_steps or audit_growth_detected:
@@ -1301,8 +1339,11 @@ class NotificationOracle(BaseOracle):
                 try:
                     if int(notif_after) > int(notif_before):
                         notify_growth = True
-                except (ValueError, TypeError):
-                    pass
+                except (ValueError, TypeError) as _notif_exc:
+                    _log.debug(
+                        "notification growth comparison skipped, before=%r after=%r (%s)",
+                        notif_before, notif_after, type(_notif_exc).__name__,
+                    )
 
         # Verdict
         if has_notify or notify_in_response or notify_growth:

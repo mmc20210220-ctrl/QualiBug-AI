@@ -39,7 +39,17 @@ PRODUCT_PACKAGE = REPO_ROOT / "ai_test_asset_center"
 # bodies, the truncated-parse fallback) use logger.debug so they cannot drown
 # real signals; actual degradations (cache store failure, a rule failing to
 # evaluate, salvage exhausted) use logger.warning.
-MAX_SILENT_EXCEPTION_HANDLERS = 1266
+# 1266 -> 1083: two separate moves, keep them straight when reading the number.
+#   (a) 1266 -> 1092 — the detector stopped over-reporting. Handlers that read
+#       the caught exception into their return value (e.g. `return {"ok": False,
+#       "error": str(exc)}`) are not silent; the caller receives structured
+#       evidence it can act on. 174 handlers were false positives. An inflated
+#       baseline is its own lie about coverage.
+#   (b) 1092 -> 1083 — oracle_engine.py cleared (9 handlers). The one that
+#       mattered: `_contract_activation_for_business_oracle` returned False on
+#       failure, silently switching the business oracle off with no findings and
+#       a clean-looking run (invisible breadth loss, AGENTS.md principle 14).
+MAX_SILENT_EXCEPTION_HANDLERS = 1083
 
 # A handler is credited as "observable" if its body calls something whose name
 # contains one of these fragments, or re-raises.  Matching on the callee name
@@ -82,6 +92,31 @@ def _has_signal(statements: list[ast.stmt]) -> bool:
     return False
 
 
+def _uses_exception(handler: ast.ExceptHandler) -> bool:
+    """True when the handler body actually reads the caught exception object.
+
+    ``except Exception as exc: return {"ok": False, "error": str(exc)}`` is not
+    a silent swallow: the failure is handed back to the caller as structured
+    data the caller can act on, which is strictly better than a log line.
+    Only a handler that binds the exception and then never reads it is really
+    destroying the evidence.
+
+    Without this rule the gate over-reports: ``runtime_connectivity_auth_preflight``
+    was flagged for all 11 handlers while every one of them returned
+    ``{"ok": False, "error": f"{type(exc).__name__}: {exc}"}``.  An inflated
+    baseline is its own kind of lie — it claims coverage of debt that does not
+    exist and hides the handlers that genuinely swallow.
+    """
+
+    name = handler.name
+    if not name:
+        return False
+    wrapper = ast.Module(body=list(handler.body), type_ignores=[])
+    return any(
+        isinstance(node, ast.Name) and node.id == name for node in ast.walk(wrapper)
+    )
+
+
 def _classify(handler: ast.ExceptHandler) -> str | None:
     """Return the swallow style, or None when the handler is observable."""
 
@@ -92,6 +127,8 @@ def _classify(handler: ast.ExceptHandler) -> str | None:
         value = body[0].value
         if value is None or (isinstance(value, ast.Constant) and value.value is None):
             return "bare return"
+    if _uses_exception(handler):
+        return None
     if _has_signal(handler.body):
         return None
     if all(isinstance(node, FLOW_ONLY) for node in body):
