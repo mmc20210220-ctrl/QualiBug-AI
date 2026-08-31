@@ -739,7 +739,21 @@ def _save_agent_linker_provider_unavailable_state(
             encoding="utf-8",
         )
         tmp.replace(path)
-    except (OSError, TypeError, ValueError):
+    except (OSError, TypeError, ValueError) as exc:
+        # A write failure must not block planning, but it must never be silent.
+        # On a live run every one of eight identical enrichments logged
+        # ``provider_unavailable_recorded`` and none logged ``skipped_...``,
+        # while the state file ended up written only once — consistent with
+        # repeated failed writes that this branch used to swallow. Without the
+        # reason surfaced, the reuse gate looks broken with no evidence.
+        _planning_logger.warning(
+            "[plan-trace] agent_link state_persist_FAILED fingerprint=%s "
+            "path=%s err=%s: %s",
+            fingerprint[:16],
+            path,
+            type(exc).__name__,
+            str(exc)[:200],
+        )
         return
 
 

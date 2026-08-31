@@ -561,7 +561,15 @@ def write_scan_result(
     piece_scans: list[dict[str, Any]] = []
 
     _workers_env = str(os.environ.get(QUALIBUG_PERSIST_SHARD_REDACT_WORKERS_ENV) or "").strip()
-    _workers = int(_workers_env) if _workers_env.isdigit() else min(8, os.cpu_count() or 4)
+    # Serial by default: measured on the real 92.3 MB archive, 8 spawned
+    # workers took 55.5s versus 51.7s serial — the parallel path is *slower*
+    # while costing ~8x the memory (each spawned interpreter re-imports the
+    # package) and, on a live run, hung forever in `pool.map` after the workers
+    # died on a 3.1 GB parent (`report_redact_ms=324325` with no completion).
+    # The work is CPU-bound regex over already-materialised shards, so process
+    # parallelism buys nothing here; the pool stays available for operators who
+    # measure a win on their own workload and declare it explicitly.
+    _workers = int(_workers_env) if _workers_env.isdigit() else 1
     _use_parallel_shard_redact = (
         post_redaction_validator is None
         and _workers >= 2
