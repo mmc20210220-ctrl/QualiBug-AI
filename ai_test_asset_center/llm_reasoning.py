@@ -134,7 +134,15 @@ def _env_float(name: str) -> float | None:
         return None
     try:
         return float(value)
-    except ValueError:
+    except ValueError as _env_exc:
+        # A set-but-malformed numeric env var silently becoming None means the
+        # operator's configuration is ignored with no hint: cost accounting or
+        # budget limits then run on defaults nobody chose. Fires at config
+        # construction only, so a warning cannot spam.
+        _llm_logger.warning(
+            "env var %s=%r is not a number; the default is being used instead (%s)",
+            name, value, _env_exc,
+        )
         return None
 
 
@@ -185,7 +193,13 @@ def _run_input_budget() -> int:
     raw = os.getenv(RUN_INPUT_BUDGET_ENV, "")
     try:
         value = int(raw)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError) as _budget_exc:
+        # Called on the hot path (per chat), so trace level: the operator can
+        # still see that a set budget is being ignored.
+        _llm_logger.debug(
+            "run input budget env %s=%r is not a positive int; budget stays off (%s)",
+            RUN_INPUT_BUDGET_ENV, raw, _budget_exc,
+        )
         return 0
     return value if value > 0 else 0
 
@@ -199,7 +213,13 @@ def _llm_run_input_charge(input_tokens: Any) -> None:
     global _LLM_RUN_INPUT_SPENT
     try:
         cost = int(input_tokens)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError) as _charge_exc:
+        # Usage accounting only: a non-numeric token count under-counts spend
+        # but cannot affect the reasoning itself.
+        _llm_logger.debug(
+            "run input charge skipped, input_tokens=%r (%s)",
+            input_tokens, type(_charge_exc).__name__,
+        )
         return
     if cost <= 0:
         return
@@ -1379,7 +1399,11 @@ class ReasoningClient:
         """Extract the provider-reported usage object (never the content)."""
         try:
             response = json.loads(response_text)
-        except (TypeError, json.JSONDecodeError):
+        except (TypeError, json.JSONDecodeError) as _usage_exc:
+            _llm_logger.debug(
+                "usage extraction skipped: response is not JSON (%s)",
+                type(_usage_exc).__name__,
+            )
             return {}
         usage = response.get("usage") if isinstance(response, dict) and isinstance(response.get("usage"), dict) else {}
         return dict(usage)
@@ -1397,6 +1421,8 @@ class ReasoningClient:
             try:
                 return max(0, int(value))
             except (TypeError, ValueError):
+                # Provider usage fields are occasionally strings or missing.
+                _llm_logger.debug("usage field %r is not numeric; ignored", value)
                 return None
 
         return _to_int(prompt), _to_int(completion)
@@ -1505,7 +1531,11 @@ class ReasoningClient:
     def _record_usage(self, response_text: str) -> None:
         try:
             response = json.loads(response_text)
-        except (TypeError, json.JSONDecodeError):
+        except (TypeError, json.JSONDecodeError) as _usage_exc:
+            _llm_logger.debug(
+                "usage recording skipped: response is not JSON (%s)",
+                type(_usage_exc).__name__,
+            )
             return
         usage = response.get("usage") if isinstance(response, dict) and isinstance(response.get("usage"), dict) else {}
         prompt, completion = self._usage_token_counts(usage)
@@ -1521,7 +1551,7 @@ class ReasoningClient:
                 try:
                     self._usage_totals[key] += max(0, int(value or 0))
                 except (TypeError, ValueError):
-                    pass
+                    _llm_logger.debug("usage total %s ignored non-numeric %r", key, value)
             if cost_value is not None:
                 try:
                     cost = float(cost_value)
@@ -1583,7 +1613,15 @@ class ReasoningClient:
                 model=model,
                 call_point=engine_type,
             )
-        except Exception:
+        except Exception as _reason_exc:
+            # The provider failure itself is already ERROR-logged with
+            # call_point in _chat; what is missing is the outcome link — that
+            # this engine now returns None, which callers read as "the engine
+            # produced no hypotheses". Trace level avoids double-reporting.
+            _llm_logger.debug(
+                "reasoning call at %s degraded to None (%s): %s",
+                engine_type, type(_reason_exc).__name__, _reason_exc,
+            )
             return None
 
     def _chat(
@@ -1605,8 +1643,13 @@ class ReasoningClient:
         try:
             if max_input_tokens is not None and int(max_input_tokens) > 0:
                 _input_budget = int(max_input_tokens)
-        except (TypeError, ValueError):
-            pass
+        except (TypeError, ValueError) as _override_exc:
+            # Caller-supplied override ignored: trace level, since the caller
+            # then simply runs on the engine-sized default.
+            _llm_logger.debug(
+                "per-call input budget override %r ignored (%s)",
+                max_input_tokens, type(_override_exc).__name__,
+            )
         _prompt_len = len(user_prompt)
         _system_len = len(system_prompt or SYSTEM_PROMPT)
         # ── Input-context guard: fail fast before transport when the combined
@@ -1736,8 +1779,13 @@ class ReasoningClient:
                         _sock = getattr(_raw, "_sock", None)
                         if _sock is not None:
                             _sock.settimeout(self.config.timeout_seconds)
-                    except Exception:
-                        pass
+                    except Exception as _sock_exc:
+                        # Best-effort socket tuning across providers: the
+                        # request-level timeout above already bounds the call.
+                        _llm_logger.debug(
+                            "socket timeout tuning skipped (%s): %s",
+                            type(_sock_exc).__name__, _sock_exc,
+                        )
                     # Application-level total-duration guard (half-open
                     # streams that trickle bytes); sized reads with a
                     # single-full-read fallback for test doubles.
@@ -2154,6 +2202,9 @@ class ReasoningClient:
                 parsed = json.loads(candidate)
                 return parsed, isinstance(parsed, dict)
             except (TypeError, json.JSONDecodeError):
+                # Expected control path: candidates are tried in turn and the
+                # caller falls through to the next extraction strategy.
+                _llm_logger.debug("JSON candidate not parseable as dict; trying next")
                 return _UNPARSEABLE, False
 
         non_dict_root = False
@@ -2342,7 +2393,11 @@ class ReasoningClient:
     def _record_embedding_usage(self, response_text: str) -> None:
         try:
             response = json.loads(response_text)
-        except (TypeError, json.JSONDecodeError):
+        except (TypeError, json.JSONDecodeError) as _usage_exc:
+            _llm_logger.debug(
+                "embedding usage recording skipped: response is not JSON (%s)",
+                type(_usage_exc).__name__,
+            )
             return
         usage = response.get("usage") if isinstance(response, dict) and isinstance(response.get("usage"), dict) else {}
         prompt = usage.get("prompt_tokens", usage.get("input_tokens", 0))
@@ -2351,7 +2406,9 @@ class ReasoningClient:
             try:
                 self._usage_totals["prompt_tokens"] += max(0, int(prompt or 0))
             except (TypeError, ValueError):
-                pass
+                _llm_logger.debug(
+                    "embedding usage ignored non-numeric prompt_tokens=%r", prompt
+                )
 
     def embed(self, texts: list[str], *, call_point: str = "embedding") -> list[list[float]] | None:
         """Non-decision embedding: candidate de-duplication and fact-retrieval

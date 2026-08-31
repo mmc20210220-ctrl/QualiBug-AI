@@ -55,7 +55,13 @@ PRODUCT_PACKAGE = REPO_ROOT / "ai_test_asset_center"
 #       from "engine not packaged", so coverage shrank while the report still
 #       read as complete. Rewritten table-driven with a per-skip warning and an
 #       error when zero generators load.
-MAX_SILENT_EXCEPTION_HANDLERS = 1065
+#   (d) 1065 -> 1052 — llm_reasoning.py cleared (13 handlers). This file was in
+#       better shape than the others: provider failures are already ERROR-logged
+#       with call_point in _chat, so the reasoning-degrades-to-None handler only
+#       needed a debug-level outcome link, not a second alarm. The one warning
+#       worth adding was _env_float: a malformed numeric env var silently ran on
+#       defaults nobody chose.
+MAX_SILENT_EXCEPTION_HANDLERS = 1052
 
 # A handler is credited as "observable" if its body calls something whose name
 # contains one of these fragments, or re-raises.  Matching on the callee name
