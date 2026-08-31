@@ -26,7 +26,9 @@ remain sandbox-required; production mode is strictly read-only by default.
 import argparse
 import hashlib
 import html
+import importlib
 import json
+import logging
 import re
 import time
 from collections import Counter, defaultdict
@@ -44,6 +46,8 @@ from .real_project_onboarding import (
     load_real_project_config,
 )
 from .universal_defect_mining import _operations, _extract_requirement_rules
+
+_log = logging.getLogger("BusinessAssuranceCoverage")
 
 PHASE = "phase56_business_quality_assurance_coverage"
 WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
@@ -339,95 +343,70 @@ def _configured_control_units(section: dict[str, Any]) -> list[dict[str, Any]]:
     return units
 
 
+# Optional probe generators, imported lazily so the module stays usable in
+# limited deployments where an engine has not been packaged.
+#
+# Table-driven instead of seventeen copy-pasted try/except blocks. A generator
+# that fails to import is not "this family has no probes" — it is coverage that
+# quietly disappears while the report still reads as complete, and the old form
+# made a real import defect indistinguishable from "not packaged". One loop
+# means one place where the loss is recorded, and zero copies to drift.
+_GENERATOR_SPECS: tuple[tuple[str, str, str], ...] = (
+    ("universal_spec_behavior", ".universal_defect_mining", "generate_universal_defect_probes"),
+    ("counterexample_relation_mining", ".counterexample_discovery", "generate_counterexample_probes"),
+    ("business_outcome_validation", ".business_outcome_validation", "generate_business_outcome_probes"),
+    ("business_reconciliation", ".business_reconciliation", "generate_business_reconciliation_probes"),
+    ("business_invariant_mining", ".business_invariant_mining", "generate_business_invariant_probes"),
+    ("multi_source_business_reasoning", ".multisource_reasoning", "generate_multi_source_reasoning_probes"),
+    ("business_lifecycle_reasoning", ".business_lifecycle_reasoning", "generate_business_lifecycle_probes"),
+    ("consistency_isolation_reasoning", ".consistency_isolation_reasoning", "generate_consistency_isolation_probes"),
+    ("metamorphic_differential_reasoning", ".metamorphic_differential_reasoning", "generate_metamorphic_differential_probes"),
+    ("temporal_data_regression_reasoning", ".temporal_data_regression_reasoning", "generate_temporal_data_regression_probes"),
+    ("business_causality_conservation", ".business_causality_conservation", "generate_business_causality_probes"),
+    ("business_population_constraints", ".business_population_constraints", "generate_business_population_constraint_probes"),
+    ("business_event_chain_reasoning", ".business_event_chain_reasoning", "generate_business_event_chain_probes"),
+    ("business_saga_compensation_reasoning", ".business_saga_compensation_reasoning", "generate_business_saga_compensation_probes"),
+    ("multi_industry_business_reasoning", ".multi_industry_business_reasoning", "generate_multi_industry_business_probes"),
+    ("enterprise_business_knowledge_asset", ".enterprise_knowledge_center", "generate_enterprise_business_knowledge_probes"),
+    ("enterprise_testops_control_plane", ".enterprise_testops_control_plane", "generate_enterprise_testops_probes"),
+)
+
+
 def _load_generators() -> list[tuple[str, Callable[..., list[dict[str, Any]]]]]:
-    # Delayed imports keep the module usable in limited deployments where an
-    # optional engine has not been packaged yet.
+    """Import every packaged probe generator, reporting the ones that are not.
+
+    Skipping a generator narrows the assurance coverage. Left silent, that
+    breadth loss is invisible (AGENTS.md principle 14): the run still reports a
+    coverage number that looks complete. Every skip is logged, and an empty
+    result is logged at error level because zero generators means the assurance
+    case is built on nothing at all.
+    """
+
     rows: list[tuple[str, Callable[..., list[dict[str, Any]]]]] = []
-    try:
-        from .universal_defect_mining import generate_universal_defect_probes
-        rows.append(("universal_spec_behavior", generate_universal_defect_probes))
-    except Exception:
-        pass
-    try:
-        from .counterexample_discovery import generate_counterexample_probes
-        rows.append(("counterexample_relation_mining", generate_counterexample_probes))
-    except Exception:
-        pass
-    try:
-        from .business_outcome_validation import generate_business_outcome_probes
-        rows.append(("business_outcome_validation", generate_business_outcome_probes))
-    except Exception:
-        pass
-    try:
-        from .business_reconciliation import generate_business_reconciliation_probes
-        rows.append(("business_reconciliation", generate_business_reconciliation_probes))
-    except Exception:
-        pass
-    try:
-        from .business_invariant_mining import generate_business_invariant_probes
-        rows.append(("business_invariant_mining", generate_business_invariant_probes))
-    except Exception:
-        pass
-    try:
-        from .multisource_reasoning import generate_multi_source_reasoning_probes
-        rows.append(("multi_source_business_reasoning", generate_multi_source_reasoning_probes))
-    except Exception:
-        pass
-    try:
-        from .business_lifecycle_reasoning import generate_business_lifecycle_probes
-        rows.append(("business_lifecycle_reasoning", generate_business_lifecycle_probes))
-    except Exception:
-        pass
-    try:
-        from .consistency_isolation_reasoning import generate_consistency_isolation_probes
-        rows.append(("consistency_isolation_reasoning", generate_consistency_isolation_probes))
-    except Exception:
-        pass
-    try:
-        from .metamorphic_differential_reasoning import generate_metamorphic_differential_probes
-        rows.append(("metamorphic_differential_reasoning", generate_metamorphic_differential_probes))
-    except Exception:
-        pass
-    try:
-        from .temporal_data_regression_reasoning import generate_temporal_data_regression_probes
-        rows.append(("temporal_data_regression_reasoning", generate_temporal_data_regression_probes))
-    except Exception:
-        pass
-    try:
-        from .business_causality_conservation import generate_business_causality_probes
-        rows.append(("business_causality_conservation", generate_business_causality_probes))
-    except Exception:
-        pass
-    try:
-        from .business_population_constraints import generate_business_population_constraint_probes
-        rows.append(("business_population_constraints", generate_business_population_constraint_probes))
-    except Exception:
-        pass
-    try:
-        from .business_event_chain_reasoning import generate_business_event_chain_probes
-        rows.append(("business_event_chain_reasoning", generate_business_event_chain_probes))
-    except Exception:
-        pass
-    try:
-        from .business_saga_compensation_reasoning import generate_business_saga_compensation_probes
-        rows.append(("business_saga_compensation_reasoning", generate_business_saga_compensation_probes))
-    except Exception:
-        pass
-    try:
-        from .multi_industry_business_reasoning import generate_multi_industry_business_probes
-        rows.append(("multi_industry_business_reasoning", generate_multi_industry_business_probes))
-    except Exception:
-        pass
-    try:
-        from .enterprise_knowledge_center import generate_enterprise_business_knowledge_probes
-        rows.append(("enterprise_business_knowledge_asset", generate_enterprise_business_knowledge_probes))
-    except Exception:
-        pass
-    try:
-        from .enterprise_testops_control_plane import generate_enterprise_testops_probes
-        rows.append(("enterprise_testops_control_plane", generate_enterprise_testops_probes))
-    except Exception:
-        pass
+    skipped: list[str] = []
+    for family, module_name, attr in _GENERATOR_SPECS:
+        try:
+            module = importlib.import_module(module_name, package=__package__)
+        except Exception as exc:
+            skipped.append(f"{family} (import {module_name}: {type(exc).__name__}: {exc})")
+            continue
+        generator = getattr(module, attr, None)
+        if not callable(generator):
+            skipped.append(f"{family} ({module_name}.{attr} missing or not callable)")
+            continue
+        rows.append((family, generator))
+
+    if skipped:
+        _log.warning(
+            "business assurance coverage: %d of %d probe generators unavailable; "
+            "coverage is narrower than the report implies — %s",
+            len(skipped), len(_GENERATOR_SPECS), "; ".join(skipped),
+        )
+    if not rows:
+        _log.error(
+            "business assurance coverage: no probe generators could be loaded; "
+            "the assurance case would be built on zero generators"
+        )
     return rows
 
 
@@ -560,7 +539,15 @@ def _learned_regression_units(project: str, root: Path) -> list[dict[str, Any]]:
     try:
         from .confirmed_bug_flywheel import load_confirmed_bug_flywheel_profile, build_confirmed_bug_flywheel
         profile = load_confirmed_bug_flywheel_profile(project, root) or build_confirmed_bug_flywheel(project, root)
-    except Exception:
+    except Exception as _flywheel_exc:
+        # Returning [] means "no confirmed-bug regressions to replay", which is
+        # indistinguishable from the flywheel being broken. Regression coverage
+        # would vanish while the report still looked complete.
+        _log.warning(
+            "confirmed-bug flywheel unavailable for project=%s; regression "
+            "coverage is narrower than the report implies (%s): %s",
+            project, type(_flywheel_exc).__name__, _flywheel_exc,
+        )
         return []
     units: list[dict[str, Any]] = []
     candidates = [row for row in (profile.get("regression_candidates") or []) if isinstance(row, dict)]

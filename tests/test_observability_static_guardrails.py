@@ -49,7 +49,13 @@ PRODUCT_PACKAGE = REPO_ROOT / "ai_test_asset_center"
 #       mattered: `_contract_activation_for_business_oracle` returned False on
 #       failure, silently switching the business oracle off with no findings and
 #       a clean-looking run (invisible breadth loss, AGENTS.md principle 14).
-MAX_SILENT_EXCEPTION_HANDLERS = 1083
+#   (c) 1083 -> 1065 — business_assurance_coverage.py cleared (18 handlers).
+#       `_load_generators` had 17 copy-pasted try/except blocks, each silently
+#       skipping a probe generator: a single import defect was indistinguishable
+#       from "engine not packaged", so coverage shrank while the report still
+#       read as complete. Rewritten table-driven with a per-skip warning and an
+#       error when zero generators load.
+MAX_SILENT_EXCEPTION_HANDLERS = 1065
 
 # A handler is credited as "observable" if its body calls something whose name
 # contains one of these fragments, or re-raises.  Matching on the callee name
