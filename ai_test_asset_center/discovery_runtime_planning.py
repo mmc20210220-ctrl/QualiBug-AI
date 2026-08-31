@@ -873,6 +873,40 @@ def _enrich_with_agent_semantic_reuse_gate(
             "accepted_relationship_count": 0,
             "provider_calls": 0,
         }
+    # An account-level refusal can also arrive as a *receipt* rather than an
+    # exception. ``discovery_runtime_semantic_binding`` rebinds
+    # ``enrich_knowledge_asset_with_agent_relationships`` to a visible-failure
+    # wrapper that converts ``AgentSemanticLinkerError`` into a FAILED receipt
+    # instead of re-raising. Checking only the exception path above therefore
+    # never recorded the fingerprint, and every later run re-paid for the same
+    # doomed calls (verified on a live run: zero ``agent_link stage=`` lines
+    # while the wrapper logged ``agent_semantic_linking_failed``).
+    _degraded_detail = " ".join(
+        str(receipt.get(key) or "")
+        for key in ("error", "reason_code", "status")
+    )
+    if _is_unrecoverable_provider_error(RuntimeError(_degraded_detail)):
+        _save_agent_linker_provider_unavailable_state(
+            root,
+            project,
+            fingerprint,
+            reason_code="provider_unrecoverable:degraded_receipt",
+            detail=str(receipt.get("error") or "")[:300],
+        )
+        _planning_logger.warning(
+            "[plan-trace] agent_link stage=provider_unavailable_recorded "
+            "fingerprint=%s source=degraded_receipt status=%s err=%s",
+            fingerprint[:16],
+            receipt.get("status"),
+            str(receipt.get("error") or "")[:200],
+        )
+        return dict(asset), {
+            "schema_version": AGENT_SEMANTIC_LINK_RECEIPT_SCHEMA,
+            "status": "SKIPPED",
+            "reason_code": "agent_semantic_linking_provider_unavailable",
+            "accepted_relationship_count": 0,
+            "provider_calls": 0,
+        }
     elapsed_ms = int((time.perf_counter() - started) * 1000)
     _planning_logger.info(
         "[plan-trace] agent_link stage=executed elapsed_ms=%d status=%s accepted=%s windows=%s",
