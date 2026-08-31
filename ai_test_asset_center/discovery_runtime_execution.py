@@ -470,6 +470,21 @@ def run_experiment_candidate(
 
     follow_on_batches: list[dict[str, Any]] = []
     expansion_follow_on_batches: list[dict[str, Any]] = []
+
+    # Obligations the runtime-feedback batch already offered to the executor are
+    # absent from ``round_two_executed_ids`` (that set covers round-two
+    # scheduling only) and from the feedback-era ``already_executed_ids`` used to
+    # build ``feedback_intents``. Leaving them out here means the continuation
+    # domains below re-run experiments the feedback batch just completed, even
+    # though both runs report EXECUTED — measured: 49 experiments executed twice
+    # with status EXECUTED on both runs, and no cross-domain receipt consumption
+    # removes them (``consume_continuation_execution_receipts`` keeps rows that
+    # do not match the consuming domain's ``allowed`` map).
+    feedback_executed_ids = {
+        _text(key)
+        for key in _dict(feedback_batch.get("execution_results"))
+        if _text(key)
+    }
     if runtime_approved:
         # Round 1 runs at most the per-batch safety budget. Whatever it deferred
         # is still a scheduled obligation, so it joins the pending queue instead
@@ -517,7 +532,10 @@ def run_experiment_candidate(
                 campaign_handle
             ),
             execute_batch=execute_selected_experiments,
-            exclude_obligation_ids=round_two_executed_ids,
+            exclude_obligation_ids={
+                *round_two_executed_ids,
+                *feedback_executed_ids,
+            },
         )
         # Keep the live plan view aligned with drained pending for terminals.
         if isinstance(plan.experiments, dict):
@@ -578,7 +596,10 @@ def run_experiment_candidate(
                     campaign_handle
                 ),
                 execute_batch=execute_selected_experiments,
-                exclude_obligation_ids=round_two_executed_ids,
+                exclude_obligation_ids={
+                    *round_two_executed_ids,
+                    *feedback_executed_ids,
+                },
             )
         )
         expansion["obligation_plan"] = expansion_obligation_plan
