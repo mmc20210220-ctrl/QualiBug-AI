@@ -458,8 +458,15 @@ class AutonomousDiscoveryEngine:
                     **(json.loads(context_hint) if context_hint and context_hint != "{}" else {}),
                     "project_summary": project_summary,
                 }, ensure_ascii=False, default=str)[:3000]
-        except Exception:
-            pass
+        except Exception as _hint_exc:
+            # Still fail-open (the hint is additive and must never block the
+            # pipeline), but a silent skip here means a degraded prompt with no
+            # trace anywhere — exactly the "engine produced worse output and we
+            # cannot say why" symptom.
+            logger.warning(
+                "project_summary reader hint skipped (%s): %s",
+                type(_hint_exc).__name__, _hint_exc,
+            )
 
         prompt = self._fill_template(READER_BUSINESS_WORLD_PROMPT,
             documents=prd_text[:8000],
@@ -501,8 +508,14 @@ class AutonomousDiscoveryEngine:
         if _cached_raw:
             try:
                 return self.client._parse_json(_cached_raw)
-            except Exception:
-                pass  # unusable entry → fall through to a real call
+            except Exception as _entry_exc:
+                # A cached entry that cannot be re-parsed is a cache-layer
+                # defect, not a transient miss: it would otherwise silently
+                # re-bill the provider on every single run.
+                logger.warning(
+                    "reader cache entry unusable, refetching (%s): %s",
+                    type(_entry_exc).__name__, _entry_exc,
+                )
         try:
             raw = self.client._chat(prompt, system_prompt=READER_SYSTEM_PROMPT)
             if _reader_key and raw:
@@ -513,8 +526,13 @@ class AutonomousDiscoveryEngine:
                         model=_reader_model,
                         temperature=_reader_temperature,
                     )
-                except Exception:
-                    pass
+                except Exception as _store_exc:
+                    # Failing to store means the next run re-sends the same
+                    # enterprise material to the provider and pays for it again.
+                    logger.warning(
+                        "reader cache store failed; response not cached (%s): %s",
+                        type(_store_exc).__name__, _store_exc,
+                    )
             return self.client._parse_json(raw)
         except Exception as e:
             # Truncation salvage: when the LLM output is cut mid-object (e.g. by a
@@ -556,8 +574,10 @@ class AutonomousDiscoveryEngine:
             parsed = json.loads(cleaned)
             if isinstance(parsed, dict):
                 return parsed
-        except json.JSONDecodeError:
-            pass
+        except json.JSONDecodeError as _direct_exc:
+            # Expected on the salvage path: the stack-based closure below is the
+            # fallback for exactly this case, so it is trace-level, not a warning.
+            logger.debug("salvage: direct parse failed, trying stack closure: %s", _direct_exc)
         # Stack-based closure for truncated JSON: track open {/[ and string state,
         # then close them in reverse order. Handles mid-string truncation.
         try:
@@ -592,8 +612,13 @@ class AutonomousDiscoveryEngine:
                 if isinstance(parsed, dict):
                     if any(k in parsed for k in ("entities", "inferred_industries", "documented_rules")):
                         return parsed
-        except (json.JSONDecodeError, Exception):
-            pass
+        except (json.JSONDecodeError, Exception) as _closure_exc:
+            # Real data loss: the truncated response could not be recovered and
+            # the caller loses whatever entities survived the cut.
+            logger.warning(
+                "reader output truncation salvage failed (%s): %s",
+                type(_closure_exc).__name__, _closure_exc,
+            )
         return None
 
 
@@ -1032,7 +1057,13 @@ class AutonomousDiscoveryEngine:
                 entity_id = extract_first_entity_id(body, param_name)
                 if entity_id:
                     return entity_id
-            except Exception:
+            except Exception as _probe_exc:
+                # One candidate path failing is expected; every path failing is
+                # not, and without a trace the caller just sees "no real id".
+                logger.debug(
+                    "_fetch_real_id: probe of %s failed (%s): %s",
+                    list_path, type(_probe_exc).__name__, _probe_exc,
+                )
                 continue
         return None
 
@@ -1709,8 +1740,13 @@ class AutonomousDiscoveryEngine:
                                         av = float(after_body.get(k, 0) or 0)
                                         if bv != av:
                                             numeric_deltas[k] = av - bv
-                                    except (ValueError, TypeError):
-                                        pass
+                                    except (ValueError, TypeError) as _delta_exc:
+                                        # Expected: a changed field is not always
+                                        # numeric. Trace-level only.
+                                        logger.debug(
+                                            "numeric delta: non-numeric field %r skipped (%s)",
+                                            k, type(_delta_exc).__name__,
+                                        )
                                 if numeric_deltas:
                                     invariant_kw = ("守恒", "conservation", "总和", "balance", "余额", "库存不得", "不得为负", "negative")
                                     if any(kw in title + expected for kw in invariant_kw):
@@ -2110,8 +2146,13 @@ class AutonomousDiscoveryEngine:
                                             actual = f"业务逻辑错误: {key}={after_val} 为负值"
                                             confidence = 0.92
                                             break
-                                    except (ValueError, TypeError):
-                                        pass
+                                    except (ValueError, TypeError) as _conv_exc:
+                                        # Expected: observed business fields are
+                                        # not all numeric. Trace-level only.
+                                        logger.debug(
+                                            "rule B7: non-numeric %s=%r skipped (%s)",
+                                            key, after_val, type(_conv_exc).__name__,
+                                        )
                             # Check for zero when should be non-zero
                             if verdict == "inconclusive":
                                 for key in ("quantity", "qty", "stock", "balance"):
@@ -2128,10 +2169,22 @@ class AutonomousDiscoveryEngine:
                                                     actual = f"业务逻辑错误: {key} 从 {bv} 变为 {av}，降幅超过90%"
                                                     confidence = 0.85
                                                     break
-                                        except (ValueError, TypeError):
-                                            pass
-                    except Exception:
-                        pass
+                                        except (ValueError, TypeError) as _drop_exc:
+                                            # Expected: same as above, not every
+                                            # field is numeric. Trace-level only.
+                                            logger.debug(
+                                                "rule B7: non-numeric %s=%r skipped (%s)",
+                                                key, after_val, type(_drop_exc).__name__,
+                                            )
+                    except Exception as _b7_exc:
+                        # Rule B7 could not evaluate at all: a confirmed-bug
+                        # signal may have been missed, so this is a real
+                        # degradation rather than a routine skip.
+                        logger.warning(
+                            "rule B7 (value conservation) evaluation failed, "
+                            "verdict left inconclusive (%s): %s",
+                            type(_b7_exc).__name__, _b7_exc,
+                        )
 
             # Rule B8: Temporal Consistency — async operation final state
             if verdict == "inconclusive" and len(calls) >= 3:
@@ -2149,8 +2202,12 @@ class AutonomousDiscoveryEngine:
                                     verdict = "confirmed"
                                     actual = f"时序一致性错误: 状态停留在 '{status_val}'，未达终态"
                                     confidence = 0.78
-                    except Exception:
-                        pass
+                    except Exception as _b8_exc:
+                        logger.warning(
+                            "rule B8 (temporal consistency) evaluation failed, "
+                            "verdict left inconclusive (%s): %s",
+                            type(_b8_exc).__name__, _b8_exc,
+                        )
 
             # Rule B9: Boundary Value Verification — extreme inputs accepted
             if verdict == "inconclusive" and admin_ok:
@@ -2195,8 +2252,12 @@ class AutonomousDiscoveryEngine:
                                 verdict = "confirmed"
                                 actual = f"幂等性错误: 重复操作产生不同资源 ID ({first_id} vs {last_id})"
                                 confidence = 0.88
-                    except Exception:
-                        pass
+                    except Exception as _b10_exc:
+                        logger.warning(
+                            "rule B10 (idempotency) evaluation failed, "
+                            "verdict left inconclusive (%s): %s",
+                            type(_b10_exc).__name__, _b10_exc,
+                        )
 
             # Rule B11: Batch Operation Verification — pagination/sorting consistency
             if verdict == "inconclusive" and len(calls) >= 2:
@@ -2226,10 +2287,19 @@ class AutonomousDiscoveryEngine:
                                                 actual = f"分页元数据不一致: total={total_val} 但返回 {len(data)} 条"
                                                 confidence = 0.82
                                                 break
-                                        except (ValueError, TypeError):
-                                            pass
-                    except Exception:
-                        pass
+                                        except (ValueError, TypeError) as _total_exc:
+                                            # Expected: pagination metadata is not
+                                            # always an integer. Trace-level only.
+                                            logger.debug(
+                                                "rule B11: non-integer total=%r skipped (%s)",
+                                                total, type(_total_exc).__name__,
+                                            )
+                    except Exception as _b11_exc:
+                        logger.warning(
+                            "rule B11 (batch/pagination) evaluation failed, "
+                            "verdict left inconclusive (%s): %s",
+                            type(_b11_exc).__name__, _b11_exc,
+                        )
 
             # === Phase78B: Semantic State Verifier — last-resort for inconclusive ===
             if verdict == "inconclusive" and calls and isinstance(r.get("semantic_obligation"), dict):
@@ -2278,8 +2348,15 @@ class AutonomousDiscoveryEngine:
                                     verdict = "confirmed"
                                     actual = f"Semantic state change: {result.detail}"
                                     confidence = 0.75
-                except Exception:
-                    pass  # Semantic verifier is best-effort
+                except Exception as _sem_exc:
+                    # Still best-effort, but this is the last-resort verifier: if
+                    # it dies the obligation stays inconclusive with no reason
+                    # recorded, which is indistinguishable from "no bug found".
+                    logger.warning(
+                        "semantic state verifier failed, verdict left "
+                        "inconclusive (%s): %s",
+                        type(_sem_exc).__name__, _sem_exc,
+                    )
 
             # === Enhanced: Probe Quality Gate with Evidence Accumulation (P1: 3.2) ===
             # Instead of hard downgrade, use a softer approach:
@@ -3029,8 +3106,13 @@ class AutonomousDiscoveryEngine:
                         if key in data and isinstance(data[key], str):
                             err_msg = data[key]
                             break
-                except (json.JSONDecodeError, TypeError):
-                    pass
+                except (json.JSONDecodeError, TypeError) as _body_exc:
+                    # Expected: error response bodies are not always JSON, and
+                    # the raw text fallback below is the intended path.
+                    logger.debug(
+                        "log analyzer: non-JSON error body kept verbatim (%s)",
+                        type(_body_exc).__name__,
+                    )
             if not err_msg:
                 err_msg = body.replace("\n", " ")[:100]
             log_lines.append(
@@ -3063,11 +3145,23 @@ class AutonomousDiscoveryEngine:
                 "candidates_from_log": candidates[:20],
             }
         except Exception as e:
+            # The error is returned as data, but only a caller that inspects the
+            # "error" key will ever see it. A log makes the failure visible
+            # regardless of what the caller does with the payload.
+            logger.warning(
+                "log-derived candidate extraction failed (%s): %s",
+                type(e).__name__, e,
+            )
             return {"error_clusters": [], "candidates_from_log": [], "error": str(e)[:200]}
         finally:
             if tmp_path:
                 try:
                     Path(tmp_path).unlink()
-                except OSError:
-                    pass
+                except OSError as _unlink_exc:
+                    # Best-effort cleanup: a leftover temp log is harmless, but
+                    # repeated leaks are worth being able to see.
+                    logger.debug(
+                        "log analyzer temp file not removed %s (%s)",
+                        tmp_path, type(_unlink_exc).__name__,
+                    )
 

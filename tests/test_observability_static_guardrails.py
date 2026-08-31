@@ -34,7 +34,12 @@ PRODUCT_PACKAGE = REPO_ROOT / "ai_test_asset_center"
 
 # Ratchet baseline, measured 2026-08-31 against 1238 product files.
 # Lower this constant whenever a silent handler is fixed.  Never raise it.
-MAX_SILENT_EXCEPTION_HANDLERS = 1284
+# 1284 -> 1266: discovery_engine/_engine.py cleared — all 18 handlers there now
+# log. Expected-by-design failures (non-numeric business fields, non-JSON error
+# bodies, the truncated-parse fallback) use logger.debug so they cannot drown
+# real signals; actual degradations (cache store failure, a rule failing to
+# evaluate, salvage exhausted) use logger.warning.
+MAX_SILENT_EXCEPTION_HANDLERS = 1266
 
 # A handler is credited as "observable" if its body calls something whose name
 # contains one of these fragments, or re-raises.  Matching on the callee name
