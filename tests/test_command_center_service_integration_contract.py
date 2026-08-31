@@ -82,7 +82,9 @@ def test_command_center_service_calls_existing_envelope_normalizer_before_respon
 
     assert "def _normalize_command_center_envelope" in service_source
     assert "normalized = _normalize_command_center_envelope(sanitized)" in routing_source
-    assert "return self._json(normalized)" in routing_source
+    # The normalized envelope must be the cached/served response body; it may
+    # carry ETag / cache-control arguments but never a different payload object.
+    assert "return normalized, False" in routing_source
 
 
 def test_command_center_service_imports_the_canonical_gate_directly() -> None:

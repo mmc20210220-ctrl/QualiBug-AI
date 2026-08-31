@@ -11,7 +11,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 from urllib.parse import parse_qs, unquote, urlparse
 
 from . import db_persistence as db_persist
@@ -61,6 +61,14 @@ _COMMAND_CENTER_CACHE_TTL_SECONDS = 30.0
 # 会从 ~10s 恶化到数百秒）。
 _COMMAND_CENTER_BUILD_LOCKS: dict[str, threading.Lock] = {}
 _COMMAND_CENTER_BUILD_LOCKS_GUARD = threading.Lock()
+# 后台重建节流：扫描进行中数据文件持续变化，指纹每次轮询都翻转；不节流会
+# 产生「每次写入触发一次分钟级全量组装」的重建风暴。同一 key 的重建尝试
+# 至少间隔该秒数——数据收敛最多延迟一个窗口，CPU 不再被重建打满。
+_COMMAND_CENTER_REBUILD_MIN_INTERVAL_SECONDS = 60.0
+_COMMAND_CENTER_LAST_REBUILD_ATTEMPT: dict[str, float] = {}
+# 写入平息窗口：最新数据文件 mtime 距今不足该秒数时视为「仍在写入」，
+# 后台重建推迟到写入平息。
+_COMMAND_CENTER_REBUILD_SETTLE_SECONDS = 30.0
 
 
 def _command_center_build_lock(cache_key: str) -> threading.Lock:
@@ -72,37 +80,111 @@ def _command_center_build_lock(cache_key: str) -> threading.Lock:
         return lock
 
 
-def _project_data_fingerprint(root: Path, project: str) -> str:
-    """项目数据指纹：由 command-center 读取目录的最新 mtime + 文件数 + 大小构成。
+def _iter_project_data_source_paths(root: Path, project: str) -> Iterator[Path]:
+    """枚举 command-center 实际消费的数据源文件（指纹与写入检测共用一份清单）。"""
+    outputs = root / "platform_outputs" / project
+    workspace = root / "platform_workspace" / project
+    explicit_relative = [
+        "intelligence_report.json",
+        "v12_report.json",
+        "scan_result.json",
+        "scan_counter.json",
+        "benchmark/benchmark_metrics.json",
+        "performance/baseline.json",
+        "spectrum/spectrum_result.json",
+        "spectrum/spectrum_timestamp.txt",
+        "enterprise_knowledge_center/enterprise_business_knowledge_asset.json",
+        "defect_discovery/enterprise_business_knowledge_asset.json",
+        "regression_run/regression_run_history.json",
+        "regression_run/regression_run_result.json",
+        "regression_suite/regression_suite.json",
+        "real_project/real_project_defect_data.json",
+        "real_project/probe_execution_result.json",
+    ]
+    for base in (outputs, workspace):
+        for rel in explicit_relative:
+            yield base / rel
+        # 分片 store 的分片文件与索引同级（scan_result.parts/<dotted>.json），
+        # 扁平一层；分片可被原子重写，mtime 必须参与指纹。
+        parts_dir = base / "scan_result.parts"
+        if parts_dir.is_dir():
+            for entry in parts_dir.iterdir():
+                yield entry
 
-    只统计真正的数据源（scan_result / intelligence_report / knowledge asset /
-    evidence bundle），不扫描 delivery_packages 等无关大目录，避免指纹计算
-    本身变成瓶颈（实测 660 文件全量 walk ~0.1s，可接受）。
+    # workspace 侧的运行记录与证据 bundle 清单。
+    defect_dir = workspace / "defect_discovery"
+    if defect_dir.is_dir():
+        for path in defect_dir.glob("*_run.json"):
+            yield path
+        yield defect_dir / "continuous_discovery_state.json"
+        yield workspace / "enterprise_knowledge_center" / "source_registry.json"
+    bundle_root = workspace / "evidence_bundles"
+    if bundle_root.is_dir():
+        for bundle in bundle_root.glob("evb_*"):
+            yield bundle / "manifest.json"
+            yield bundle / "manifest.pointer.json"
+
+    # rounds_summary / regression projection 消费的跨项目基线文件。
+    yield root / "platform_outputs" / "_benchmark" / "benchmark_metrics.json"
+    yield root / "platform_outputs" / "_benchmark" / f"baseline_history_{project}.json"
+    yield root / "platform_outputs" / "_benchmark" / f"gap_tracker_{project}.json"
+    learning_dir = root / "platform_outputs" / "_learning"
+    if learning_dir.is_dir():
+        for path in learning_dir.glob("learning_manifest_*.json"):
+            yield path
+
+
+def _project_data_fingerprint(root: Path, project: str) -> str:
+    """项目数据指纹：由 command-center 实际读取的数据源集合构成。
+
+    旧实现 os.walk 遍历 platform_outputs/<p> + platform_workspace/<p> 全部
+    文件并逐个 stat——目录越大（分片 store、evidence bundle、上传源文档），
+    每次请求的指纹计算越慢，且缓存命中路径也要全额支付。新实现只 stat
+    构建器真正消费的显式文件清单与 glob（见 `_iter_project_data_source_paths`）。
+
+    未列入清单的文件变化最迟由 TTL（30s）兜底生效——这与 SQLite 数据变化的
+    既有语义一致。
     """
+    import stat as _stat
+
     latest_mtime_ns = 0
     file_count = 0
     total_bytes = 0
-    scan_roots = [
-        root / "platform_outputs" / project,
-        root / "platform_workspace" / project,
-    ]
-    for base in scan_roots:
-        if not base.is_dir():
+    for path in _iter_project_data_source_paths(root, project):
+        try:
+            st = path.stat()
+        except OSError:
             continue
-        for dirpath, dirnames, filenames in os.walk(base):
-            # 跳过明显与 command-center 数据无关的重量级目录。
-            dirnames[:] = [d for d in dirnames if d not in {"delivery_packages"}]
-            for filename in filenames:
-                path = Path(dirpath) / filename
-                try:
-                    st = path.stat()
-                except OSError:
-                    continue
-                file_count += 1
-                total_bytes += st.st_size
-                if st.st_mtime_ns > latest_mtime_ns:
-                    latest_mtime_ns = st.st_mtime_ns
+        if not _stat.S_ISREG(st.st_mode):
+            continue
+        file_count += 1
+        total_bytes += st.st_size
+        if st.st_mtime_ns > latest_mtime_ns:
+            latest_mtime_ns = st.st_mtime_ns
     return f"{latest_mtime_ns}:{file_count}:{total_bytes}"
+
+
+def _newest_project_data_age_seconds(root: Path, project: str) -> float | None:
+    """最新数据源文件的年龄（秒）；无任何数据文件时返回 None。
+
+    用于「写入平息检测」：扫描进行中数据文件每几秒翻转一次 mtime，
+    此时启动分钟级重建纯属浪费（建完即过期）。
+    """
+    import stat as _stat
+
+    newest_mtime_ns = 0
+    for path in _iter_project_data_source_paths(root, project):
+        try:
+            st = path.stat()
+        except OSError:
+            continue
+        if not _stat.S_ISREG(st.st_mode):
+            continue
+        if st.st_mtime_ns > newest_mtime_ns:
+            newest_mtime_ns = st.st_mtime_ns
+    if newest_mtime_ns == 0:
+        return None
+    return max(0.0, time.time() - newest_mtime_ns / 1_000_000_000)
 
 
 def _text(value: Any) -> str:
@@ -289,6 +371,173 @@ class HttpRoutingMixin:
             {"ok": True, "data": db_persist.list_projects(root, tenant_id)}
         )
 
+    def _load_merged_knowledge_asset(self, project: str, root: Path, actor: Any) -> dict[str, Any]:
+        """Load the knowledge asset and merge visible source rows (shared by
+        ``/api/knowledge/asset`` and ``/api/knowledge/summary``)."""
+        from .enterprise_knowledge_center import (
+            build_enterprise_business_knowledge_asset,
+            load_enterprise_business_knowledge_asset,
+        )
+
+        asset = load_enterprise_business_knowledge_asset(
+            project, root
+        ) or build_enterprise_business_knowledge_asset(project, root)
+        if not isinstance(asset, dict):
+            raise TypeError("knowledge asset must be an object")
+        input_files = self._list_project_inputs(project, root)
+        existing = _knowledge_asset_sources(asset, root)
+        inputs = (
+            input_files.get("sources", [])
+            if isinstance(input_files, dict)
+            and isinstance(input_files.get("sources"), list)
+            else []
+        )
+        merged: dict[str, dict[str, Any]] = {}
+        for item in [*existing, *inputs]:
+            if not isinstance(item, dict):
+                continue
+            key = _text(
+                item.get("source_id")
+                or item.get("id")
+                or item.get("filename")
+            )
+            if key:
+                merged.setdefault(key, dict(item))
+        asset["sources"] = list(merged.values())
+        summary = asset.get("summary")
+        if not isinstance(summary, dict):
+            summary = {}
+            asset["summary"] = summary
+        summary["active_source_count"] = len(asset["sources"])
+        from .connector_acl_authority import filter_connector_asset_for_actor
+
+        asset = filter_connector_asset_for_actor(
+            project,
+            asset,
+            actor={**actor, "project_id": project} if actor else actor,
+            root=root,
+        )
+        return asset
+
+    def _build_and_cache_command_center(
+        self,
+        project: str,
+        root: Path,
+        cache_key: str,
+        fingerprint: str,
+    ) -> tuple[dict[str, Any], bool]:
+        """构建 command-center 并写入缓存。返回 (响应体, 是否为错误体)。"""
+        try:
+            from .private_pilot_build_scope import build_scope
+
+            # 构建内单次加载：同一构建对同一产物身份只做一次读盘+解析，
+            # 所有消费方（v12 report / current scan / HAR bridge / db
+            # findings / knowledge summary）共享同一个已解析对象。
+            with build_scope():
+                payload = self._build_command_center(project, root)
+            if not isinstance(payload, dict):
+                raise TypeError("command-center payload must be an object")
+            from .display_ready_formatter import sanitize_customer_evidence_payload
+
+            sanitized = sanitize_customer_evidence_payload(payload)
+            if not isinstance(sanitized, dict):
+                raise TypeError("sanitized command-center payload must be an object")
+            normalized = _normalize_command_center_envelope(sanitized)
+            with _COMMAND_CENTER_CACHE_LOCK:
+                if len(_COMMAND_CENTER_CACHE) >= _COMMAND_CENTER_CACHE_MAX_ENTRIES:
+                    _COMMAND_CENTER_CACHE.clear()
+                _COMMAND_CENTER_CACHE[cache_key] = (
+                    fingerprint,
+                    time.monotonic(),
+                    normalized,
+                )
+            return normalized, False
+        except Exception as exc:
+            _http_logger.error(
+                "command-center delivery blocked: project=%s exc=%s %s",
+                project,
+                type(exc).__name__,
+                exc,
+                exc_info=True,
+            )
+            # 500 必须携带真实原因（脱去服务器绝对路径），否则前端只能
+            # 显示误导性的「脱敏失败」，用户无法知道该做什么。
+            _reason = f"{type(exc).__name__}: {exc}"
+            _root_text = str(root)
+            if _root_text:
+                _reason = _reason.replace(_root_text, "").replace(str(root.resolve()), "")
+            _error_body = {
+                "ok": False,
+                "error": "COMMAND_CENTER_DELIVERY_BLOCKED",
+                "message": f"客户证据交付被数据契约拒绝，原始数据未返回。原因：{_reason[:300]}",
+            }
+            # 失败结果同样按数据指纹缓存：底层数据未变时，同一构建必然
+            # 再次失败——不缓存会让每次 15s 轮询都重烧一次数十秒的构建。
+            # 指纹变化（如重跑扫描）即自动失效并重试构建。
+            with _COMMAND_CENTER_CACHE_LOCK:
+                if len(_COMMAND_CENTER_CACHE) >= _COMMAND_CENTER_CACHE_MAX_ENTRIES:
+                    _COMMAND_CENTER_CACHE.clear()
+                _COMMAND_CENTER_CACHE[cache_key] = (
+                    fingerprint,
+                    time.monotonic(),
+                    {"__qualibug_error__": _error_body},
+                )
+            return _error_body, True
+
+    def _spawn_command_center_rebuild(
+        self,
+        project: str,
+        root: Path,
+        cache_key: str,
+        fingerprint: str,
+    ) -> None:
+        """后台重建：不占用请求线程。同一 key 同时只允许一个重建在飞，
+        且两次尝试至少间隔节流窗口（防扫描期重建风暴）。"""
+        now = time.monotonic()
+        with _COMMAND_CENTER_BUILD_LOCKS_GUARD:
+            last_attempt = _COMMAND_CENTER_LAST_REBUILD_ATTEMPT.get(cache_key, 0.0)
+            if now - last_attempt < _COMMAND_CENTER_REBUILD_MIN_INTERVAL_SECONDS:
+                return  # 节流窗口内：已有足够新的重建尝试，跳过。
+            _COMMAND_CENTER_LAST_REBUILD_ATTEMPT[cache_key] = now
+        build_lock = _command_center_build_lock(cache_key)
+        if not build_lock.acquire(blocking=False):
+            return  # 已有重建在飞，无需重复。
+
+        def _run() -> None:
+            try:
+                # 写入平息检测：扫描进行中数据文件 mtime 每几秒翻转一次，
+                # 分钟级构建完成前数据又变了——建了白建，还会与扫描争抢
+                # CPU/磁盘。数据仍在滚动时跳过本次重建；写入平息后的下一次
+                # 轮询（节流窗口过后）会再触发，那时一次建完即为新鲜。
+                try:
+                    newest_age = _newest_project_data_age_seconds(root, project)
+                except Exception:
+                    newest_age = None
+                if newest_age is not None and newest_age < _COMMAND_CENTER_REBUILD_SETTLE_SECONDS:
+                    _http_logger.info(
+                        "command-center rebuild deferred (data still being written): "
+                        "project=%s newest_age=%.1fs",
+                        project,
+                        newest_age,
+                    )
+                    return
+                # 指纹已再次变化：跳过——最新一次轮询带着更新指纹的重建
+                # 请求会覆盖本次。
+                if _project_data_fingerprint(root, project) != fingerprint:
+                    return
+                self._build_and_cache_command_center(project, root, cache_key, fingerprint)
+                _http_logger.info(
+                    "command-center background rebuild complete: project=%s", project
+                )
+            finally:
+                build_lock.release()
+
+        threading.Thread(
+            target=_run,
+            daemon=True,
+            name=f"cc-rebuild-{cache_key}",
+        ).start()
+
     def _handle_command_center(self, project: str, root: Path) -> Any:
         trace_id = uuid.uuid4().hex
         started = time.perf_counter()
@@ -296,101 +545,80 @@ class HttpRoutingMixin:
         tenant_id = self._request_tenant()
         cache_key = f"{tenant_id}:{project}"
 
-        def _cache_hit(fingerprint: str) -> dict[str, Any] | None:
+        def _cache_entry() -> tuple[str, float, dict[str, Any]] | None:
             with _COMMAND_CENTER_CACHE_LOCK:
-                cached = _COMMAND_CENTER_CACHE.get(cache_key)
-            if (
-                cached is not None
-                and cached[0] == fingerprint
-                and (time.monotonic() - cached[1]) < _COMMAND_CENTER_CACHE_TTL_SECONDS
-            ):
-                return cached[2]
-            return None
+                return _COMMAND_CENTER_CACHE.get(cache_key)
 
-        fingerprint = _project_data_fingerprint(root, project)
-        cached_payload = _cache_hit(fingerprint)
-        if cached_payload is not None:
+        def _serve_cached(entry: tuple[str, float, dict[str, Any]], *, stale: bool) -> Any:
+            cached_fingerprint, cached_at, body = entry
+            if isinstance(body, dict) and isinstance(body.get("__qualibug_error__"), dict):
+                return self._json(body["__qualibug_error__"], 500)
+            served = body
+            etag = f'"cmdctr-{cached_fingerprint}"'
+            if stale:
+                # 陈旧-while-重验证：立即返回上一轮结果（显式标记），
+                # 后台重建；绝不阻塞轮询去等分钟级组装。
+                served = dict(body)
+                served["cache_status"] = {
+                    "state": "revalidating",
+                    "age_seconds": int(time.monotonic() - cached_at),
+                }
             _dbg_report(
                 hypothesis_id="COMMAND_CENTER",
-                msg="[DEBUG] command-center cache hit",
+                msg="[DEBUG] command-center cache serve",
+                data={
+                    "project_id": project,
+                    "stale": stale,
+                    "elapsed_ms": int((time.perf_counter() - started) * 1000),
+                },
+                trace_id=trace_id,
+            )
+            return self._json(
+                served,
+                etag=etag,
+                cache_control="no-cache",
+            )
+
+        fingerprint = _project_data_fingerprint(root, project)
+        entry = _cache_entry()
+        if entry is not None:
+            fresh = entry[0] == fingerprint and (
+                time.monotonic() - entry[1]
+            ) < _COMMAND_CENTER_CACHE_TTL_SECONDS
+            if fresh:
+                return _serve_cached(entry, stale=False)
+            # 指纹变化或 TTL 过期：先返回上一轮结果（显式标记陈旧），
+            # 后台重建。数据文件在扫描期间持续变化时，这消除重建风暴。
+            self._spawn_command_center_rebuild(project, root, cache_key, fingerprint)
+            return _serve_cached(entry, stale=True)
+
+        # 首次访问（无任何缓存）：必须阻塞构建——没有任何上一轮结果可以
+        # 诚实呈现。单飞锁保证同一 project 并发请求只有一个构建。
+        build_lock = _command_center_build_lock(cache_key)
+        with build_lock:
+            entry = _cache_entry()
+            if entry is not None:
+                if entry[0] == fingerprint:
+                    return _serve_cached(entry, stale=False)
+                self._spawn_command_center_rebuild(project, root, cache_key, fingerprint)
+                return _serve_cached(entry, stale=True)
+            body, is_error = self._build_and_cache_command_center(
+                project, root, cache_key, fingerprint
+            )
+            _dbg_report(
+                hypothesis_id="COMMAND_CENTER",
+                msg="[DEBUG] command-center first build done"
+                if not is_error
+                else "[DEBUG] command-center first build blocked",
                 data={
                     "project_id": project,
                     "elapsed_ms": int((time.perf_counter() - started) * 1000),
                 },
                 trace_id=trace_id,
             )
-            return self._json(cached_payload)
-
-        # 单飞：同一 project 并发请求只有一个构建，其余在锁外自旋等待缓存。
-        build_lock = _command_center_build_lock(cache_key)
-        with build_lock:
-            # 获取锁后二次检查：上一个持有锁的请求可能已写入缓存。
-            cached_payload = _cache_hit(fingerprint)
-            if cached_payload is not None:
-                _dbg_report(
-                    hypothesis_id="COMMAND_CENTER",
-                    msg="[DEBUG] command-center cache hit (after build lock)",
-                    data={
-                        "project_id": project,
-                        "elapsed_ms": int((time.perf_counter() - started) * 1000),
-                    },
-                    trace_id=trace_id,
-                )
-                return self._json(cached_payload)
-            try:
-                payload = self._build_command_center(project, root)
-                if not isinstance(payload, dict):
-                    raise TypeError("command-center payload must be an object")
-                from .display_ready_formatter import sanitize_customer_evidence_payload
-
-                sanitized = sanitize_customer_evidence_payload(payload)
-                if not isinstance(sanitized, dict):
-                    raise TypeError("sanitized command-center payload must be an object")
-                normalized = _normalize_command_center_envelope(sanitized)
-                _dbg_report(
-                    hypothesis_id="COMMAND_CENTER",
-                    msg="[DEBUG] command-center customer payload ready",
-                    data={
-                        "project_id": project,
-                        "elapsed_ms": int((time.perf_counter() - started) * 1000),
-                    },
-                    trace_id=trace_id,
-                )
-                with _COMMAND_CENTER_CACHE_LOCK:
-                    if len(_COMMAND_CENTER_CACHE) >= _COMMAND_CENTER_CACHE_MAX_ENTRIES:
-                        _COMMAND_CENTER_CACHE.clear()
-                    _COMMAND_CENTER_CACHE[cache_key] = (
-                        fingerprint,
-                        time.monotonic(),
-                        normalized,
-                    )
-                return self._json(normalized)
-            except Exception as exc:
-                _dbg_report(
-                    hypothesis_id="COMMAND_CENTER",
-                    msg="[ERROR] command-center blocked before delivery",
-                    data={
-                        "project_id": project,
-                        "exc_type": type(exc).__name__,
-                    },
-                    trace_id=trace_id,
-                )
-                import traceback as _traceback
-                _http_logger.error(
-                    "command-center delivery blocked: project=%s exc=%s %s",
-                    project,
-                    type(exc).__name__,
-                    exc,
-                    exc_info=True,
-                )
-                return self._json(
-                    {
-                        "ok": False,
-                        "error": "COMMAND_CENTER_DELIVERY_BLOCKED",
-                        "message": "客户证据脱敏或交付格式校验失败，原始数据未返回。",
-                    },
-                    500,
-                )
+            if is_error:
+                return self._json(body, 500)
+            return self._json(body, etag=f'"cmdctr-{fingerprint}"', cache_control="no-cache")
 
     def do_GET(self) -> None:  # noqa: N802
         self._init_request_context()
@@ -467,50 +695,26 @@ class HttpRoutingMixin:
                 project, root
             ) or build_enterprise_testops_control_plane(project, root)
             return self._json({"ok": True, "control_plane": control_plane})
+        if parsed.path == "/api/knowledge/summary":
+            # 轻量视图：只返回 summary + 来源清单（KB 级），绝不下发整个
+            # 知识资产（实测 100-165MB）。来源下拉、资料列表等只读消费者必须
+            # 使用本端点；需要完整资产的页面继续走 /api/knowledge/asset。
+            asset = self._load_merged_knowledge_asset(project, root, actor)
+            raw_sources = asset.get("sources")
+            sources = raw_sources if isinstance(raw_sources, list) else []
+            raw_summary = asset.get("summary")
+            summary = dict(raw_summary) if isinstance(raw_summary, dict) else {}
+            summary["active_source_count"] = len(sources)
+            return self._json(
+                {
+                    "ok": True,
+                    "project_id": project,
+                    "summary": summary,
+                    "sources": sources,
+                }
+            )
         if parsed.path == "/api/knowledge/asset":
-            from .enterprise_knowledge_center import (
-                build_enterprise_business_knowledge_asset,
-                load_enterprise_business_knowledge_asset,
-            )
-
-            asset = load_enterprise_business_knowledge_asset(
-                project, root
-            ) or build_enterprise_business_knowledge_asset(project, root)
-            if not isinstance(asset, dict):
-                raise TypeError("knowledge asset must be an object")
-            input_files = self._list_project_inputs(project, root)
-            existing = _knowledge_asset_sources(asset, root)
-            inputs = (
-                input_files.get("sources", [])
-                if isinstance(input_files, dict)
-                and isinstance(input_files.get("sources"), list)
-                else []
-            )
-            merged: dict[str, dict[str, Any]] = {}
-            for item in [*existing, *inputs]:
-                if not isinstance(item, dict):
-                    continue
-                key = _text(
-                    item.get("source_id")
-                    or item.get("id")
-                    or item.get("filename")
-                )
-                if key:
-                    merged.setdefault(key, dict(item))
-            asset["sources"] = list(merged.values())
-            summary = asset.get("summary")
-            if not isinstance(summary, dict):
-                summary = {}
-                asset["summary"] = summary
-            summary["active_source_count"] = len(asset["sources"])
-            from .connector_acl_authority import filter_connector_asset_for_actor
-
-            asset = filter_connector_asset_for_actor(
-                project,
-                asset,
-                actor={**actor, "project_id": project} if actor else actor,
-                root=root,
-            )
+            asset = self._load_merged_knowledge_asset(project, root, actor)
             return self._json({"ok": True, "knowledge_asset": asset})
         if parsed.path == "/api/knowledge/preview":
             source_id = (parse_qs(parsed.query).get("source_id") or [""])[0]

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 import os
 import re
 import time
@@ -21,10 +22,17 @@ from .real_project_onboarding import _safe_project_id
 
 _LOGGER = logging.getLogger(__name__)
 
+# 产物化证据 bundle 的报告视图缓存：内容寻址产物不可变，指针 mtime 即身份。
+_EVIDENCE_BUNDLE_VIEW_CACHE: dict[tuple[str, str, int], dict[str, Any]] = {}
+_EVIDENCE_BUNDLE_VIEW_CACHE_MAX = 32
+_EVIDENCE_BUNDLE_VIEW_CACHE_LOCK = threading.Lock()
+
 class ReportLoadingMixin:
     @staticmethod
     def _read_json_dict(path: Path) -> dict[str, Any]:
-        return _read_json_object(path)
+        from .private_pilot_build_scope import scoped_read_json
+
+        return scoped_read_json(path, lambda: _read_json_object(path))
 
     @staticmethod
     def _read_scan_report_payload(path: Path) -> dict[str, Any]:
@@ -39,25 +47,76 @@ class ReportLoadingMixin:
         command-center view for the project. Hydration failures fall back to
         the raw view (store-disabled mode) with a visible warning; downstream
         contracts still surface any real inconsistency.
+
+        Reads are memoized per build scope (see ``private_pilot_build_scope``):
+        one command-center build re-enters this loader for the same artifact
+        identity several times; hydration of a multi-hundred-MB shard store is
+        far too expensive to repeat per consumer.
         """
+        from .private_pilot_build_scope import scoped_read_json, scoped_scan_report
 
         if path.name != "scan_result.json":
-            return _read_json_object(path)
-        try:
-            from .scan_result_store import load_scan_result
+            return scoped_read_json(path, lambda: _read_json_object(path))
 
-            hydrated = load_scan_result(path)
-            if hydrated:
-                return hydrated
-        except Exception as exc:  # noqa: BLE001 - fallback keeps report load alive
-            _LOGGER.warning(
-                "scan_result_dual_read_hydration_failed path=%s error_type=%s error=%s",
-                path,
-                type(exc).__name__,
-                str(exc)[:240],
-                exc_info=True,
+        def _hydrate() -> dict[str, Any]:
+            from .scan_result_store import (
+                STORE_COMPLETE_MARKER,
+                is_sharded_scan_result,
+                load_scan_result,
             )
-        return _read_json_object(path)
+
+            parts_dir = path.parent / "scan_result.parts"
+            marker_path = parts_dir / STORE_COMPLETE_MARKER
+            try:
+                if parts_dir.is_dir() and not marker_path.is_file():
+                    # 撕裂 store：完成标记缺失，加载器必然拒绝。在这里立即
+                    # 失败，避免每个轮询周期都白白解析数十 MB 的索引。
+                    raise ValueError(
+                        "scan_result store is torn/incomplete: completion "
+                        f"marker missing ({marker_path}); refusing partial "
+                        "hydration. Re-run the scan to regenerate a consistent "
+                        "store."
+                    )
+                hydrated = load_scan_result(path)
+                if hydrated:
+                    return hydrated
+            except Exception as exc:  # noqa: BLE001 - fallback keeps report load alive
+                _LOGGER.warning(
+                    "scan_result_dual_read_hydration_failed path=%s error_type=%s error=%s",
+                    path,
+                    type(exc).__name__,
+                    str(exc)[:240],
+                    exc_info=True,
+                )
+                if is_sharded_scan_result(path):
+                    # 分片索引没有可用的裸视图：裸读会再次进入加载器并复现
+                    # 同一个错误（回退死路）。跳过该候选，让候选循环尝试
+                    # 下一个数据源（v12_report / intelligence_report /
+                    # workspace 副本 / evidence bundle）。
+                    return {}
+            return _read_json_object(path)
+
+        return scoped_scan_report(path, _hydrate)
+
+    @staticmethod
+    def _read_knowledge_asset_scoped(path: Path) -> dict[str, Any] | None:
+        """Parse one knowledge-asset candidate within the active build scope.
+
+        Legacy semantics preserved exactly: any parse failure returns ``None``
+        so callers skip to the next candidate; the ``None`` result itself is
+        cached so one build never retries the same failed identity.
+        """
+
+        def _parse() -> dict[str, Any] | None:
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8") or "{}")
+            except Exception:
+                return None
+            return payload if isinstance(payload, dict) else None
+
+        from .private_pilot_build_scope import scoped_read_json
+
+        return scoped_read_json(path, _parse)
 
     @staticmethod
     def _mtime_utc(path: Path) -> str:
@@ -184,32 +243,52 @@ class ReportLoadingMixin:
             "report_source_path": str(payload.get("report_source_path") or ""),
         }
 
-    def _load_v12_report(self, project_id: str, root: Path) -> dict[str, Any]:
-        project = _safe_project_id(project_id)
-        explicit_candidates = [
+    # 轻报告 = Phase-6 产物化运行报告（finding 摘要 + artifact_refs，MB 级）。
+    # 重候选 = scan_result 分片 store / v12 全量报告——分片 store 的全量水合
+    # 实测分钟级（590MB 组装），只有轻源全部缺失时才允许回退。
+    _HEAVY_REPORT_RELPATHS = (
+        ("platform_outputs", "{p}", "v12_report.json"),
+        ("platform_outputs", "{p}", "scan_result.json"),
+        ("platform_workspace", "{p}", "v12_report.json"),
+        ("platform_workspace", "{p}", "scan_result.json"),
+    )
+
+    def _light_report_candidates(self, project: str, root: Path) -> list[Path]:
+        return [
             root / "platform_outputs" / project / "intelligence_report.json",
-            root / "platform_outputs" / project / "v12_report.json",
-            root / "platform_outputs" / project / "scan_result.json",
             root / "platform_workspace" / project / "intelligence_report.json",
-            root / "platform_workspace" / project / "v12_report.json",
-            root / "platform_workspace" / project / "scan_result.json",
             root / "benchmark_outputs" / project / "intelligence_report.json",
         ]
+
+    def _load_v12_report(self, project_id: str, root: Path) -> dict[str, Any]:
+        project = _safe_project_id(project_id)
 
         # Do not return the first/newest JSON blindly. Real backend runs can write
         # summary numbers to one report while evidence files are written under
         # platform_workspace. Pick the strongest source-of-truth by materialized
         # finding signal, then by mtime. This prevents the React page from reading
         # an older/empty scan_result while the backend report shows newer totals.
+        #
+        # 轻报告优先：产物化运行报告是同一 run 的正式摘要（finding 摘要 +
+        # artifact_refs），命令中心视图所需的全部业务行都在其中；重型
+        # scan_result 分片组装只在轻源缺失时作为回退，绝不让一次页面轮询
+        # 隐式支付 590MB 的全量水合。
         candidate_payloads: list[tuple[int, float, dict[str, Any]]] = []
-        for path in explicit_candidates:
+
+        def _consider(path: Path) -> None:
             if not path.exists():
-                continue
+                return
             payload = self._read_scan_report_payload(path)
             if not payload:
-                continue
+                return
             payload.setdefault("report_source_path", path.relative_to(root).as_posix() if path.is_relative_to(root) else str(path))
             candidate_payloads.append((self._report_signal_count(payload), path.stat().st_mtime, payload))
+
+        for path in self._light_report_candidates(project, root):
+            _consider(path)
+        if not candidate_payloads:
+            for rel in self._HEAVY_REPORT_RELPATHS:
+                _consider(root.joinpath(*[part.format(p=project) for part in rel]))
 
         workspace_report = self._load_workspace_report(project, root)
         if workspace_report:
@@ -261,14 +340,16 @@ class ReportLoadingMixin:
 
     def _load_current_scan_report(self, project_id: str, root: Path) -> dict[str, Any]:
         project = _safe_project_id(project_id)
-        candidates = [
-            root / "platform_outputs" / project / "intelligence_report.json",
-            root / "platform_outputs" / project / "v12_report.json",
-            root / "platform_outputs" / project / "scan_result.json",
-            root / "platform_workspace" / project / "intelligence_report.json",
-            root / "platform_workspace" / project / "v12_report.json",
-            root / "platform_workspace" / project / "scan_result.json",
-        ]
+        # 轻报告优先（与 _load_v12_report 同一分层）：mtime 权威选择只在
+        # 轻源内部进行；轻源全部缺失才回退重型候选。
+        candidates = self._light_report_candidates(project, root)
+        if not any(path.exists() for path in candidates):
+            candidates = [
+                root / "platform_outputs" / project / "v12_report.json",
+                root / "platform_outputs" / project / "scan_result.json",
+                root / "platform_workspace" / project / "v12_report.json",
+                root / "platform_workspace" / project / "scan_result.json",
+            ]
         chosen: tuple[float, int, dict[str, Any]] | None = None
         for path in candidates:
             if not path.exists():
@@ -311,10 +392,28 @@ class ReportLoadingMixin:
             if pointer_path.is_file():
                 # ── P0-4 Dual Read: artifactized bundles hydrate through the
                 # content-addressed store; no evidence is copied back to disk. ──
+                # Bundle 视图按 (project, bundle, pointer-mtime) 模块级缓存：
+                # 内容寻址产物不可变，指针未变即视图未变。一次冷构建会为每个
+                # bundle 读取 manifest/campaign/findings（实测 14 包 ~47s），
+                # 缓存让后续构建直接复用。
                 try:
                     from .evidence_artifactization import load_evidence_bundle_report_view
 
-                    view = load_evidence_bundle_report_view(project, bundle_dir.name, root=root)
+                    view = None
+                    try:
+                        _pointer_key = (project, bundle_dir.name, pointer_path.stat().st_mtime_ns)
+                    except OSError:
+                        _pointer_key = None
+                    if _pointer_key is not None:
+                        with _EVIDENCE_BUNDLE_VIEW_CACHE_LOCK:
+                            view = _EVIDENCE_BUNDLE_VIEW_CACHE.get(_pointer_key)
+                    if view is None:
+                        view = load_evidence_bundle_report_view(project, bundle_dir.name, root=root)
+                        if view and _pointer_key is not None:
+                            with _EVIDENCE_BUNDLE_VIEW_CACHE_LOCK:
+                                if len(_EVIDENCE_BUNDLE_VIEW_CACHE) >= _EVIDENCE_BUNDLE_VIEW_CACHE_MAX:
+                                    _EVIDENCE_BUNDLE_VIEW_CACHE.clear()
+                                _EVIDENCE_BUNDLE_VIEW_CACHE[_pointer_key] = view
                 except Exception:
                     continue
                 if not view:
@@ -823,6 +922,36 @@ class ReportLoadingMixin:
             })
         return findings
 
+    def _scan_report_load_diagnostics(self, project_id: str, root: Path) -> dict[str, Any] | None:
+        """Honest visibility when the strongest scan-report candidate is unreadable.
+
+        Called by the command-center builder only when no report candidate
+        yielded a payload. A torn sharded store is the one failure mode that
+        silently zeroes every candidate; it must surface as a named state in
+        the payload (and the logs), never as a fake clean empty view.
+        """
+        from .scan_result_store import STORE_COMPLETE_MARKER, is_sharded_scan_result
+
+        project = _safe_project_id(project_id)
+        for base in ("platform_outputs", "platform_workspace"):
+            path = root / base / project / "scan_result.json"
+            try:
+                if not path.exists() or not is_sharded_scan_result(path):
+                    continue
+            except OSError:
+                continue
+            marker_path = path.parent / "scan_result.parts" / STORE_COMPLETE_MARKER
+            if not marker_path.is_file():
+                return {
+                    "status": "SCAN_RESULT_STORE_TORN",
+                    "message": (
+                        "扫描结果分片存储不完整（缺少完成标记），本轮结果无法读取。"
+                        "请对该项目重跑一次扫描以重建一致的存储。"
+                    ),
+                    "report_source_path": f"{base}/{project}/scan_result.json",
+                }
+        return None
+
     def _load_enterprise_docs(self, project_id: str, root: Path) -> list[dict]:
         """Load enterprise knowledge documents for evidence association.
 
@@ -847,9 +976,8 @@ class ReportLoadingMixin:
         for doc_path in candidates:
             if not doc_path.exists():
                 continue
-            try:
-                asset = json.loads(doc_path.read_text(encoding="utf-8") or "{}")
-            except Exception:
+            asset = self._read_knowledge_asset_scoped(doc_path)
+            if asset is None:
                 continue
             sources = asset.get("source_inventory") or asset.get("sources") or asset.get("items") or []
             if isinstance(sources, dict):
@@ -918,9 +1046,8 @@ class ReportLoadingMixin:
         for doc_path in candidates:
             if not doc_path.exists():
                 continue
-            try:
-                asset = json.loads(doc_path.read_text(encoding="utf-8") or "{}")
-            except Exception:
+            asset = self._read_knowledge_asset_scoped(doc_path)
+            if asset is None:
                 continue
             summary = asset.get("summary") if isinstance(asset, dict) else None
             if isinstance(summary, dict):
@@ -932,21 +1059,25 @@ class ReportLoadingMixin:
                 actor_loader = getattr(self, "_principal", None)
                 actor = actor_loader() if callable(actor_loader) else None
                 if actor is not None and isinstance(asset, dict):
-                    from .connector_acl_authority import filter_connector_asset_for_actor
+                    from .connector_acl_authority import filter_connector_sources_for_actor
 
-                    projected = filter_connector_asset_for_actor(
+                    # 只对来源清单做可见性投影（与 docs 加载器同一来源级权威）。
+                    # 整资产 ACL 投影会深拷贝并递归走 100MB+ 树（实测 143s），
+                    # 而这里需要的只是可见来源计数。
+                    raw_inventory = (
+                        asset.get("source_inventory")
+                        or asset.get("sources")
+                        or []
+                    )
+                    if isinstance(raw_inventory, dict):
+                        raw_inventory = list(raw_inventory.values())
+                    visible_inventory, _acl_summary = filter_connector_sources_for_actor(
                         project_id,
-                        asset,
+                        [row for row in raw_inventory if isinstance(row, dict)],
                         actor={**actor, "project_id": project_id},
                         root=root,
                     )
-                    projected_summary = projected.get("summary")
-                    if isinstance(projected_summary, dict):
-                        visible_source_count = int(
-                            projected_summary.get("active_source_count")
-                            or projected_summary.get("source_count")
-                            or 0
-                        )
+                    visible_source_count = len(visible_inventory)
                 return {
                     "active_source_count": visible_source_count,
                     "rule_count": int(summary.get("rule_count") or 0),
@@ -977,22 +1108,35 @@ class ReportLoadingMixin:
         return {}
 
     @staticmethod
-    def _load_db_findings(root: Path, project_id: str) -> list[dict]:
-        report = root / "platform_outputs" / project_id / "scan_result.json"
-        if not report.exists():
+    def _load_db_findings(root: Path, project_id: str, report: dict[str, Any] | None = None) -> list[dict]:
+        # 轻报告时代：db_verification 若已在已加载报告中，直接使用；
+        # 仅当报告缺失该段且 scan_result 是旧单文件（非分片）时才回退读盘，
+        # 绝不为遗留段落隐式支付分片全量水合。
+        data: dict[str, Any] | None = None
+        if isinstance(report, dict) and "db_verification" in report:
+            data = report
+        else:
+            scan_file = root / "platform_outputs" / project_id / "scan_result.json"
+            if not scan_file.exists():
+                return []
+            from .scan_result_store import is_sharded_scan_result
+
+            if is_sharded_scan_result(scan_file):
+                return []
+            data = ReportLoadingMixin._read_scan_report_payload(scan_file)
+        if not data:
             return []
-        data = ReportLoadingMixin._read_scan_report_payload(report)
         db_verification = data.get("db_verification")
         if db_verification is None:
             return []
         if not isinstance(db_verification, dict):
-            raise ValueError(f"db_verification must be an object: {report}")
+            raise ValueError(f"db_verification must be an object: {project_id}")
         db_findings = db_verification.get("findings", [])
         if not isinstance(db_findings, list):
-            raise ValueError(f"db_verification.findings must be a list: {report}")
+            raise ValueError(f"db_verification.findings must be a list: {project_id}")
         for index, finding in enumerate(db_findings):
             if not isinstance(finding, dict):
-                raise ValueError(f"db_verification.findings[{index}] must be an object: {report}")
+                raise ValueError(f"db_verification.findings[{index}] must be an object: {project_id}")
             finding.setdefault("risk_type", "db_snapshot")
             finding.setdefault("defect_family", "data_integrity")
             ev_row = finding.get("evidence", {}).get("db_row") if isinstance(finding.get("evidence"), dict) else None
@@ -1097,14 +1241,26 @@ class ReportLoadingMixin:
         }
 
     @staticmethod
-    def _load_multi_layer_findings(root: Path, project_id: str) -> list[dict]:
-        scan_file = root / "platform_outputs" / project_id / "scan_result.json"
-        if not scan_file.exists():
+    def _load_multi_layer_findings(root: Path, project_id: str, report: dict[str, Any] | None = None) -> list[dict]:
+        # 轻报告时代：layers 若已在已加载报告中直接使用；分片 store 不为
+        # 遗留段落做全量水合（与 _load_db_findings 同一守卫）。
+        data: dict[str, Any] | None = None
+        if isinstance(report, dict) and "layers" in report:
+            data = report
+        else:
+            scan_file = root / "platform_outputs" / project_id / "scan_result.json"
+            if not scan_file.exists():
+                return []
+            from .scan_result_store import is_sharded_scan_result
+
+            if is_sharded_scan_result(scan_file):
+                return []
+            data = ReportLoadingMixin._read_scan_report_payload(scan_file)
+        if not data:
             return []
-        data = ReportLoadingMixin._read_scan_report_payload(scan_file)
         layers = data.get("layers", {})
         if not isinstance(layers, dict):
-            raise ValueError(f"scan layers must be an object: {scan_file}")
+            raise ValueError(f"scan layers must be an object: {project_id}")
         findings: list[dict[str, Any]] = []
         for layer_name, layer_data in layers.items():
             if not isinstance(layer_data, dict):
@@ -1219,8 +1375,9 @@ class ReportLoadingMixin:
             for kc_path in candidates:
                 if not kc_path.exists():
                     continue
-                import json as _jk
-                kc = _jk.loads(kc_path.read_text(encoding="utf-8") or "{}")
+                kc = self._read_knowledge_asset_scoped(kc_path)
+                if kc is None:
+                    continue
                 raw_sources = kc.get("source_inventory") or kc.get("sources") or kc.get("items") or []
                 sources = len(raw_sources) if isinstance(raw_sources, list) else len(raw_sources.keys()) if isinstance(raw_sources, dict) else 0
                 rules = len(kc.get("rule_library") or [])

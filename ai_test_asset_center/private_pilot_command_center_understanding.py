@@ -605,21 +605,45 @@ def project_existing_understanding_command_center(
 
     try:
         from .enterprise_knowledge_center import load_enterprise_business_knowledge_asset
+        from .private_pilot_build_scope import scoped_read_json
 
-        asset = load_enterprise_business_knowledge_asset(project, root)
+        # 构建内单次加载：key 取权威加载器的主候选路径。同一构建内
+        # _load_knowledge_summary / _load_enterprise_docs 已解析过同一文件时，
+        # 这里直接命中 scope 缓存，不再重复解析 100MB+ 资产。
+        _primary_candidate = (
+            root / "platform_workspace" / project
+            / "defect_discovery" / "enterprise_business_knowledge_asset.json"
+        )
+        asset = scoped_read_json(
+            _primary_candidate,
+            lambda: load_enterprise_business_knowledge_asset(project, root),
+        )
     except Exception:
         asset = None
     if not isinstance(asset, dict) or not asset:
         return result
     if actor is not None:
-        from .connector_acl_authority import filter_connector_asset_for_actor
+        # ACL 语义收窄：本投影的输出只有计数、状态、门布尔与 blocker 代码，
+        # 不携带任何资产行内容或连接器身份；需要可见性修正的只有来源计数。
+        # 因此只对来源清单做来源级过滤（毫秒级），绝不再对 100MB+ 资产做
+        # 整资产深投影（deepcopy + 全树递归，实测 105s）。
+        from .connector_acl_authority import filter_connector_sources_for_actor
 
-        asset = filter_connector_asset_for_actor(
+        raw_inventory = asset.get("source_inventory") or asset.get("sources") or []
+        if isinstance(raw_inventory, dict):
+            raw_inventory = list(raw_inventory.values())
+        visible_inventory, _acl_summary = filter_connector_sources_for_actor(
             project,
-            asset,
+            [row for row in raw_inventory if isinstance(row, dict)],
             actor={**actor, "project_id": project} if actor else actor,
             root=root,
         )
+        asset = dict(asset)
+        asset["source_inventory"] = visible_inventory
+        asset["sources"] = visible_inventory
+        summary_view = dict(asset.get("summary") or {})
+        summary_view["active_source_count"] = len(visible_inventory)
+        asset["summary"] = summary_view
 
     existing = dict(_record(data.get("knowledge_summary")))
     data["knowledge_summary"] = {**existing, **_understanding_projection(asset)}
