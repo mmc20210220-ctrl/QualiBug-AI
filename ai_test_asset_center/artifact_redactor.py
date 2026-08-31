@@ -63,6 +63,47 @@ DSN_CRED_RE = re.compile(
     r"(?i)\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis|amqp|https?)://"
     r"[^\s:/@]+:[^\s@/]+@"
 )
+# Scanner pattern order is the report-order contract below (first match wins),
+# and also the alternation order of the combined gate built from it.
+SCANNER_PATTERN_ORDER = (
+    ("jwt", JWT_RE),
+    ("bearer", BEARER_RE),
+    ("basic", BASIC_RE),
+    ("api_key", API_KEY_RE),
+    ("private_key", PRIVATE_KEY_RE),
+    ("dsn_credential", DSN_CRED_RE),
+)
+
+
+def _combine_scanner_patterns() -> "re.Pattern[str]":
+    """One alternation over every scanner pattern, preserving per-branch flags.
+
+    This is an *exact* disjunction, not a heuristic: a string that fails it
+    cannot match any of the six patterns, so the six full scans are provably
+    skippable. Each branch keeps its own case sensitivity (``(?i:...)`` scoped
+    inline) because the sources differ — JWT/api_key/private_key are
+    case-sensitive while bearer/basic/dsn are not.
+    """
+    branches: list[str] = []
+    for label, pattern in SCANNER_PATTERN_ORDER:
+        source = pattern.pattern
+        # Strip a leading inline global flag (DSN carries "(?i)"); it would be
+        # illegal mid-pattern once concatenated, so re-apply it scoped below.
+        source = re.sub(r"^\(\?[aiLmsux]+\)", "", source)
+        if pattern.flags & re.IGNORECASE:
+            source = f"(?i:{source})"
+        branches.append(f"(?P<{label}>{source})")
+    return re.compile("|".join(branches))
+
+
+# Measured on the real 92 MB archive: ~21.6M `re.search` calls for 2.67M string
+# leaves (≈8 per leaf), i.e. almost every leaf ran all six patterns. A cheap
+# substring pre-check was tried first and **did not help** (0.98x — its
+# necessary condition was far too loose: "://" and "basic" are everywhere in
+# real payloads, so it almost always passed and just added a seventh scan).
+# An exact disjunction avoids that failure mode: it rejects only strings that
+# provably match nothing.
+SCANNER_COMBINED_RE = _combine_scanner_patterns()
 COOKIE_HEADER_RE = re.compile(r"(?i)(?:^|[\r\n])Cookie:\s*[^\r\n]+")
 PASSWORD_ASSIGN_RE = re.compile(
     r'(?i)("?(?:password|passwd|pwd|client_secret|api_key|access_token|token)"?\s*[:=]\s*)(["\']?)([^"\'\s,}\]]+)(\2)'
@@ -346,7 +387,9 @@ def scan_for_secrets(payload: Any, *, skip_value_patterns: bool = False) -> dict
             re.I,
         ))
 
-    def walk(value: Any, path: str = "$", key: str = "", _seen: set[int] | None = None) -> None:
+    def walk(
+        value: Any, path: str = "$", key: str = "", _seen: set[int] | None = None
+    ) -> None:
         # Runtime payloads may legally contain self-referential structures
         # (e.g. an experiment embedding its own obligation). Guard with an
         # identity set so the scanner terminates instead of recursing forever.
@@ -390,14 +433,11 @@ def scan_for_secrets(payload: Any, *, skip_value_patterns: bool = False) -> dict
             # so none of the scanner patterns can match. Only the sensitive-key
             # residual check (above) remains as the fail-closed backstop.
             return
-        for label, pattern in (
-            ("jwt", JWT_RE),
-            ("bearer", BEARER_RE),
-            ("basic", BASIC_RE),
-            ("api_key", API_KEY_RE),
-            ("private_key", PRIVATE_KEY_RE),
-            ("dsn_credential", DSN_CRED_RE),
-        ):
+        if not SCANNER_COMBINED_RE.search(value):
+            # Exact disjunction failed: none of the six patterns can match, so
+            # all six scans are provably skippable (see SCANNER_COMBINED_RE).
+            return
+        for label, pattern in SCANNER_PATTERN_ORDER:
             if pattern.search(value):
                 issues.append({
                     "path": path,
