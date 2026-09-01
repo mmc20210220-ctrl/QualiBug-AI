@@ -177,6 +177,28 @@ REASON_CODE_REGISTRY.update({
     "CLEANUP_PROOF_DEFERRED_FIELD_ORACLE": _reason_definition(
         "CLEANUP_CAPABILITY_GAP", recoverability="RECOVERABLE"
     ),
+    # Both codes below are emitted by the product into terminal attempt reason
+    # positions (CLEANUP_NOT_SUCCEEDED by the delivery gate, see
+    # _customer_delivery_gate_v2_mechanics; CLEANUP_NOT_REVERSIBLE by the trace
+    # ledger signature projection, see discovery_trace_ledger) but were absent
+    # from this registry. An unregistered terminal reason code is not a
+    # cosmetic gap: the funnel's ``reason_code_registry`` conservation check
+    # fails FAILED_SAFE on it, which drags the whole conservation to
+    # FAILED_SAFE, which in turn escalates build_pipeline_health to
+    # FAILED_SAFE — masking the DEGRADED that principle 14 requires for a
+    # cleanup failure. Worse, profile_reason_code then returns no family, so
+    # cleanup_failures counted 0 and the real cleanup failure vanished from the
+    # health report entirely. Registering them is the root-cause fix; the
+    # registry check stays strict (fail loud on genuinely unknown codes).
+    "CLEANUP_NOT_SUCCEEDED": _reason_definition(
+        "CLEANUP_CAPABILITY_GAP", recoverability="ENVIRONMENT_DEPENDENT"
+    ),
+    # Direct semantic analog of BLOCKED_NON_REVERSIBLE_WRITE (also
+    # SOURCE_DEPENDENT): whether the write can be undone depends on the target
+    # system exposing a reversible path, not on the harness.
+    "CLEANUP_NOT_REVERSIBLE": _reason_definition(
+        "CLEANUP_CAPABILITY_GAP", recoverability="SOURCE_DEPENDENT"
+    ),
     "LEGACY_EXECUTION_ERROR": _reason_definition("TARGET_SYSTEM_RESPONSE"),
     "ORACLE_EXCEPTION": _reason_definition("ORACLE_INPUT_GAP", recoverability="RECOVERABLE"),
     "POST_REQUEST_PRECONDITION_FAILED": _reason_definition("TARGET_SYSTEM_RESPONSE"),
@@ -441,6 +463,19 @@ _FAMILY_GUIDANCE: dict[str, dict[str, str]] = {
         "规划推迟：义务未进入本轮计划（DEFERRED/OBLIGATION_NOT_IN_PLAN）。",
         "计划器按预算/优先级推迟，非阻塞。",
         "无需处理；如需覆盖，调整计划预算或优先级。",
+    ),
+    # Operator intervention is the one family that was never added here: its
+    # only member (OPERATOR_CANCELLED) therefore resolved to empty guidance,
+    # which build_reason_code_catalog surfaces as guidance_pending and which
+    # test_reason_code_catalog fails on. It is also a genuine reporting gap —
+    # a scan cancelled mid-flight used to appear in the catalog as a code
+    # nobody could interpret. This is deliberately non-blocking and
+    # non-remediable: the operator stopped the scan on purpose, so the only
+    # correct "action" is to re-run if coverage is still wanted.
+    "OPERATOR_INTERVENTION": _guidance(
+        "操作员干预：扫描被操作员显式取消，未执行的义务记为 DEFERRED。",
+        "操作员在执行过程中请求取消扫描；非缺陷，非产品侧失败。",
+        "无需处理；如需覆盖被跳过的义务，重新发起扫描。",
     ),
     "UNREGISTERED": _guidance(
         "未登记原因码：该码不在统一目录中。",

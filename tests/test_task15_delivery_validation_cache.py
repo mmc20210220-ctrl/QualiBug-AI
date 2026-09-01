@@ -275,7 +275,16 @@ def test_gate_validation_cache_cached_equals_uncached() -> None:
 
 
 def test_bundle_validation_cache_reuses_and_invalidates(monkeypatch) -> None:
-    from ai_test_asset_center import customer_delivery_gate_v2 as gate_v2
+    # Patch target matters: validate_customer_delivery_gate_bundle lives in
+    # _customer_delivery_gate_v2_outcome_mechanics and calls the builder
+    # through that module's own globals. The public facade
+    # (customer_delivery_gate_v2) only re-exports an alias bound at import
+    # time (0f3bfd9f moved the validator into the outcome module), so patching
+    # the facade leaves the real builder in place and the stub silently never
+    # runs — which is how this test broke. Patch where the call resolves.
+    from ai_test_asset_center import (
+        _customer_delivery_gate_v2_outcome_mechanics as gate_outcome,
+    )
 
     # The bundle validator rebuilds the gate from receipts; stub the rebuild
     # with a counting wrapper (same pattern as the existing cleanup test) so
@@ -292,7 +301,7 @@ def test_bundle_validation_cache_reuses_and_invalidates(monkeypatch) -> None:
         return deepcopy(other_harness)
 
     monkeypatch.setattr(
-        gate_v2, "build_customer_delivery_gate_receipt_v2", counting_build
+        gate_outcome, "build_customer_delivery_gate_receipt_v2", counting_build
     )
     bundle_kwargs = dict(
         gate_receipt=harness,
