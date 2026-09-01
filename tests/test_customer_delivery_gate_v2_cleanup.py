@@ -120,7 +120,24 @@ def _cleanup_contract(
     }
 
 
-def test_cleanup_failure_is_harness_failure() -> None:
+def test_cleanup_failure_degrades_to_visible_residue() -> None:
+    """A failed cleanup must not destroy the finding, but must not vanish either.
+
+    This test used to assert the opposite (``HARNESS_FAILED`` +
+    ``CLEANUP_COMPENSATION_FAILED``). That contract was deliberately retired:
+    demoting the gate on hygiene outcomes measured-cost real VIOLATIONs — 29
+    verified VIOLATIONs were misjudged as harness failures and had to be
+    recovered (140fa1f7), and 815fff76/7f1b065f made 原则14 explicit. Cleanup on
+    a declared non-production target is post-test hygiene; it never overrides
+    execution truth or a proven Oracle verdict.
+
+    The trade is that the failure stays *visible* rather than *fatal*: the
+    adjudication must read RESIDUE_ACCEPTED, never COMPLETED, and the sealed
+    cleanup contract keeps its exact FAILED status referenced from the gate.
+    The invariant that makes this safe — failure and success must remain
+    distinguishable — is asserted directly by
+    test_failed_cleanup_is_distinguishable_from_successful_cleanup.
+    """
     decision = _cleanup_gate_decision(
         execution=_execution(
             accepted_writes=1,
@@ -131,7 +148,45 @@ def test_cleanup_failure_is_harness_failure() -> None:
         contracts=[_cleanup_contract(accepted_write_count=0, status="FAILED")],
     )
 
-    assert decision == ("HARNESS_FAILED", ["CLEANUP_COMPENSATION_FAILED"], "FAILED")
+    assert decision[0] == "DELIVERABLE"
+    assert decision[2] == "RESIDUE_ACCEPTED"
+
+
+def test_failed_cleanup_is_distinguishable_from_successful_cleanup() -> None:
+    """The 原则14 degradation must remain observable, not a silent swallow.
+
+    This is the guard that gives the degradation tests their meaning. Once
+    cleanup failure no longer changes the gate status, every status assertion
+    in this file would still pass even if cleanup outcomes stopped being
+    recorded at all. What must differ is the adjudication: a proven cleanup
+    adjudicates COMPLETED, anything unproven adjudicates RESIDUE_ACCEPTED. If a
+    future change ever reports COMPLETED for a failed cleanup, hygiene failures
+    become invisible while the suite stays green — this is what catches that.
+    """
+    failed = _cleanup_gate_decision(
+        execution=_execution(
+            accepted_writes=1,
+            cleanup_status="FAILED",
+            attempted=1,
+            failures=1,
+        ),
+        contracts=[_cleanup_contract(accepted_write_count=0, status="FAILED")],
+    )
+    completed = _cleanup_gate_decision(
+        execution=_execution(
+            accepted_writes=1,
+            cleanup_status="COMPLETED",
+            attempted=1,
+            failures=0,
+        ),
+        contracts=[_cleanup_contract(accepted_write_count=1, status="COMPLETED")],
+    )
+
+    # 原则14: both deliver the finding — hygiene never overrides execution truth.
+    assert failed[0] == completed[0] == "DELIVERABLE"
+    # ...but the cleanup outcome itself must stay legible.
+    assert failed[2] == "RESIDUE_ACCEPTED"
+    assert completed[2] == "COMPLETED"
 
 
 def _residue_contract(accepted_write_count: int = 1) -> dict:
@@ -167,7 +222,8 @@ def test_cleanup_gate_delivers_accepted_residue() -> None:
 
 def test_cleanup_gate_residue_requires_explicit_residue_flag() -> None:
     """A RESIDUE_ACCEPTED status without the residue evidence flag is not a
-    genuine accepted-residue receipt and must not short-circuit to DELIVERABLE."""
+    genuine accepted-residue receipt: it must not take the clean short-circuit
+    and must not adjudicate as a proven cleanup."""
     contract = _residue_contract(1)
     contract["evidence"]["residue"] = False
     decision = _cleanup_gate_decision(
@@ -175,7 +231,12 @@ def test_cleanup_gate_residue_requires_explicit_residue_flag() -> None:
         contracts=[contract],
     )
 
-    assert decision[0] == "HARNESS_FAILED"
+    # It no longer demotes to HARNESS_FAILED (原则14, see
+    # test_cleanup_failure_degrades_to_visible_residue), but the missing
+    # residue flag must still cost it the clean path: the receipt is unproven
+    # hygiene, so it may not adjudicate COMPLETED.
+    assert decision[0] == "DELIVERABLE"
+    assert decision[2] == "RESIDUE_ACCEPTED"
 
 
 def test_oracle_harness_detail_preserves_activation_failure_reasons() -> None:
@@ -244,6 +305,13 @@ def test_harness_reason_detail_cannot_appear_on_another_gate_status() -> None:
 
 
 def test_cleanup_receipt_must_cover_every_accepted_write() -> None:
+    """A coverage gap must not be reported as a proven cleanup.
+
+    The operational receipt accepted 2 business writes but the sealed cleanup
+    contract only accounts for 1, so a write was left behind. 原则14 keeps the
+    finding deliverable, but the adjudication must not claim COMPLETED — the
+    leftover has to stay readable as residue.
+    """
     decision = _cleanup_gate_decision(
         execution=_execution(
             accepted_writes=2,
@@ -254,11 +322,8 @@ def test_cleanup_receipt_must_cover_every_accepted_write() -> None:
         contracts=[_cleanup_contract(accepted_write_count=1)],
     )
 
-    assert decision == (
-        "HARNESS_FAILED",
-        ["CLEANUP_WRITE_COVERAGE_MISMATCH"],
-        "INCOMPLETE",
-    )
+    assert decision[0] == "DELIVERABLE"
+    assert decision[2] == "RESIDUE_ACCEPTED"
 
 
 def test_state_unchanged_cleanup_subjects_must_not_double_count_coverage() -> None:
