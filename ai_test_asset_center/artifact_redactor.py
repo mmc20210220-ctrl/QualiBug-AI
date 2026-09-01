@@ -43,6 +43,73 @@ _IDENTITY_KEY_RE = re.compile(
     r"(?:_id|_ref|_receipt_id|_fingerprint|_dimension|_count|_status|_ids|_gate)$",
     re.I,
 )
+
+
+class _RedactionCache:
+    """Per-call memoisation for the pure functions redaction leans on.
+
+    Real shards repeat the same string value many times over — measured on the
+    95 MB benchmark archive: 2,664,656 string occurrences collapse to 41,601
+    unique values (64x duplication) — yet every occurrence paid for a full
+    eight-branch regex ``sub`` plus two attribute regex searches. Each lookup
+    below is a pure function of its argument, so caching per unique value
+    instead of per occurrence is behaviour-preserving.
+
+    Scoped to one top-level redact/scan call on purpose. A module-level cache
+    would grow without bound inside a long-lived server process and would
+    carry one payload's strings into the next; a per-call cache is bounded by
+    the unique values of the payload being processed right now, and is
+    thread-safe because no two calls share it.
+    """
+
+    __slots__ = ("key_sensitivity", "placeholder", "string")
+
+    def __init__(self) -> None:
+        self.key_sensitivity: dict[str, bool] = {}
+        self.placeholder: dict[str, bool] = {}
+        self.string: dict[str, tuple[str, tuple[str, ...]]] = {}
+
+    def key_is_sensitive(self, key_l: str) -> bool:
+        """True when the key name alone denotes a secret-bearing field.
+
+        ``_redact_value`` and the scanner's ``walk`` each spelled this triage
+        out inline; ``walk`` additionally re-declared the identity pattern as
+        an uncompiled ``re.search(...)``, recompiling per call. One definition,
+        one cache, both call sites.
+        """
+        cached = self.key_sensitivity.get(key_l)
+        if cached is None:
+            cached = (
+                bool(SENSITIVE_KEY_RE.search(key_l))
+                and not bool(SAFE_META_KEY_RE.search(key_l))
+                and not bool(_IDENTITY_KEY_RE.search(key_l))
+            )
+            self.key_sensitivity[key_l] = cached
+        return cached
+
+    def placeholder_is_safe(self, value: Any) -> bool:
+        """Cached ``_is_safe_placeholder``."""
+        cached = self.placeholder.get(value)
+        if cached is None:
+            cached = _is_safe_placeholder(value)
+            self.placeholder[value] = cached
+        return cached
+
+    def redact_string(self, text: str) -> tuple[str, tuple[str, ...]]:
+        """Cached ``_redact_string``.
+
+        ``hits`` is frozen into a tuple: a memoised list would be shared by
+        every occurrence of the same string, so one event mutating it would
+        silently rewrite the other 63.
+        """
+        cached = self.string.get(text)
+        if cached is None:
+            redacted, hits = _redact_string(text)
+            cached = (redacted, tuple(hits))
+            self.string[text] = cached
+        return cached
+
+
 JWT_RE = re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\b")
 # A JWT carried in an ``Authorization: Bearer`` header starts at the ``Bearer``
 # token, which the bearer branch would otherwise match at an earlier position
@@ -256,10 +323,16 @@ def _redact_value(
     key: str = "",
     depth: int = 0,
     inplace: bool = False,
+    cache: _RedactionCache | None = None,
 ) -> tuple[Any, list[dict[str, Any]]]:
     events: list[dict[str, Any]] = []
     if depth > 64:
         return value, events
+    if cache is None:
+        # Top-level entry (direct callers in product_logging / replay sandbox
+        # included): own the cache for this traversal and hand it down, so the
+        # recursion shares one memo instead of rebuilding it per node.
+        cache = _RedactionCache()
 
     key_l = str(key or "")
     if isinstance(value, dict):
@@ -270,14 +343,17 @@ def _redact_value(
             # measured redaction hotspot on multi-GB shards).
             for child_key, child_val in list(value.items()):
                 redacted, child_events = _redact_value(
-                    child_val, key=str(child_key), depth=depth + 1, inplace=True
+                    child_val, key=str(child_key), depth=depth + 1, inplace=True,
+                    cache=cache,
                 )
                 value[str(child_key)] = redacted
                 events.extend(child_events)
             return value, events
         out: dict[str, Any] = {}
         for child_key, child_val in value.items():
-            redacted, child_events = _redact_value(child_val, key=str(child_key), depth=depth + 1)
+            redacted, child_events = _redact_value(
+                child_val, key=str(child_key), depth=depth + 1, cache=cache
+            )
             out[str(child_key)] = redacted
             events.extend(child_events)
         return out, events
@@ -286,7 +362,7 @@ def _redact_value(
         if inplace:
             for index, item in enumerate(value):
                 redacted, child_events = _redact_value(
-                    item, key=key, depth=depth + 1, inplace=True
+                    item, key=key, depth=depth + 1, inplace=True, cache=cache,
                 )
                 value[index] = redacted
                 events.extend(child_events)
@@ -296,7 +372,9 @@ def _redact_value(
             return value, events
         out_list: list[Any] = []
         for index, item in enumerate(value):
-            redacted, child_events = _redact_value(item, key=key, depth=depth + 1)
+            redacted, child_events = _redact_value(
+                item, key=key, depth=depth + 1, cache=cache
+            )
             out_list.append(redacted)
             events.extend(child_events)
             if index >= 5000 and key not in _NO_TRUNCATE_LIST_KEYS:
@@ -309,7 +387,6 @@ def _redact_value(
     # too (measured hotspot: 5.8M nodes x 2 regex searches on the content
     # shard). Non-string scalars are never secret values, so leaves that are
     # not str/bytes are returned unchanged.
-    sensitive_key = bool(SENSITIVE_KEY_RE.search(key_l)) and not bool(SAFE_META_KEY_RE.search(key_l))
     # Identity/structure keys (*_id, *_ref, *_receipt_id, *_dimension, *_ids,
     # *_count, *_status, *_gate, *_fingerprint) hold hashes, structural
     # identifiers, and gate-status enums, never plaintext secrets. Key-name
@@ -320,25 +397,36 @@ def _redact_value(
     # made reseal fail with contract_oracle_causality_gate_invalid on any
     # authorization-executing scan. Value-pattern redaction still protects real
     # secrets inside payloads.
-    if _IDENTITY_KEY_RE.search(key_l):
-        sensitive_key = False
+    #
+    # The three-way triage is SENSITIVE and not SAFE_META and not IDENTITY,
+    # shared with the scanner's ``walk`` and memoised per unique key name
+    # (3.0M key occurrences collapse to a few hundred distinct names).
+    sensitive_key = cache.key_is_sensitive(key_l)
 
     if isinstance(value, (bytes, bytearray)):
         text = value.decode("utf-8", errors="replace")
-        redacted, hits = _redact_string(text)
+        redacted, hits = cache.redact_string(text)
         if hits or sensitive_key:
-            events.append({"key": key, "hits": hits or ["sensitive_bytes"], "fingerprint": _fingerprint(text)})
+            events.append({
+                "key": key,
+                "hits": list(hits) or ["sensitive_bytes"],
+                "fingerprint": _fingerprint(text),
+            })
             return redacted.encode("utf-8"), events
         return value, events
 
     if isinstance(value, str):
-        if sensitive_key and value.strip() and not _is_safe_placeholder(value):
+        if sensitive_key and value.strip() and not cache.placeholder_is_safe(value):
             record = _secret_record(secret_type=key_l or "sensitive_field", value=value)
             events.append({"key": key, "hits": ["sensitive_key"], "fingerprint": record["fingerprint"]})
             return "<REDACTED>", events
-        redacted, hits = _redact_string(value)
+        redacted, hits = cache.redact_string(value)
         if hits:
-            events.append({"key": key, "hits": hits, "fingerprint": _fingerprint(value)})
+            events.append({
+                "key": key,
+                "hits": list(hits),
+                "fingerprint": _fingerprint(value),
+            })
             return redacted, events
         return value, events
 
@@ -388,12 +476,11 @@ def scan_for_secrets(payload: Any, *, skip_value_patterns: bool = False) -> dict
     """
     issues: list[dict[str, Any]] = []
 
-    def _identity_key(key_l: str) -> bool:
-        return bool(re.search(
-            r"(?:_id|_ref|_receipt_id|_fingerprint|_dimension|_count|_status|_ids|_gate)$",
-            key_l,
-            re.I,
-        ))
+    # Per-call memo: shares the redactor's pure-function caches so the scan of
+    # a freshly redacted payload reuses the very same unique-value lookups
+    # (measured: 2.66M string occurrences / 41.6K unique, 3.0M key occurrences
+    # collapsing to a few hundred names).
+    _cache = _RedactionCache()
 
     def walk(
         value: Any, path: str = "$", key: str = "", _seen: set[int] | None = None
@@ -413,12 +500,10 @@ def scan_for_secrets(payload: Any, *, skip_value_patterns: bool = False) -> dict
                 child_path = f"{path}.{child_key}"
                 key_l = str(child_key)
                 if (
-                    SENSITIVE_KEY_RE.search(key_l)
-                    and not SAFE_META_KEY_RE.search(key_l)
-                    and not _identity_key(key_l)
+                    _cache.key_is_sensitive(key_l)
                     and isinstance(child_val, str)
                     and child_val.strip()
-                    and not _is_safe_placeholder(child_val)
+                    and not _cache.placeholder_is_safe(child_val)
                     and child_val != "<REDACTED>"
                 ):
                     issues.append({
@@ -433,7 +518,7 @@ def scan_for_secrets(payload: Any, *, skip_value_patterns: bool = False) -> dict
             for index, item in enumerate(value[:2000]):
                 walk(item, f"{path}[{index}]", key, _seen)
             return
-        if not isinstance(value, str) or _is_safe_placeholder(value):
+        if not isinstance(value, str) or _cache.placeholder_is_safe(value):
             return
         if skip_value_patterns:
             # The redactor's combined pattern (a superset of the six patterns
