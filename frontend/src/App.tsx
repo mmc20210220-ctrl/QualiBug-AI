@@ -6,6 +6,7 @@ import { AuthProvider } from './components/AuthProvider';
 import { useAuth } from './components/useAuth';
 import { Dashboard } from './pages/Dashboard';
 import { RequirementIntelligence } from './pages/RequirementIntelligence';
+import { TestIntelligence } from './pages/TestIntelligence';
 import { Findings } from './pages/Findings';
 import { EvidenceChain } from './pages/EvidenceChain';
 import { ReleaseGate } from './pages/ReleaseGate';
@@ -69,8 +70,9 @@ export default function App() {
           <Route element={<RequireAuth />}>
             <Route element={<Layout />}>
               <Route path="/" element={<PreserveSearchRedirect to="/requirements" />} />
-              {/* 客户主链：需求审查 / 总览 / 问题 / 接入 */}
+              {/* 客户主链：需求审查 / 测试智能 / 总览 / 问题 / 接入 */}
               <Route path="/requirements" element={<RequirementIntelligence />} />
+              <Route path="/test-intelligence" element={<TestIntelligence />} />
               <Route path="/dashboard" element={<Dashboard />} />
               <Route path="/findings" element={<Findings />} />
               <Route path="/findings/:id" element={<FindingDetail />} />

@@ -44,14 +44,18 @@ for (const expected of [
 ]) requireText(page, expected, 'Requirement Intelligence workspace');
 
 for (const expected of [
-  "const isRequirementWorkspace = location.pathname === '/requirements';",
-  '{!isRequirementWorkspace && <RunCustomerResultSummary />}',
-  '{!isRequirementWorkspace && <RunLifecycleBanner />}',
-]) requireText(layout, expected, 'Requirement Intelligence runtime isolation');
+  "const isIntelligenceWorkspace = location.pathname === '/requirements'",
+  "location.pathname === '/test-intelligence'",
+  '{!isIntelligenceWorkspace && <RunCustomerResultSummary />}',
+  '{!isIntelligenceWorkspace && <RunLifecycleBanner />}',
+]) requireText(layout, expected, 'Requirement/Test Intelligence runtime isolation');
 
 requireText(sidebar, "{ to: 'requirements', icon: 'requirements', label: '需求审查' }", 'Requirement Intelligence primary navigation');
-requireText(topbar, "const isRequirementsPage = location.pathname === '/requirements';", 'Requirement Intelligence topbar mode');
-requireText(topbar, "? 'muted'", 'Requirement Intelligence neutral topbar status');
-requireText(topbar, "{isRequirementsPage ? '管理资料' : '开始验证'}", 'Requirement Intelligence topbar action');
+for (const expected of [
+  "const isRequirementsPage = location.pathname === '/requirements';",
+  "const isIntelligencePage = isRequirementsPage || isTestIntelligencePage;",
+  "? '跨资料需求审查与证据追溯'",
+  "{isIntelligencePage ? '管理资料' : '开始验证'}",
+]) requireText(topbar, expected, 'Requirement Intelligence topbar mode');
 
 console.log('requirement intelligence frontend contract passed');
