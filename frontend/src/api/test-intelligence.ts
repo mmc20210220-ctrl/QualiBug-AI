@@ -241,6 +241,14 @@ export function parseTestIntelligenceAnalysis(value: unknown): TestIntelligenceA
   if (obligationCount !== obligations.length) throw contractError('summary.obligation_count/obligations');
   const countedObligations = Object.values(countsByObligationKind).reduce((total, count) => total + count, 0);
   if (countedObligations !== obligationCount) throw contractError('coverage.counts_by_obligation_kind');
+  const requirementFindingLinkedObligationCount = requireNumber(
+    summary.requirement_finding_linked_obligation_count,
+    'summary.requirement_finding_linked_obligation_count',
+  );
+  const actualLinkedObligationCount = obligations.filter((item) => item.requirementFindingIds.length > 0).length;
+  if (requirementFindingLinkedObligationCount !== actualLinkedObligationCount) {
+    throw contractError('summary.requirement_finding_linked_obligation_count/obligations');
+  }
 
   const eligible = requireNumber(coverage.eligible_supported_semantic_unit_count, 'coverage.eligible_supported_semantic_unit_count');
   const obligated = requireNumber(coverage.obligated_supported_semantic_unit_count, 'coverage.obligated_supported_semantic_unit_count');
@@ -267,7 +275,7 @@ export function parseTestIntelligenceAnalysis(value: unknown): TestIntelligenceA
       uncoveredSupportedSemanticUnitCount: summaryUncovered,
       suppressedWithoutEvidenceCount: requireNumber(summary.suppressed_without_evidence_count, 'summary.suppressed_without_evidence_count'),
       unsupportedFormalBehaviorCount: requireNumber(summary.unsupported_formal_behavior_count, 'summary.unsupported_formal_behavior_count'),
-      requirementFindingLinkedObligationCount: requireNumber(summary.requirement_finding_linked_obligation_count, 'summary.requirement_finding_linked_obligation_count'),
+      requirementFindingLinkedObligationCount,
       implementedObligationKinds: asArray(summary.implemented_obligation_kinds).map((kind, index) => parseKind(kind, `summary.implemented_obligation_kinds[${index}]`)),
     },
     coverage: {
