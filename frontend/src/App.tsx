@@ -6,6 +6,7 @@ import { AuthProvider } from './components/AuthProvider';
 import { useAuth } from './components/useAuth';
 import { Dashboard } from './pages/Dashboard';
 import { RequirementIntelligence } from './pages/RequirementIntelligence';
+import { TestIntelligence } from './pages/TestIntelligence';
 import { Findings } from './pages/Findings';
 import { EvidenceChain } from './pages/EvidenceChain';
 import { ReleaseGate } from './pages/ReleaseGate';
@@ -23,7 +24,6 @@ function RequireAuth() {
   const location = useLocation();
   const { status, error, refresh } = useAuth();
 
-  // 校验中：先展示可感知的加载态，避免把「还没校验完」误判成未登录并跳登录页。
   if (status === 'checking') {
     return (
       <div className="auth-gate" role="status" aria-live="polite">
@@ -33,7 +33,6 @@ function RequireAuth() {
     );
   }
 
-  // 后端不可用 / 5xx：这是 error，不是未登录，禁止跳登录页吞掉真实故障。
   if (status === 'error') {
     return (
       <div className="auth-gate auth-gate-error" role="alert">
@@ -69,8 +68,9 @@ export default function App() {
           <Route element={<RequireAuth />}>
             <Route element={<Layout />}>
               <Route path="/" element={<PreserveSearchRedirect to="/requirements" />} />
-              {/* 客户主链：需求审查 / 总览 / 问题 / 接入 */}
+              {/* 客户主链：需求审查 / 测试智能 / 总览 / 问题 / 接入 */}
               <Route path="/requirements" element={<RequirementIntelligence />} />
+              <Route path="/test-intelligence" element={<TestIntelligence />} />
               <Route path="/dashboard" element={<Dashboard />} />
               <Route path="/findings" element={<Findings />} />
               <Route path="/findings/:id" element={<FindingDetail />} />
