@@ -10,6 +10,7 @@ const sections: NavSection[] = [
   {
     label: '主导航',
     items: [
+      { to: 'requirements', icon: 'requirements', label: '需求审查' },
       { to: 'dashboard', icon: 'overview', label: '总览' },
       { to: 'findings', icon: 'bug', label: '问题', badgeKey: 'findings' },
       { to: 'integration', icon: 'materials', label: '接入' },
@@ -18,6 +19,7 @@ const sections: NavSection[] = [
 ];
 
 const icons: Record<string, string> = {
+  requirements: 'M5 4h14v16H5V4Zm3 4h8M8 12h5M8 16h7M3 7h2M3 11h2M3 15h2',
   overview: 'M4 4h6v6H4V4Zm10 0h6v6h-6V4ZM4 14h6v6H4v-6Zm10 0h6v6h-6v-6Z',
   bug: 'M8 2v3m8-3v3M3 8h18M5.5 5.5l1.5 1.5m10 0 1.5-1.5M10 14l-2 3m6-3 2 3M12 12v3',
   shield: 'M12 3 20 6v5c0 5-3.3 8.5-8 10-4.7-1.5-8-5-8-10V6l8-3Z',
@@ -77,7 +79,7 @@ export function Sidebar({ mobileOpen = false, onClose }: SidebarProps) {
           <button type="button" className="side-close" onClick={onClose} aria-label="关闭导航">
             ×
           </button>
-          <BrandLogo variant="full" detail="compact" tone="dark" size={38} subtitle="自主验证台" />
+          <BrandLogo variant="full" detail="compact" tone="dark" size={38} subtitle="企业软件智能审查" />
         </div>
 
         <div className="side-project">
@@ -90,7 +92,7 @@ export function Sidebar({ mobileOpen = false, onClose }: SidebarProps) {
           )}
           <div className="side-project-metrics">
             <div className="side-project-metric">
-              <span>状态</span>
+              <span>验证状态</span>
               <strong>{riskStateLabel}</strong>
             </div>
             <div className="side-project-metric" title={summaryFaulted ? '后端状态不可读取，计数未上报' : undefined}>
@@ -136,7 +138,7 @@ export function Sidebar({ mobileOpen = false, onClose }: SidebarProps) {
 
         <div className="side-bottom">
           <b>QualiBug AI</b>
-          少配置 · 自动理解 · 真实验证
+          少配置 · 自动理解 · 真实验证 · 需求审查
         </div>
       </aside>
     </>
