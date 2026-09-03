@@ -9,7 +9,8 @@ import { Topbar } from './Topbar';
 export function Layout() {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const location = useLocation();
-  const isRequirementWorkspace = location.pathname === '/requirements';
+  const isIntelligenceWorkspace = location.pathname === '/requirements'
+    || location.pathname === '/test-intelligence';
 
   useEffect(() => {
     const closeOnDesktop = () => {
@@ -39,8 +40,8 @@ export function Layout() {
       <main className="main">
         <Topbar navOpen={mobileNavOpen} onToggleNav={() => setMobileNavOpen((open) => !open)} />
         <div className="content">
-          {!isRequirementWorkspace && <RunCustomerResultSummary />}
-          {!isRequirementWorkspace && <RunLifecycleBanner />}
+          {!isIntelligenceWorkspace && <RunCustomerResultSummary />}
+          {!isIntelligenceWorkspace && <RunLifecycleBanner />}
           <MaterialsOnboardingHandoff />
           <Outlet />
         </div>
