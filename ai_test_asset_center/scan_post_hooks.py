@@ -12,6 +12,7 @@ from typing import Any
 
 ScanPostHook = Callable[..., dict[str, Any]]
 
+_LOGGER = logging.getLogger(__name__)
 _SCAN_POST_HOOKS: dict[str, ScanPostHook | None] = {}
 _BUILTIN_HOOK_INSTALLERS: tuple[tuple[str, str], ...] = (
     (
@@ -80,8 +81,9 @@ def _install_builtin_scan_post_hooks() -> None:
 
     Tests and hot-reload paths may clear the registry. Calling the installer on each
     scan is cheap and restores the same named hook without stacking wrappers.
-    Import or installer failures are isolated so a projection cannot hide the source
-    scan result.
+    Import or installer failures remain non-blocking so a projection cannot hide the
+    source scan result, but they must be observable: an unavailable projection is a
+    real breadth loss and must never look identical to a successfully installed one.
     """
     for module_name, installer_name in _BUILTIN_HOOK_INSTALLERS:
         try:
@@ -89,8 +91,21 @@ def _install_builtin_scan_post_hooks() -> None:
             installer = getattr(module, installer_name, None)
             if callable(installer):
                 installer()
-        except Exception:
-            continue
+            else:
+                _LOGGER.warning(
+                    "scan_post_hook_installer_missing module=%s installer=%s",
+                    module_name,
+                    installer_name,
+                )
+        except Exception as exc:
+            _LOGGER.warning(
+                "scan_post_hook_install_failed module=%s installer=%s error_type=%s error=%s",
+                module_name,
+                installer_name,
+                type(exc).__name__,
+                str(exc)[:300],
+                exc_info=True,
+            )
 
 
 def apply_scan_post_hooks(
@@ -119,15 +134,16 @@ def apply_scan_post_hooks(
             _hook_ms = round(_time.perf_counter() - _hook_start, 3)
             hook_timings[name] = _hook_ms
             # 挂住/慢钩子必须仅凭日志归因（[wrapup-trace] 分段账本）。
-            logging.getLogger(__name__).warning(
+            _LOGGER.warning(
                 "[wrapup-trace] post_hook=%s ms=%s status=exception",
                 name,
                 _hook_ms,
+                exc_info=True,
             )
             continue
         _hook_ms = round(_time.perf_counter() - _hook_start, 3)
         hook_timings[name] = _hook_ms
-        logging.getLogger(__name__).warning(
+        _LOGGER.warning(
             "[wrapup-trace] post_hook=%s ms=%s",
             name,
             _hook_ms,
@@ -139,6 +155,11 @@ def apply_scan_post_hooks(
         merged = dict(existing) if isinstance(existing, dict) else {}
         merged["post_hooks"] = hook_timings
         payload["scan_phase_timings"] = merged
-    except Exception:
-        pass
+    except Exception as exc:
+        _LOGGER.debug(
+            "scan_post_hook_timing_projection_failed error_type=%s error=%s",
+            type(exc).__name__,
+            str(exc)[:200],
+            exc_info=True,
+        )
     return payload
