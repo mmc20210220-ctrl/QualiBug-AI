@@ -49,6 +49,22 @@ def _copy_structured(value: Any) -> list[Any]:
     return copied
 
 
+def _source_backed_evidence(value: Any) -> list[dict[str, Any]]:
+    evidence: list[dict[str, Any]] = []
+    for row in _rows(value):
+        source_id = _text(row.get("source_id"))
+        source_anchor = _text(
+            row.get("source_locator")
+            or row.get("asset_ref")
+            or row.get("document_block_id")
+            or row.get("document_node_id")
+        )
+        exact_content = _text(row.get("quote") or row.get("quote_hash"))
+        if source_id and source_anchor and exact_content:
+            evidence.append(deepcopy(row))
+    return evidence
+
+
 def _design_id(obligation_id: str) -> str:
     digest = hashlib.sha256(obligation_id.encode("utf-8")).hexdigest()[:20]
     return f"test-design:{digest}"
@@ -92,11 +108,17 @@ def _observation_from_outcome(
 def _project_design(obligation: dict[str, Any]) -> dict[str, Any] | None:
     if _text(obligation.get("schema")) != OBLIGATION_SCHEMA:
         return None
+    if _text(obligation.get("design_status")) != "OBLIGATION_ONLY":
+        return None
+    if _text(obligation.get("verification_status")) != "NOT_MEASURED":
+        return None
+    if _text(obligation.get("runtime_linkage")) != "NOT_EVALUATED":
+        return None
 
     obligation_id = _text(obligation.get("obligation_id"))
     title = _text(obligation.get("title"))
     objective = _text(obligation.get("objective"))
-    evidence = _rows(obligation.get("evidence"))
+    evidence = _source_backed_evidence(obligation.get("evidence"))
     expected_outcomes = _rows(obligation.get("expected_outcomes"))
     if not obligation_id or not title or not objective or not evidence or not expected_outcomes:
         return None
@@ -141,7 +163,7 @@ def _project_design(obligation: dict[str, Any]) -> dict[str, Any] | None:
         "business_constraints": _strings(obligation.get("business_constraints")),
         "source_refs": _strings(obligation.get("source_refs")),
         "source_ids": _strings(obligation.get("source_ids")),
-        "evidence": deepcopy(evidence),
+        "evidence": evidence,
         "derived_from": [
             {
                 "kind": "test_obligation",
