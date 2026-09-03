@@ -132,3 +132,4 @@ tests/test_behavior_ir_legacy_demotion.py
 tests/test_chinese_first_v1_extractor_demotion.py
 tests/test_obligation_compiler_cjk_demotion.py
 tests/test_behavior_semantic_mapper_neutral.py
+tests/test_requirement_intelligence_architecture_boundary.py
