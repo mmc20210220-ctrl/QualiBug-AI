@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { getSession, logout as logoutApi, type SessionResult } from '../api/client';
+import { getProjects, getSession, logout as logoutApi, type SessionResult } from '../api/client';
 import { AuthContext, type AuthContextValue, type AuthStatus } from './useAuth';
 
 /**
@@ -22,6 +22,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       const result = await getSession({ force: true });
       if (result) {
+        // 会话已经确认后立即预热项目目录。业务页面随后调用 resolveProjectId() 时
+        // 会复用同一个 projectsCache Promise，避免「页面挂载后才开始第二段网络等待」。
+        // 预热失败不影响认证状态，业务页面仍会按原错误语义自行处理。
+        void getProjects().catch(() => undefined);
         setSession(result);
         setStatus('authenticated');
       } else {
