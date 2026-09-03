@@ -138,3 +138,4 @@ tests/test_product_intelligence_linkage.py
 tests/test_test_design_projection.py
 tests/test_product_quality_audit_baseline.py
 tests/test_product_quality_audit_ordering.py
+tests/test_product_quality_semantic_funnel.py
