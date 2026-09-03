@@ -365,9 +365,14 @@ export async function getProjects(options?: { force?: boolean }): Promise<Custom
   return listProjects();
 }
 
+/**
+ * Route state and workspace selectors already carry the canonical project_id.
+ * Do not serially fetch /api/v1/projects before every feature request just to
+ * validate the same id again: every protected project endpoint performs tenant
+ * and project-scope authorization on the server. Keeping this helper as the
+ * normalization boundary preserves existing call sites while removing the
+ * cold path "session -> projects -> feature" waterfall.
+ */
 export async function resolveProjectId(projectId: string): Promise<string> {
-  const normalized = projectId.trim();
-  if (!normalized) return '';
-  const projects = await listProjects();
-  return projects.some((item) => item.project_id === normalized) ? normalized : '';
+  return projectId.trim();
 }
