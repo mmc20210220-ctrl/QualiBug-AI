@@ -24,6 +24,7 @@ function RequireAuth() {
   const location = useLocation();
   const { status, error, refresh } = useAuth();
 
+  // 校验中：先展示可感知的加载态，避免把「还没校验完」误判成未登录并跳登录页。
   if (status === 'checking') {
     return (
       <div className="auth-gate" role="status" aria-live="polite">
@@ -33,6 +34,7 @@ function RequireAuth() {
     );
   }
 
+  // 后端不可用 / 5xx：这是 error，不是未登录，禁止跳登录页吞掉真实故障。
   if (status === 'error') {
     return (
       <div className="auth-gate auth-gate-error" role="alert">
