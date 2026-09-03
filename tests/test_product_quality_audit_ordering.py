@@ -8,7 +8,7 @@ import benchmark_evaluator.product_quality.current_product_audit as audit
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_review_truth_loads_only_after_all_selected_product_captures(
+def test_review_truth_loads_only_after_all_selected_product_and_semantic_captures(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -27,6 +27,11 @@ def test_review_truth_loads_only_after_all_selected_product_captures(
             },
             {"findings": []},
             {"obligations": [], "test_designs": []},
+            {
+                "review_truth_loaded": False,
+                "facts": [],
+                "behaviors": [],
+            },
         )
 
     def fake_load(repo_root):
@@ -51,5 +56,6 @@ def test_review_truth_loads_only_after_all_selected_product_captures(
     ]
     assert summary["status"] == "CAPTURED"
     assert summary["review_truth_loaded_after_all_product_capture"] is True
+    assert summary["semantic_funnel_diagnostic_only"] is True
     assert summary["self_scored_model_quality"] is False
     assert summary["human_scoring_required"] is True
