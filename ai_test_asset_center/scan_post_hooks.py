@@ -108,6 +108,60 @@ def _install_builtin_scan_post_hooks() -> None:
             )
 
 
+def _finding_authority_rows(value: Any) -> tuple[tuple[str, str, str, str, bool], ...]:
+    rows = value if isinstance(value, list) else []
+    projection: list[tuple[str, str, str, str, bool]] = []
+    for raw in rows:
+        if not isinstance(raw, dict):
+            continue
+        identity = str(
+            raw.get("canonical_defect_id")
+            or raw.get("finding_id")
+            or raw.get("evidence_id")
+            or raw.get("risk_id")
+            or ""
+        ).strip()
+        projection.append(
+            (
+                identity,
+                str(raw.get("confirmation_status") or "").strip().lower(),
+                str(raw.get("customer_delivery_status") or "").strip().lower(),
+                str(raw.get("bug_status") or "").strip().lower(),
+                bool(raw.get("gate_passed")),
+            )
+        )
+    return tuple(projection)
+
+
+def _authority_projection(payload: dict[str, Any]) -> dict[str, Any]:
+    """Capture a compact view of fields that define customer-visible bug truth.
+
+    ``scan()`` persists its canonical result before post-hooks execute. A post-hook
+    may enrich reports or operational projections, but any change to finding scope,
+    canonical identity or formal-delivery authority is a second truth mutation and
+    must be visible. This projection deliberately avoids hashing the full scan
+    artifact so the guard remains cheap on very large evidence packs.
+    """
+    registry = payload.get("canonical_defect_registry")
+    registry = registry if isinstance(registry, dict) else {}
+    formal = payload.get("formal_count_projection")
+    formal = formal if isinstance(formal, dict) else {}
+    delivery = payload.get("formal_delivery_authority")
+    delivery = delivery if isinstance(delivery, dict) else {}
+    return {
+        "total_findings": payload.get("total_findings"),
+        "findings": _finding_authority_rows(payload.get("findings")),
+        "current_formal_findings": _finding_authority_rows(
+            payload.get("current_formal_findings")
+        ),
+        "canonical_defect_ids": tuple(registry.get("canonical_defect_ids") or ()),
+        "formal_projection_ids": tuple(formal.get("canonical_defect_ids") or ()),
+        "formal_projection_count": formal.get("formal_customer_deliverable_count"),
+        "delivery_authority_ids": tuple(delivery.get("canonical_defect_ids") or ()),
+        "delivery_authority_count": delivery.get("formal_customer_deliverable_count"),
+    }
+
+
 def apply_scan_post_hooks(
     result: Any,
     *,
@@ -121,11 +175,11 @@ def apply_scan_post_hooks(
     # P1 性能打点：逐钩子计时入 scan_phase_timings，收尾热点分布可追溯。
     import time as _time
 
-    phase_timings = dict(payload.get("scan_phase_timings") or {})
     hook_timings: dict[str, float] = {}
     for name, hook in list(_SCAN_POST_HOOKS.items()):
         if not callable(hook):
             continue
+        authority_before = _authority_projection(payload)
         _hook_start = _time.perf_counter()
         try:
             next_payload = hook(payload, project=project, root=root)
@@ -150,6 +204,21 @@ def apply_scan_post_hooks(
         )
         if isinstance(next_payload, dict):
             payload = next_payload
+        authority_after = _authority_projection(payload)
+        if authority_after != authority_before:
+            changed_fields = sorted(
+                key
+                for key in authority_before
+                if authority_before.get(key) != authority_after.get(key)
+            )
+            _LOGGER.warning(
+                "scan_post_hook_authority_mutation hook=%s changed_fields=%s "
+                "before_total=%s after_total=%s",
+                name,
+                ",".join(changed_fields),
+                authority_before.get("total_findings"),
+                authority_after.get("total_findings"),
+            )
     try:
         existing = payload.get("scan_phase_timings")
         merged = dict(existing) if isinstance(existing, dict) else {}
