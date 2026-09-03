@@ -5,6 +5,7 @@ import { ScrollToTop } from './components/ScrollToTop';
 import { AuthProvider } from './components/AuthProvider';
 import { useAuth } from './components/useAuth';
 import { Dashboard } from './pages/Dashboard';
+import { RequirementIntelligence } from './pages/RequirementIntelligence';
 import { Findings } from './pages/Findings';
 import { EvidenceChain } from './pages/EvidenceChain';
 import { ReleaseGate } from './pages/ReleaseGate';
@@ -67,8 +68,9 @@ export default function App() {
           <Route path="/shared-evidence" element={<SharedEvidence />} />
           <Route element={<RequireAuth />}>
             <Route element={<Layout />}>
-              <Route path="/" element={<PreserveSearchRedirect to="/dashboard" />} />
-              {/* 客户主链：总览 / 问题 / 接入 */}
+              <Route path="/" element={<PreserveSearchRedirect to="/requirements" />} />
+              {/* 客户主链：需求审查 / 总览 / 问题 / 接入 */}
+              <Route path="/requirements" element={<RequirementIntelligence />} />
               <Route path="/dashboard" element={<Dashboard />} />
               <Route path="/findings" element={<Findings />} />
               <Route path="/findings/:id" element={<FindingDetail />} />
@@ -85,9 +87,9 @@ export default function App() {
               <Route path="/behavior-space" element={<PreserveSearchRedirect to="/coverage" />} />
               <Route path="/test-tasks" element={<PreserveSearchRedirect to="/campaigns" />} />
               <Route path="/clues" element={<PreserveSearchRedirect to="/settings" />} />
-              <Route path="/products" element={<PreserveSearchRedirect to="/dashboard" />} />
-              {/* 未知旧链接 fail-safe 回到当前客户总览，而不是渲染空白页 */}
-              <Route path="*" element={<PreserveSearchRedirect to="/dashboard" />} />
+              <Route path="/products" element={<PreserveSearchRedirect to="/requirements" />} />
+              {/* 未知旧链接 fail-safe 回到当前主产品入口，而不是渲染空白页 */}
+              <Route path="*" element={<PreserveSearchRedirect to="/requirements" />} />
             </Route>
           </Route>
         </Routes>
