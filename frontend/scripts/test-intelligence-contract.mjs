@@ -72,7 +72,7 @@ for (const expected of [
   "'/test-intelligence': '测试智能'",
   "const isTestIntelligencePage = location.pathname === '/test-intelligence';",
   "? '测试智能模式'",
-  "? '证据化测试义务与支持语义覆盖'",
+  "? '测试义务、结构化设计与支持语义覆盖'",
 ]) requireText(topbar, expected, 'Test Intelligence topbar mode');
 
 console.log('test intelligence frontend contract passed');
