@@ -52,7 +52,7 @@
 .ti-obligation-id { max-width: 280px; overflow: hidden; color: #98a2b3; font-family: ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .ti-context-grid { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 10px; margin-top: 16px; }
 .ti-context-grid > div { padding: 11px 12px; border-radius: 11px; background: #f8fafc; }
-.ti-context-grid span, .ti-contract-grid section > span, .ti-constraints > span { display: block; color: #667085; font-size: 11px; font-weight: 800; }
+.ti-context-grid span, .ti-contract-grid section > span, .ti-constraints > span, .ti-requirement-links > span { display: block; color: #667085; font-size: 11px; font-weight: 800; }
 .ti-context-grid strong { display: block; margin-top: 4px; color: #344054; font-size: 13px; line-height: 1.45; }
 .ti-contract-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; margin-top: 12px; }
 .ti-contract-grid section { padding: 14px; border: 1px solid #eaecf0; border-radius: 12px; }
@@ -61,7 +61,10 @@
 .ti-contract-grid p { margin: 9px 0 0; color: #98a2b3; font-size: 13px; }
 .ti-constraints { margin-top: 12px; padding: 12px 14px; border-radius: 12px; background: #fffaeb; }
 .ti-constraints > div { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
-.ti-constraints code, .ti-uncovered code { padding: 4px 7px; border-radius: 7px; background: rgba(255,255,255,.76); color: #475467; font-size: 11px; }
+.ti-constraints code, .ti-uncovered code, .ti-requirement-links code { padding: 4px 7px; border-radius: 7px; background: rgba(255,255,255,.76); color: #475467; font-size: 11px; }
+.ti-requirement-links { margin-top: 12px; padding: 12px 14px; border: 1px solid #c7d7fe; border-radius: 12px; background: #f5f8ff; }
+.ti-requirement-links > div { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.ti-requirement-links p { margin: 8px 0 0; color: #667085; font-size: 11px; line-height: 1.5; }
 .ti-status-strip { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 8px; margin-top: 14px; padding: 10px; border-radius: 12px; background: #101828; color: #fff; }
 .ti-status-strip span { min-width: 0; color: rgba(255,255,255,.82); font-size: 11px; overflow-wrap: anywhere; }
 .ti-status-strip b { display: block; margin-bottom: 3px; color: rgba(255,255,255,.5); font-size: 10px; font-weight: 700; }
