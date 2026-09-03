@@ -7,6 +7,8 @@ from urllib.parse import unquote, urlparse
 from products.catalog import get_product_catalog
 from products.requirement_intelligence import analyze_knowledge_asset
 
+from .real_project_onboarding import _safe_project_id
+
 
 def _requirement_analysis_project(path: str) -> str:
     parts = [unquote(part) for part in path.split("/") if part]
@@ -43,12 +45,16 @@ class ProductCatalogHttpMixin:
                 }
             )
 
-        if not self._require_project_scope(requirement_project):
+        try:
+            project = _safe_project_id(requirement_project)
+        except ValueError:
+            return self._json({"ok": False, "error": "PROJECT_NOT_FOUND"}, 404)
+        if not self._require_project_scope(project):
             return None
-        if not self._require_known_project(requirement_project, root):
+        if not self._require_known_project(project, root):
             return None
 
-        asset = self._load_merged_knowledge_asset(requirement_project, root, actor)
+        asset = self._load_merged_knowledge_asset(project, root, actor)
         analysis = analyze_knowledge_asset(asset)
-        analysis["project_id"] = requirement_project
+        analysis["project_id"] = project
         return self._json({"ok": True, "data": analysis})
