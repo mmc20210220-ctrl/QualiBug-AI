@@ -2,10 +2,8 @@ from __future__ import annotations
 
 """Read-only semantic funnel diagnostics for product-quality audits.
 
-This module never changes enterprise understanding or product inference. It snapshots
-already-produced facts and Business Behavior IR before external review anchors are
-loaded, then uses exact source evidence to show where a human review anchor stopped
-progressing through the current product chain.
+The module observes already-produced enterprise understanding. It never changes
+product inference and never reads human review anchors during product capture.
 """
 
 from typing import Any, Iterable
@@ -47,7 +45,7 @@ def _unique_text(values: Iterable[Any]) -> list[str]:
 
 
 def _evidence_quotes_from(value: Any) -> list[str]:
-    """Collect only source/evidence text, never titles or generated summaries."""
+    """Collect source/evidence text only, never titles or generated summaries."""
 
     quotes: list[str] = []
 
@@ -58,7 +56,6 @@ def _evidence_quotes_from(value: Any) -> list[str]:
             return
         if not isinstance(node, dict):
             return
-
         for key, child in node.items():
             key_text = _text(key).lower()
             child_is_evidence = evidence_context or key_text in {
@@ -146,14 +143,15 @@ def _behavior_object_refs(row: dict[str, Any]) -> list[str]:
 def _behavior_operation_ref(row: dict[str, Any]) -> str:
     action = _dict(row.get("action"))
     operation = row.get("operation")
+    operation_value = ""
     if isinstance(operation, dict):
-        operation_value = (
+        operation_value = _text(
             operation.get("operation_ref")
             or operation.get("canonical")
             or operation.get("raw")
         )
     else:
-        operation_value = operation
+        operation_value = _text(operation)
     return _text(
         row.get("operation_ref")
         or operation_value
@@ -175,12 +173,7 @@ def _behavior_source_fact_ids(row: dict[str, Any]) -> list[str]:
     ]
     for evidence in _list(row.get("evidence")):
         if isinstance(evidence, dict):
-            ids.extend(
-                [
-                    evidence.get("fact_id"),
-                    evidence.get("source_fact_id"),
-                ]
-            )
+            ids.extend([evidence.get("fact_id"), evidence.get("source_fact_id")])
     return _unique_text(ids)
 
 
@@ -208,8 +201,20 @@ def _business_behaviors(asset: dict[str, Any]) -> list[dict[str, Any]]:
     return []
 
 
+def _lifecycle_transitions(asset: dict[str, Any]) -> list[dict[str, Any]]:
+    model = _dict(asset.get("enterprise_understanding_model"))
+    transitions: list[dict[str, Any]] = []
+    for lifecycle in _rows(model.get("lifecycles")):
+        object_ref = _text(lifecycle.get("object_ref"))
+        for transition in _rows(lifecycle.get("transitions")):
+            row = dict(transition)
+            row["_object_ref"] = object_ref
+            transitions.append(row)
+    return transitions
+
+
 def build_semantic_capture(asset: dict[str, Any]) -> dict[str, Any]:
-    """Snapshot current semantic outputs without consulting audit review anchors."""
+    """Snapshot semantic outputs before any external review truth is loaded."""
 
     facts: list[dict[str, Any]] = []
     for row in _business_facts(asset):
@@ -238,7 +243,7 @@ def build_semantic_capture(asset: dict[str, Any]) -> dict[str, Any]:
         behaviors.append(
             {
                 "behavior_id": behavior_id,
-                "status": _text(row.get("status")),
+                "status": _text(row.get("status")).upper(),
                 "reason_code": _text(row.get("reason_code")),
                 "candidate_only": row.get("candidate_only") is True,
                 "formal_business_rule": row.get("formal_business_rule") is True,
@@ -251,14 +256,48 @@ def build_semantic_capture(asset: dict[str, Any]) -> dict[str, Any]:
             }
         )
 
+    lifecycle_transitions: list[dict[str, Any]] = []
+    for row in _lifecycle_transitions(asset):
+        transition_id = _text(row.get("transition_id"))
+        if not transition_id:
+            continue
+        object_ref = _text(row.get("_object_ref"))
+        from_state = _text(row.get("from_state"))
+        to_state = _text(row.get("to_state"))
+        transition_kind = _text(row.get("transition_kind")).upper()
+        completeness = _text(row.get("completeness")).upper()
+        lifecycle_transitions.append(
+            {
+                "transition_id": transition_id,
+                "object_ref": object_ref,
+                "operation_ref": _text(row.get("operation_ref") or row.get("event")),
+                "from_state": from_state,
+                "to_state": to_state,
+                "transition_kind": transition_kind,
+                "completeness": completeness,
+                "fact_refs": _unique_text(_list(row.get("fact_refs"))),
+                "source_ids": _source_ids_from(row),
+                "evidence_quotes": _evidence_quotes_from(row),
+                "eligible_for_test_intelligence": bool(
+                    object_ref
+                    and from_state
+                    and to_state
+                    and completeness == "COMPLETE"
+                    and transition_kind in {"ALLOWED", "FORBIDDEN"}
+                ),
+            }
+        )
+
     return {
         "schema": SEMANTIC_CAPTURE_SCHEMA,
         "quality_claim": SEMANTIC_FUNNEL_QUALITY_CLAIM,
         "review_truth_loaded": False,
         "fact_count": len(facts),
         "behavior_count": len(behaviors),
+        "lifecycle_transition_count": len(lifecycle_transitions),
         "facts": facts,
         "behaviors": behaviors,
+        "lifecycle_transitions": lifecycle_transitions,
     }
 
 
@@ -274,10 +313,7 @@ def semantic_funnel_for_anchor(
     semantic_capture: dict[str, Any],
     candidate_output_ids: dict[str, list[str]],
 ) -> dict[str, Any]:
-    """Trace one external anchor through current captured semantics.
-
-    The result is a diagnostic stage trace, never an automatic USEFUL/MISSED verdict.
-    """
+    """Trace one external anchor through current semantics without auto-scoring it."""
 
     quote = _text(anchor.get("exact_quote"))
     expected_surfaces = {
@@ -285,6 +321,7 @@ def semantic_funnel_for_anchor(
     }
     facts = _rows(semantic_capture.get("facts"))
     behaviors = _rows(semantic_capture.get("behaviors"))
+    transitions = _rows(semantic_capture.get("lifecycle_transitions"))
 
     matched_facts = [
         row
@@ -314,9 +351,28 @@ def semantic_funnel_for_anchor(
     formal_behaviors = [
         row
         for row in grounded_behaviors
-        if _text(row.get("status")) == "CONFIRMED"
+        if _text(row.get("status")).upper() == "CONFIRMED"
         and row.get("formal_business_rule") is True
         and row.get("candidate_only") is not True
+    ]
+
+    matched_transitions = [
+        row
+        for row in transitions
+        if _quote_matches(quote, _list(row.get("evidence_quotes")))
+        or bool(
+            fact_ids
+            & {
+                _text(value)
+                for value in _list(row.get("fact_refs"))
+                if _text(value)
+            }
+        )
+    ]
+    eligible_transitions = [
+        row
+        for row in matched_transitions
+        if row.get("eligible_for_test_intelligence") is True
     ]
 
     obligation_ids = [
@@ -330,19 +386,24 @@ def semantic_funnel_for_anchor(
         if _text(value)
     ]
 
-    test_surface_expected = bool(
-        {"test_obligation", "test_design"} & expected_surfaces
-    )
+    test_surface_expected = bool({"test_obligation", "test_design"} & expected_surfaces)
+    semantic_units_present = bool(matched_behaviors or matched_transitions)
+    grounded_units_present = bool(grounded_behaviors or eligible_transitions)
+    formal_units_present = bool(formal_behaviors or eligible_transitions)
+    final_product_output_present = bool(obligation_ids or design_ids)
+
     if not test_surface_expected:
         first_break_stage = "NOT_APPLICABLE_REQUIREMENT_ONLY"
-    elif not matched_facts:
+    elif final_product_output_present and not formal_units_present:
+        first_break_stage = "INTERMEDIATE_TRACE_GAP_WITH_PRODUCT_OUTPUT"
+    elif not matched_facts and not semantic_units_present:
         first_break_stage = "FACT_EXTRACTION"
-    elif not matched_behaviors:
-        first_break_stage = "BEHAVIOR_PROJECTION"
-    elif not grounded_behaviors:
+    elif not semantic_units_present:
+        first_break_stage = "SEMANTIC_UNIT_PROJECTION"
+    elif not grounded_units_present:
         first_break_stage = "SEMANTIC_GROUNDING"
-    elif not formal_behaviors:
-        first_break_stage = "FORMAL_BEHAVIOR_CONFIRMATION"
+    elif not formal_units_present:
+        first_break_stage = "FORMAL_SEMANTIC_CONFIRMATION"
     elif "test_obligation" in expected_surfaces and not obligation_ids:
         first_break_stage = "TEST_OBLIGATION_PROJECTION"
     elif "test_design" in expected_surfaces and not design_ids:
@@ -372,8 +433,19 @@ def semantic_funnel_for_anchor(
             for row in formal_behaviors
             if _text(row.get("behavior_id"))
         ),
+        "matched_lifecycle_transition_ids": sorted(
+            _text(row.get("transition_id"))
+            for row in matched_transitions
+            if _text(row.get("transition_id"))
+        ),
+        "eligible_lifecycle_transition_ids": sorted(
+            _text(row.get("transition_id"))
+            for row in eligible_transitions
+            if _text(row.get("transition_id"))
+        ),
         "test_obligation_ids": sorted(obligation_ids),
         "test_design_ids": sorted(design_ids),
         "matched_facts": matched_facts,
         "matched_behaviors": matched_behaviors,
+        "matched_lifecycle_transitions": matched_transitions,
     }
