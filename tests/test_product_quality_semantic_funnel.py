@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from benchmark_evaluator.product_quality.semantic_funnel import (
     SEMANTIC_FUNNEL_QUALITY_CLAIM,
+    SEMANTIC_RUNTIME_QUALITY_CLAIM,
     build_semantic_capture,
     semantic_funnel_for_anchor,
 )
@@ -67,6 +68,128 @@ def test_semantic_capture_preserves_fact_behavior_and_grounding_truth() -> None:
     assert capture["behaviors"][0]["operation_ref"] == "create_order"
     assert capture["behaviors"][0]["object_refs"] == ["order"]
     assert capture["behaviors"][0]["grounded_for_test_intelligence"] is True
+
+
+def test_semantic_capture_reads_canonical_mode_and_promotion_receipts_without_re_resolving() -> None:
+    asset = {
+        "semantic_extraction_availability": {
+            "available": True,
+            "reason": "configured",
+            "model": "provider-model",
+        },
+        "semantic_extraction_receipts": [
+            {
+                "receipt_id": "semantic-rule-extraction-mode",
+                "schema_version": "qualibug.semantic-rule-extraction-mode.v1",
+                "requested_mode": "augment",
+                "effective_mode": "augment",
+                "provider_status": "configured",
+                "fallback_mode": "regex_only",
+                "fallback_reason": "",
+                "governance_policy_applied": True,
+            },
+            {
+                "receipt_id": "semantic-extraction:rules",
+                "schema_version": "qualibug.semantic-extraction-receipt.v1",
+                "source_id": "rules",
+                "triggered": True,
+                "status": "SUCCESS",
+                "source_char_count": 3000,
+                "chunks_total": 1,
+                "chunks_attempted": 1,
+                "chunks_completed": 1,
+                "unprocessed_ranges": [],
+                "candidates_raw_count": 5,
+                "candidates_validated_count": 4,
+                "rejected_count": 1,
+                "rule_funnel": {
+                    "llm_rule_candidates": 3,
+                    "llm_rule_validation_passed": 2,
+                    "llm_rule_validation_rejected": 1,
+                },
+                "candidates": [{"must_not_be_copied": True}],
+            },
+        ],
+        "rule_candidate_ledger": [
+            {
+                "source_id": "rules",
+                "schema_version": "qualibug.rule-candidate-ledger.v1",
+                "entry_count": 7,
+                "regex_entry_count": 4,
+                "llm_entry_count": 3,
+                "merged_count": 1,
+                "conflicted_count": 1,
+                "entries": [{"large_raw_candidate": True}],
+            }
+        ],
+        "rule_promotion_receipts": [
+            {
+                "source_id": "rules",
+                "schema_version": "qualibug.rule-promotion-receipt.v1",
+                "promoted_count": 1,
+                "promoted_rule_ids": ["llmrule:1"],
+                "skipped_counts": {"conflicted": 1},
+                "all_promoted_have_evidence": True,
+                "conflicts_silently_resolved": 0,
+            }
+        ],
+        "rule_promotion_gates": {
+            "gates_met": True,
+            "checks": {"promoted_without_evidence": 0},
+        },
+    }
+
+    runtime = build_semantic_capture(asset)["semantic_extraction_runtime"]
+
+    assert runtime["quality_claim"] == SEMANTIC_RUNTIME_QUALITY_CLAIM
+    assert runtime["canonical_receipts_only"] is True
+    assert runtime["mode_re_resolved_by_audit"] is False
+    assert runtime["availability"] == asset["semantic_extraction_availability"]
+    assert runtime["effective_modes"] == ["augment"]
+    assert runtime["provider_statuses"] == ["configured"]
+    assert runtime["source_receipt_count"] == 1
+    assert runtime["source_receipts"][0]["rule_funnel"]["llm_rule_candidates"] == 3
+    assert "candidates" not in runtime["source_receipts"][0]
+    assert runtime["rule_candidate_ledgers"] == [
+        {
+            "source_id": "rules",
+            "schema_version": "qualibug.rule-candidate-ledger.v1",
+            "entry_count": 7,
+            "regex_entry_count": 4,
+            "llm_entry_count": 3,
+            "merged_count": 1,
+            "conflicted_count": 1,
+        }
+    ]
+    assert runtime["promotion_receipts"][0]["promoted_rule_ids"] == ["llmrule:1"]
+    assert runtime["promotion_gates"]["gates_met"] is True
+
+
+def test_semantic_capture_preserves_explicit_provider_fallback_receipt() -> None:
+    runtime = build_semantic_capture(
+        {
+            "semantic_extraction_availability": {
+                "available": False,
+                "reason": "llm_not_configured",
+            },
+            "semantic_extraction_receipts": [
+                {
+                    "receipt_id": "semantic-rule-extraction-mode",
+                    "schema_version": "qualibug.semantic-rule-extraction-mode.v1",
+                    "requested_mode": "augment",
+                    "effective_mode": "off",
+                    "provider_status": "unavailable",
+                    "fallback_mode": "regex_only",
+                    "fallback_reason": "missing_credentials",
+                }
+            ],
+        }
+    )["semantic_extraction_runtime"]
+
+    assert runtime["effective_modes"] == ["off"]
+    assert runtime["provider_statuses"] == ["unavailable"]
+    assert runtime["mode_receipts"][0]["requested_mode"] == "augment"
+    assert runtime["mode_receipts"][0]["fallback_reason"] == "missing_credentials"
 
 
 def test_semantic_capture_includes_canonical_lifecycle_path() -> None:
