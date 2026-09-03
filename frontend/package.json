@@ -21,6 +21,7 @@
     "test:autonomous-ux": "node scripts/autonomous-ux-contract.mjs",
     "test:frontend-finalization": "node scripts/frontend-finalization-contract.mjs",
     "test:requirement-intelligence": "node scripts/requirement-intelligence-contract.mjs",
+    "test:test-intelligence": "node scripts/test-intelligence-contract.mjs",
     "test:settings-onboarding": "node scripts/settings-onboarding-contract.mjs",
     "test:run-lifecycle": "node scripts/run-lifecycle-contract.mjs",
     "test:run-customer-result": "node scripts/run-customer-result-contract.mjs",
