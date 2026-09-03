@@ -99,6 +99,29 @@ requirement analysis
 
 Those execution stages remain an optional Bug Discovery path.
 
+### Requirement Intelligence v1 authority mapping
+
+The product layer does not rediscover or reinterpret upstream truth. The current v1 projections are deliberately narrow:
+
+- **Conflict** consumes active `cross_document_conflicts` and preserves the existing conflict identity, source evidence, operator action, and authority decision.
+- **Missing** consumes only source-backed enterprise-understanding lifecycle unknowns currently classified as `LIFECYCLE_FROM_STATE_UNKNOWN`, `LIFECYCLE_TO_STATE_UNKNOWN`, or `LIFECYCLE_DISCONNECTED`.
+- Parser failures, document-structure failures, runtime gaps, and test/search coverage gaps are not relabelled as missing requirements.
+- `LIFECYCLE_TARGET_CONTRADICTION` remains a conflict-class semantic problem and is not duplicated as a missing finding.
+- **Ambiguity** consumes only evidence-backed `PENDING_REVIEW` tasks from the existing enterprise identity structural-review queue. Confirmed, rejected, stale, or unsupported candidates do not remain active product findings.
+- Requirement Intelligence never automatically resolves a source authority conflict, invents a missing business fact, or automatically unions ambiguous business identities.
+
+### Requirement Readiness v1
+
+Requirement Readiness is a deterministic gate over currently projected Requirement Findings. It is **not** a model-quality score, document-completeness percentage, recall estimate, or commercial quality claim.
+
+The states are:
+
+- `NOT_READY` — at least one finding is an upstream hard blocker, such as an unresolved requirement conflict or a missing lifecycle definition that already blocks formal enterprise understanding.
+- `REVIEW_REQUIRED` — no hard blocker remains, but at least one non-blocking missing definition or identity ambiguity still requires explicit human review.
+- `READY` — no currently supported active Requirement Finding remains.
+
+The readiness receipt must expose finding IDs and counts so every gate decision is explainable. It must carry the quality claim `DETERMINISTIC_FINDING_GATE_NOT_COMPLETENESS_OR_RECALL` and must not expose a synthetic completeness/recall percentage.
+
 ## Finding and evidence authority
 
 `Finding` is a platform concept; a confirmed bug is one type of finding, but this migration must not prematurely replace the current canonical defect contract.
