@@ -17,6 +17,7 @@ describe('Requirement Intelligence frontend projection', () => {
           requirement_ambiguity_count: 0,
           blocking_finding_count: 1,
           review_required_finding_count: 0,
+          suppressed_without_evidence_count: 0,
         },
         readiness: {
           status: 'NOT_READY',
@@ -66,27 +67,58 @@ describe('Requirement Intelligence frontend projection', () => {
     });
   });
 
-  it('fails closed on unknown readiness and never relabels unknown finding types', () => {
-    const analysis = parseRequirementIntelligenceAnalysis({
+  it('fails closed on unknown readiness instead of inventing a healthy fallback', () => {
+    expect(() => parseRequirementIntelligenceAnalysis({
       data: {
         analysis_status: 'NEW_SERVER_STATUS',
         readiness: {
           status: 'NEW_SERVER_STATUS',
+        },
+      },
+    })).toThrow(/readiness.status/);
+  });
+
+  it('fails closed on unknown finding types instead of relabelling them', () => {
+    expect(() => parseRequirementIntelligenceAnalysis({
+      data: {
+        schema: 'qualibug.requirement-intelligence.analysis.v1',
+        product_id: 'requirement_intelligence',
+        project_id: 'p1',
+        analysis_status: 'NOT_READY',
+        summary: {
+          source_count: 1,
+          requirement_conflict_count: 1,
+          requirement_missing_count: 0,
+          requirement_ambiguity_count: 0,
+          blocking_finding_count: 1,
+          review_required_finding_count: 0,
+          suppressed_without_evidence_count: 0,
+        },
+        readiness: {
+          status: 'NOT_READY',
+          ready: false,
           finding_count: 1,
-          counts_by_type: {},
+          blocking_finding_count: 1,
+          review_required_finding_count: 0,
+          blocking_finding_ids: ['requirement:new-type'],
+          review_required_finding_ids: [],
+          counts_by_type: {
+            requirement_conflict: 1,
+            requirement_missing: 0,
+            requirement_ambiguity: 0,
+          },
+          quality_claim: 'DETERMINISTIC_FINDING_GATE_NOT_COMPLETENESS_OR_RECALL',
         },
         findings: [
           {
             finding_id: 'requirement:new-type',
             finding_type: 'requirement_future_category',
             title: 'future',
+            blocking: true,
+            evidence: [{ source_id: 'prd', source_locator: 'PRD.md#1', quote: 'text' }],
           },
         ],
       },
-    });
-
-    expect(analysis.readiness.status).toBe('NOT_READY');
-    expect(analysis.analysisStatus).toBe('NOT_READY');
-    expect(analysis.findings).toEqual([]);
+    })).toThrow(/finding_type/);
   });
 });
