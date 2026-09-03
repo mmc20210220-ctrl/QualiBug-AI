@@ -154,11 +154,12 @@ function parseEvidence(value: unknown, obligationId: string): TestEvidence[] {
 }
 
 function parseStructuredArray(value: unknown): unknown[] {
-  return asArray(value).flatMap((item) => {
-    if (typeof item === 'string' && item.trim()) return [item.trim()];
-    if (item && typeof item === 'object' && !Array.isArray(item)) return [asRecord(item)];
-    return [];
-  });
+  const result: unknown[] = [];
+  for (const item of asArray(value)) {
+    if (typeof item === 'string' && item.trim()) result.push(item.trim());
+    else if (item && typeof item === 'object' && !Array.isArray(item)) result.push(asRecord(item));
+  }
+  return result;
 }
 
 function parseExpectedOutcomes(value: unknown, obligationId: string): Record<string, unknown>[] {
