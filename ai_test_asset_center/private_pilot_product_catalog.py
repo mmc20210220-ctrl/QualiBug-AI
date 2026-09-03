@@ -8,6 +8,7 @@ from products.catalog import get_product_catalog
 from products.requirement_intelligence import analyze_knowledge_asset
 from products.test_intelligence import analyze_test_intelligence
 
+from .product_intelligence_linkage import compose_requirement_test_linkage
 from .real_project_onboarding import _safe_project_id
 
 
@@ -69,7 +70,11 @@ class ProductCatalogHttpMixin:
         if product_route == "requirement-intelligence":
             analysis = analyze_knowledge_asset(asset)
         elif product_route == "test-intelligence":
-            analysis = analyze_test_intelligence(asset)
+            requirement_analysis = analyze_knowledge_asset(asset)
+            analysis = compose_requirement_test_linkage(
+                requirement_analysis,
+                analyze_test_intelligence(asset),
+            )
         else:  # Defensive fail-closed guard; route parser currently makes this unreachable.
             return self._json({"ok": False, "error": "PRODUCT_NOT_FOUND"}, 404)
         analysis["project_id"] = project
