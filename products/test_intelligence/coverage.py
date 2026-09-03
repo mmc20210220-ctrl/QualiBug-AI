@@ -100,6 +100,9 @@ def analyze_test_intelligence(asset: dict[str, Any]) -> dict[str, Any]:
     linked_to_requirement_findings = sum(
         1 for item in obligations if item.get("requirement_finding_ids")
     )
+    linked_designs = sum(
+        1 for item in designs if item.get("requirement_finding_ids")
+    )
     return {
         "schema": ANALYSIS_SCHEMA,
         "product_id": "test_intelligence",
@@ -121,6 +124,7 @@ def analyze_test_intelligence(asset: dict[str, Any]) -> dict[str, Any]:
                 "unsupported_formal_behavior_count"
             ],
             "requirement_finding_linked_obligation_count": linked_to_requirement_findings,
+            "requirement_finding_linked_design_count": linked_designs,
             "implemented_obligation_kinds": projection[
                 "implemented_obligation_kinds"
             ],
