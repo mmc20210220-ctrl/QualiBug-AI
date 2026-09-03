@@ -27,6 +27,7 @@ for (const expected of [
   "requireExact(row.verification_status, 'NOT_MEASURED'",
   "requireExact(row.runtime_linkage, 'NOT_EVALUATED'",
   'requirementFindingIds: asStringArray(row.requirement_finding_ids)',
+  "throw contractError('summary.requirement_finding_linked_obligation_count/obligations')",
   "throw contractError('coverage.supported_semantic_unit_counts')",
 ]) requireText(api, expected, 'Test Intelligence API truth contract');
 
