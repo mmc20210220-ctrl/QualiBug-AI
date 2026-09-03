@@ -54,7 +54,11 @@ MANIFEST = RequirementIntelligenceManifest(
         RequirementFindingKind.MISSING,
         RequirementFindingKind.AMBIGUITY,
     ),
-    implemented_findings=(RequirementFindingKind.CONFLICT,),
+    implemented_findings=(
+        RequirementFindingKind.CONFLICT,
+        RequirementFindingKind.MISSING,
+        RequirementFindingKind.AMBIGUITY,
+    ),
 )
 
 
