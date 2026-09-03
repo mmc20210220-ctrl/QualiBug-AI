@@ -2,10 +2,10 @@ from __future__ import annotations
 
 """Capture current Requirement/Test Intelligence outputs on frozen enterprise samples.
 
-This is evaluation infrastructure, not product logic. All selected product outputs
-are captured before external review anchors are loaded. Review expectations never
-enter ingestion, enterprise understanding, Requirement Intelligence, Test
-Intelligence, or cross-product linkage.
+This is evaluation infrastructure, not product logic. All selected product outputs and
+semantic snapshots are captured before external review anchors are loaded. Review
+expectations never enter ingestion, enterprise understanding, Requirement Intelligence,
+Test Intelligence, cross-product linkage, or Test Design.
 """
 
 import argparse
@@ -24,6 +24,10 @@ from ai_test_asset_center.enterprise_knowledge_center.composition import (
 )
 from ai_test_asset_center.product_intelligence_linkage import (
     compose_requirement_test_linkage,
+)
+from benchmark_evaluator.product_quality.semantic_funnel import (
+    build_semantic_capture,
+    semantic_funnel_for_anchor,
 )
 from products.requirement_intelligence import analyze_knowledge_asset
 from products.test_intelligence import analyze_test_intelligence
@@ -178,23 +182,31 @@ def _review_worksheet(
     anchors_payload: dict[str, Any],
     requirement_analysis: dict[str, Any],
     test_analysis: dict[str, Any],
+    semantic_capture: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     sample_anchors = [
         dict(item)
         for item in anchors_payload.get("anchors", [])
         if isinstance(item, dict) and str(item.get("sample_id") or "") == sample_id
     ]
-    rows = [
-        {
-            **anchor,
-            "candidate_output_ids": _candidate_ids_for_anchor(
-                anchor, requirement_analysis, test_analysis
-            ),
-            "human_verdict": "PENDING_REVIEW",
-            "human_notes": "",
-        }
-        for anchor in sample_anchors
-    ]
+    rows: list[dict[str, Any]] = []
+    for anchor in sample_anchors:
+        candidate_output_ids = _candidate_ids_for_anchor(
+            anchor, requirement_analysis, test_analysis
+        )
+        rows.append(
+            {
+                **anchor,
+                "candidate_output_ids": candidate_output_ids,
+                "semantic_funnel": semantic_funnel_for_anchor(
+                    anchor,
+                    semantic_capture or {},
+                    candidate_output_ids,
+                ),
+                "human_verdict": "PENDING_REVIEW",
+                "human_notes": "",
+            }
+        )
     return {
         "schema": REVIEW_SCHEMA,
         "sample_id": sample_id,
@@ -209,8 +221,13 @@ def _capture_product_sample(
     output_root: Path,
     sample_id: str,
     source_specs: tuple[tuple[str, str], ...],
-) -> tuple[dict[str, Any], dict[str, Any] | None, dict[str, Any] | None]:
-    """Run product capture with no access to external review anchors."""
+) -> tuple[
+    dict[str, Any],
+    dict[str, Any] | None,
+    dict[str, Any] | None,
+    dict[str, Any] | None,
+]:
+    """Run product capture and semantic snapshot with no review anchors loaded."""
 
     with tempfile.TemporaryDirectory(prefix=f"qualibug-audit-{sample_id}-") as temporary:
         work_root = Path(temporary).resolve()
@@ -237,6 +254,7 @@ def _capture_product_sample(
                 },
                 None,
                 None,
+                None,
             )
 
         asset = build_enterprise_business_knowledge_asset(
@@ -244,6 +262,9 @@ def _capture_product_sample(
             work_root,
             {"probe_limit": 0},
         )
+
+        # Capture the semantic funnel input before product review truth exists.
+        semantic_capture = build_semantic_capture(asset)
         requirement_analysis = analyze_knowledge_asset(asset)
         test_analysis = compose_requirement_test_linkage(
             requirement_analysis,
@@ -251,6 +272,7 @@ def _capture_product_sample(
         )
 
         sample_output = output_root / sample_id
+        _json_write(sample_output / "semantic_capture.json", semantic_capture)
         _json_write(sample_output / "requirement_analysis.json", requirement_analysis)
         _json_write(sample_output / "test_intelligence_analysis.json", test_analysis)
 
@@ -261,6 +283,8 @@ def _capture_product_sample(
             "status": "CAPTURED",
             "measurement_status": "PENDING_HUMAN_REVIEW",
             "source_snapshot": source_snapshot,
+            "business_fact_count": semantic_capture.get("fact_count", 0),
+            "business_behavior_count": semantic_capture.get("behavior_count", 0),
             "requirement_readiness": (
                 requirement_analysis.get("readiness") or {}
             ).get("status"),
@@ -271,7 +295,7 @@ def _capture_product_sample(
                 "linked_requirement_finding_count", 0
             ),
         }
-        return result, requirement_analysis, test_analysis
+        return result, requirement_analysis, test_analysis, semantic_capture
 
 
 def capture_current_product_audit(
@@ -292,8 +316,8 @@ def capture_current_product_audit(
         else repo_root / "evaluator_outputs" / "product_quality" / "current"
     )
 
-    # Phase 1: capture all product outputs with no review truth loaded.
-    captures: list[tuple[dict[str, Any], dict[str, Any] | None, dict[str, Any] | None]] = [
+    # Phase 1: capture every product/semantic output with no review truth loaded.
+    captures = [
         _capture_product_sample(
             repo_root,
             output_root,
@@ -303,17 +327,22 @@ def capture_current_product_audit(
         for sample_id in selected
     ]
 
-    # Phase 2: only after product capture, load independent human review anchors.
+    # Phase 2: only after every selected capture, load independent human anchors.
     anchors_payload = _load_review_anchors(repo_root)
     sample_results: list[dict[str, Any]] = []
-    for result, requirement_analysis, test_analysis in captures:
+    for result, requirement_analysis, test_analysis, semantic_capture in captures:
         sample_id = str(result.get("sample_id") or "")
-        if requirement_analysis is not None and test_analysis is not None:
+        if (
+            requirement_analysis is not None
+            and test_analysis is not None
+            and semantic_capture is not None
+        ):
             worksheet = _review_worksheet(
                 sample_id,
                 anchors_payload,
                 requirement_analysis,
                 test_analysis,
+                semantic_capture,
             )
             _json_write(
                 output_root / sample_id / "review_worksheet.json",
@@ -335,6 +364,7 @@ def capture_current_product_audit(
         "human_scoring_required": True,
         "self_scored_model_quality": False,
         "review_truth_loaded_after_all_product_capture": True,
+        "semantic_funnel_diagnostic_only": True,
         "sample_count": len(sample_results),
         "samples": sample_results,
     }
