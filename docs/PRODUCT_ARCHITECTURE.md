@@ -12,7 +12,7 @@ The product portfolio is:
 2. **Test Intelligence** — experimental validation surface that derives evidence-backed Test Obligations, structured Test Design, and supported-semantic coverage from shared enterprise understanding.
 3. **Bug Discovery** — experimental advanced runtime; feature development is frozen except P0 correctness and convergence work.
 
-The near-term objective is to reuse the existing multi-source enterprise understanding stack across requirement review, test obligation/design, and—only when needed—runtime bug confirmation.
+The current objective is to validate whether the existing multi-source enterprise understanding, Requirement Intelligence, Test Obligation, and Test Design outputs create repeatable customer value. Capability expansion beyond Test Design is frozen for this validation phase.
 
 ## Dependency direction
 
@@ -98,7 +98,7 @@ requirement analysis
         -> bug confirmation
 ```
 
-Those execution stages remain an optional Bug Discovery path.
+Those execution stages remain an existing optional Bug Discovery path and are not part of the current capability-expansion plan.
 
 ### Requirement Intelligence v1 authority mapping
 
@@ -142,6 +142,7 @@ enterprise source material
         -> Test Obligation projection
         -> supported-semantic obligation coverage
         -> structured Test Design
+        -> STOP
 ```
 
 The current API surface is:
@@ -161,7 +162,7 @@ Implemented obligation kinds are:
 - **side_effect** — confirmed formal business behavior with source-backed expected effects, data effects, or compensations;
 - **lifecycle_transition** — complete lifecycle transitions already classified upstream as `ALLOWED` or `FORBIDDEN`.
 
-`requirement_risk` remains a supported future obligation kind and is **not implemented in v1**. Test Intelligence does not import Requirement Intelligence to create it. Requirement Finding linkage is composed above both product packages in the application layer and does not create new obligations.
+`requirement_risk` remains a supported-but-unimplemented historical placeholder in the v1 manifest. It is not a current expansion target. Test Intelligence does not import Requirement Intelligence to create it. Requirement Finding linkage is composed above both product packages in the application layer and does not create new obligations.
 
 Every delivered Test Obligation requires source-backed evidence. Candidate-only behaviors, incomplete lifecycle transitions, unresolved semantics, and evidence-less units are not promoted to customer-facing obligations.
 
@@ -169,7 +170,7 @@ Test Obligation IDs are stable projection identities derived from upstream seman
 
 ### Test Design v1
 
-Test Design is a deterministic projection from a Test Obligation. It structures the semantic verification contract but deliberately stops before executable grounding.
+Test Design is a deterministic projection from a Test Obligation. It structures the semantic verification contract and is the current end of Test Intelligence capability expansion.
 
 The design receipt uses:
 
@@ -209,9 +210,9 @@ A Test Obligation itself remains `design_status = OBLIGATION_ONLY`. The existenc
 
 Test Design IDs are stable projection identities derived from Test Obligation IDs. They are not a new persisted canonical test-case identity.
 
-### Runtime boundary
+### Runtime boundary and feature freeze
 
-Test Intelligence now owns obligation semantics and structured Test Design, but still stops before runtime grounding:
+Test Intelligence owns obligation semantics and structured Test Design, and stops here:
 
 ```text
 Test Obligation
@@ -219,9 +220,17 @@ Test Obligation
         -> STOP
 ```
 
-It does not select API/UI execution surfaces, materialize test data, bind Observers/Oracles, create Executable Experiments, or execute a target system.
+During the current validation phase, the repository must not add a new Grounding Assessment or execution-binding product layer. Specifically, do not add capability for:
 
-A future explicit grounding/handoff adapter may transform a selected Test Design into an Executable Experiment owned by Bug Discovery runtime. That adapter must remain optional, observable, and separately tested.
+- API or UI automatic binding;
+- test-data automatic materialization;
+- Observer or Oracle automatic binding;
+- environment-selection intelligence;
+- automated safety/runtime approval;
+- new Executable Experiment generation from Test Design;
+- new Bug Discovery execution behavior to consume Test Design.
+
+Existing Bug Discovery runtime code may remain available as experimental legacy/advanced capability, but Test Intelligence is not being extended toward it until a future explicit product decision reverses this freeze based on customer evidence.
 
 ### Test Intelligence coverage v1
 
@@ -267,7 +276,7 @@ Linkage updates `requirement_finding_ids` on the Test Obligation API projection.
 
 - a Finding says a problem/risk was detected;
 - a Test Obligation says a source-backed semantic must be verified;
-- a Test Design structures how that Obligation should be verified before runtime grounding.
+- a Test Design structures how that Obligation should be verified while remaining non-executable.
 
 A confirmed bug remains one type of Finding. Neither a Test Obligation nor a Test Design is evidence that execution occurred.
 
@@ -279,6 +288,21 @@ Near-term rules:
 - preserve existing canonical defect identity for confirmed bugs;
 - introduce generic persisted identities only through dedicated migrations with compatibility tests.
 
+## Product validation freeze
+
+Requirement Intelligence and Test Intelligence are now in a product-quality validation phase.
+
+Until current outputs are reviewed on frozen enterprise-shaped samples and then on real customer materials, feature work is limited to:
+
+- P0 correctness fixes;
+- output-quality fixes supported by a concrete audit miss/noise example;
+- UX defects that block review of existing Findings, Obligations, Designs, or Evidence;
+- evaluation/capture infrastructure that does not alter product inference.
+
+Do not add another capability layer because it is architecturally adjacent. A missing or weak current output must first be recorded as an audit result. The next engineering decision must be driven by repeated evidence of the same quality bottleneck, not by an architecture diagram.
+
+The current audit contract is documented in `docs/PRODUCT_QUALITY_AUDIT_20260903.md`.
+
 ## Bug Discovery freeze
 
 Bug Discovery remains available as an Experimental/Advanced capability. Until upstream product validation produces evidence that a deeper refactor is justified:
@@ -287,9 +311,9 @@ Bug Discovery remains available as an Experimental/Advanced capability. Until up
 - P0 correctness fixes are allowed;
 - authority convergence is allowed;
 - benchmark-backed search-policy work is allowed only under the existing frozen evaluation discipline;
-- broad legacy cleanup must not be mixed with Requirement/Test Intelligence feature work.
+- broad legacy cleanup must not be mixed with Requirement/Test Intelligence validation work.
 
-Bug Discovery is the optional downstream execution authority, not the place where Requirement/Test Intelligence re-implement their semantics.
+Bug Discovery is an existing optional downstream execution authority, not the place where Requirement/Test Intelligence re-implement their semantics and not the current product-development focus.
 
 ## Repository migration discipline
 
@@ -318,12 +342,16 @@ Completed:
 9. Expose the authenticated project Test Intelligence API and frontend workspace.
 10. Add exact application-layer Requirement Finding → Test Obligation linkage without introducing product-to-product imports.
 11. Add deterministic Test Obligation → structured Test Design projection without runtime grounding or execution claims.
+12. Freeze capability expansion and establish a source-backed product-quality audit baseline over existing repository samples.
 
-Next validation sequence:
+Current validation sequence:
 
-1. Validate Requirement Finding, Test Obligation, and Test Design quality on real enterprise materials.
-2. Measure how often exact Requirement-to-Test linkage is useful versus legitimately unlinked.
-3. Identify which Test Designs have enough real API/UI/data bindings for a separate grounding experiment.
-4. Only after grounding quality is proven, define an explicit optional handoff into Bug Discovery execution.
+1. Capture Requirement Finding, Requirement Readiness, Test Obligation, Test Design, linkage, and Evidence outputs on the frozen `object_source_conflict`, `benchmark_mall`, and `warehouse_e` samples.
+2. Human-review the externally authored source-backed anchors as `USEFUL`, `TOO_GENERIC`, `NOISY`, `MISSED`, `UNSUPPORTED_CLAIM`, or `NEEDS_SOURCE_CLARIFICATION`.
+3. Group repeated misses/noise by the existing intelligence stage that caused them; do not create new layers while diagnosing.
+4. Fix only demonstrated high-value quality bottlenecks or review-blocking UX defects.
+5. Validate the same frozen baseline again, then move to real customer materials if output quality is credible.
+
+Grounding Assessment, execution binding, and new runtime handoff work are explicitly not part of this sequence.
 
 This document is an architecture constraint, not a request for an immediate repository-wide rewrite.
