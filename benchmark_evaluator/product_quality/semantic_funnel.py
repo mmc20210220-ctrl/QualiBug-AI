@@ -2,8 +2,9 @@ from __future__ import annotations
 
 """Read-only semantic funnel diagnostics for product-quality audits.
 
-The module observes already-produced enterprise understanding. It never changes
-product inference and never reads human review anchors during product capture.
+The module observes already-produced enterprise understanding and semantic-extraction
+receipts. It never changes product inference and never reads human review anchors
+during product capture.
 """
 
 from typing import Any, Iterable
@@ -11,8 +12,12 @@ from typing import Any, Iterable
 
 SEMANTIC_CAPTURE_SCHEMA = "qualibug.product-quality-semantic-capture.v1"
 SEMANTIC_FUNNEL_SCHEMA = "qualibug.product-quality-semantic-funnel.v1"
+SEMANTIC_RUNTIME_CAPTURE_SCHEMA = "qualibug.product-quality-semantic-runtime-capture.v1"
 SEMANTIC_FUNNEL_QUALITY_CLAIM = (
     "EXACT_SOURCE_ANCHOR_STAGE_TRACE_NOT_RECALL_SCORE_OR_AUTOMATIC_QUALITY_VERDICT"
+)
+SEMANTIC_RUNTIME_QUALITY_CLAIM = (
+    "CANONICAL_SEMANTIC_EXTRACTION_RECEIPT_SNAPSHOT_NOT_A_SECOND_MODE_RESOLVER"
 )
 
 
@@ -213,6 +218,106 @@ def _lifecycle_transitions(asset: dict[str, Any]) -> list[dict[str, Any]]:
     return transitions
 
 
+def _semantic_runtime_capture(asset: dict[str, Any]) -> dict[str, Any]:
+    """Copy/summarize canonical extraction receipts without re-resolving their mode."""
+
+    availability = dict(_dict(asset.get("semantic_extraction_availability")))
+    receipts = _rows(asset.get("semantic_extraction_receipts"))
+    mode_receipts = [
+        {
+            "receipt_id": _text(row.get("receipt_id")),
+            "schema_version": _text(row.get("schema_version")),
+            "requested_mode": _text(row.get("requested_mode")),
+            "effective_mode": _text(row.get("effective_mode")),
+            "provider_status": _text(row.get("provider_status")),
+            "fallback_mode": _text(row.get("fallback_mode")),
+            "fallback_reason": _text(row.get("fallback_reason")),
+            "governance_policy_applied": bool(row.get("governance_policy_applied")),
+        }
+        for row in receipts
+        if _text(row.get("schema_version"))
+        == "qualibug.semantic-rule-extraction-mode.v1"
+    ]
+    source_receipts = [
+        {
+            "receipt_id": _text(row.get("receipt_id")),
+            "source_id": _text(row.get("source_id")),
+            "triggered": row.get("triggered") is True,
+            "status": _text(row.get("status")),
+            "source_char_count": int(row.get("source_char_count") or 0),
+            "chunks_total": int(row.get("chunks_total") or 0),
+            "chunks_attempted": int(row.get("chunks_attempted") or 0),
+            "chunks_completed": int(row.get("chunks_completed") or 0),
+            "unprocessed_ranges": [
+                dict(value)
+                for value in _list(row.get("unprocessed_ranges"))
+                if isinstance(value, dict)
+            ],
+            "candidates_raw_count": int(row.get("candidates_raw_count") or 0),
+            "candidates_validated_count": int(
+                row.get("candidates_validated_count") or 0
+            ),
+            "rejected_count": int(row.get("rejected_count") or 0),
+            "rule_funnel": dict(_dict(row.get("rule_funnel"))),
+        }
+        for row in receipts
+        if _text(row.get("schema_version"))
+        == "qualibug.semantic-extraction-receipt.v1"
+    ]
+
+    ledger_rows = _rows(asset.get("rule_candidate_ledger"))
+    ledger_summaries = [
+        {
+            "source_id": _text(row.get("source_id")),
+            "schema_version": _text(row.get("schema_version")),
+            "entry_count": int(row.get("entry_count") or 0),
+            "regex_entry_count": int(row.get("regex_entry_count") or 0),
+            "llm_entry_count": int(row.get("llm_entry_count") or 0),
+            "merged_count": int(row.get("merged_count") or 0),
+            "conflicted_count": int(row.get("conflicted_count") or 0),
+        }
+        for row in ledger_rows
+    ]
+    promotion_receipts = [
+        {
+            "source_id": _text(row.get("source_id")),
+            "schema_version": _text(row.get("schema_version")),
+            "promoted_count": int(row.get("promoted_count") or 0),
+            "promoted_rule_ids": _unique_text(_list(row.get("promoted_rule_ids"))),
+            "skipped_counts": dict(_dict(row.get("skipped_counts"))),
+            "all_promoted_have_evidence": row.get("all_promoted_have_evidence") is True,
+            "conflicts_silently_resolved": int(
+                row.get("conflicts_silently_resolved") or 0
+            ),
+        }
+        for row in _rows(asset.get("rule_promotion_receipts"))
+    ]
+    promotion_gates = dict(_dict(asset.get("rule_promotion_gates")))
+
+    return {
+        "schema": SEMANTIC_RUNTIME_CAPTURE_SCHEMA,
+        "quality_claim": SEMANTIC_RUNTIME_QUALITY_CLAIM,
+        "canonical_receipts_only": True,
+        "mode_re_resolved_by_audit": False,
+        "availability": availability,
+        "mode_receipt_count": len(mode_receipts),
+        "mode_receipts": mode_receipts,
+        "effective_modes": _unique_text(
+            row.get("effective_mode") for row in mode_receipts
+        ),
+        "provider_statuses": _unique_text(
+            row.get("provider_status") for row in mode_receipts
+        ),
+        "source_receipt_count": len(source_receipts),
+        "source_receipts": source_receipts,
+        "rule_candidate_ledger_count": len(ledger_summaries),
+        "rule_candidate_ledgers": ledger_summaries,
+        "promotion_receipt_count": len(promotion_receipts),
+        "promotion_receipts": promotion_receipts,
+        "promotion_gates": promotion_gates,
+    }
+
+
 def build_semantic_capture(asset: dict[str, Any]) -> dict[str, Any]:
     """Snapshot semantic outputs before any external review truth is loaded."""
 
@@ -295,6 +400,7 @@ def build_semantic_capture(asset: dict[str, Any]) -> dict[str, Any]:
         "fact_count": len(facts),
         "behavior_count": len(behaviors),
         "lifecycle_transition_count": len(lifecycle_transitions),
+        "semantic_extraction_runtime": _semantic_runtime_capture(asset),
         "facts": facts,
         "behaviors": behaviors,
         "lifecycle_transitions": lifecycle_transitions,
