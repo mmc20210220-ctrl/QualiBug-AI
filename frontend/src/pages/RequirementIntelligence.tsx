@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   getRequirementIntelligence,
@@ -128,8 +128,10 @@ export function RequirementIntelligence() {
   const [loading, setLoading] = useState(Boolean(project));
   const [error, setError] = useState('');
   const [activeType, setActiveType] = useState<RequirementFindingType | 'all'>('all');
+  const requestGeneration = useRef(0);
 
   const load = useCallback(async () => {
+    const generation = ++requestGeneration.current;
     if (!project) {
       setAnalysis(null);
       setError('');
@@ -140,31 +142,37 @@ export function RequirementIntelligence() {
     setError('');
     try {
       const next = await getRequirementIntelligence(project);
+      if (generation !== requestGeneration.current) return;
       setAnalysis(next);
       if (!next) setError('当前项目不可用，请重新选择项目。');
     } catch (caught: unknown) {
-      setAnalysis(null);
+      if (generation !== requestGeneration.current) return;
       setError(caught instanceof Error ? caught.message : '需求审查数据读取失败');
     } finally {
-      setLoading(false);
+      if (generation === requestGeneration.current) setLoading(false);
     }
   }, [project]);
 
   useEffect(() => {
     void load();
+    return () => {
+      requestGeneration.current += 1;
+    };
   }, [load]);
 
+  const currentAnalysis = analysis?.projectId === project ? analysis : null;
+
   const findings = useMemo(() => {
-    if (!analysis) return [];
-    if (activeType === 'all') return analysis.findings;
-    return analysis.findings.filter((finding) => finding.findingType === activeType);
-  }, [activeType, analysis]);
+    if (!currentAnalysis) return [];
+    if (activeType === 'all') return currentAnalysis.findings;
+    return currentAnalysis.findings.filter((finding) => finding.findingType === activeType);
+  }, [activeType, currentAnalysis]);
 
   if (!project) {
     return <WorkspaceEmpty onMaterials={() => navigateToProjectPath('/materials', '')} />;
   }
 
-  if (loading) {
+  if (!currentAnalysis && loading) {
     return (
       <section className="ri-loading" role="status" aria-live="polite">
         <span className="spinner" aria-hidden="true" />
@@ -176,7 +184,7 @@ export function RequirementIntelligence() {
     );
   }
 
-  if (error || !analysis) {
+  if (!currentAnalysis) {
     return (
       <section className="ri-error" role="alert">
         <span>需求审查暂不可用</span>
@@ -187,12 +195,25 @@ export function RequirementIntelligence() {
     );
   }
 
-  const readiness = analysis.readiness;
+  const readiness = currentAnalysis.readiness;
   const readinessMeta = READINESS_META[readiness.status];
   const counts = readiness.countsByType;
 
   return (
     <div className="ri-workspace">
+      {loading && (
+        <section className="ri-scope-note" role="status" aria-live="polite">
+          <div><span>后台刷新</span><strong>保留当前审查结果，不阻塞页面操作</strong></div>
+          <p>正在读取最新 Requirement Intelligence；完成后会原位更新。</p>
+        </section>
+      )}
+      {!loading && error && (
+        <section className="ri-scope-note" role="alert">
+          <div><span>刷新失败</span><strong>当前仍显示上一次成功结果</strong></div>
+          <p>{error}</p>
+        </section>
+      )}
+
       <header className={`ri-hero status-${readiness.status.toLowerCase()}`}>
         <div className="ri-hero-copy">
           <span className="ri-eyebrow">{readinessMeta.eyebrow}</span>
@@ -202,8 +223,8 @@ export function RequirementIntelligence() {
             <button type="button" className="btn btn-primary" onClick={() => navigateToProjectPath('/materials', project)}>
               管理企业资料
             </button>
-            <button type="button" className="btn btn-secondary" onClick={() => void load()}>
-              刷新审查结果
+            <button type="button" className="btn btn-secondary" onClick={() => void load()} disabled={loading}>
+              {loading ? '刷新中…' : '刷新审查结果'}
             </button>
           </div>
         </div>
@@ -221,7 +242,7 @@ export function RequirementIntelligence() {
       <section className="ri-metrics" aria-label="需求审查摘要">
         <article>
           <span>资料来源</span>
-          <strong>{analysis.summary.sourceCount}</strong>
+          <strong>{currentAnalysis.summary.sourceCount}</strong>
           <p>参与当前企业理解的来源</p>
         </article>
         <article>
@@ -257,7 +278,7 @@ export function RequirementIntelligence() {
           </div>
           <div className="ri-filter" role="group" aria-label="按问题类型筛选">
             <button type="button" className={activeType === 'all' ? 'active' : ''} onClick={() => setActiveType('all')}>
-              全部 {analysis.findings.length}
+              全部 {currentAnalysis.findings.length}
             </button>
             {(Object.keys(TYPE_META) as RequirementFindingType[]).map((type) => (
               <button key={type} type="button" className={activeType === type ? 'active' : ''} onClick={() => setActiveType(type)}>
