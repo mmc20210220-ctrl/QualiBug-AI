@@ -2,9 +2,10 @@ from __future__ import annotations
 
 """Capture current Requirement/Test Intelligence outputs on frozen enterprise samples.
 
-This is evaluation infrastructure, not product logic. Product outputs are captured
-before external review anchors are loaded so review expectations cannot enter the
-production ingestion/understanding path.
+This is evaluation infrastructure, not product logic. All selected product outputs
+are captured before external review anchors are loaded. Review expectations never
+enter ingestion, enterprise understanding, Requirement Intelligence, Test
+Intelligence, or cross-product linkage.
 """
 
 import argparse
@@ -113,9 +114,15 @@ def _candidate_ids_for_anchor(
     requirement_analysis: dict[str, Any],
     test_analysis: dict[str, Any],
 ) -> dict[str, list[str]]:
+    """Narrow review candidates by exact source text only; never score semantics."""
+
     quote = str(anchor.get("exact_quote") or "").strip()
     if not quote:
-        return {"requirement_finding_ids": [], "test_obligation_ids": [], "test_design_ids": []}
+        return {
+            "requirement_finding_ids": [],
+            "test_obligation_ids": [],
+            "test_design_ids": [],
+        }
 
     findings = [
         dict(item)
@@ -134,7 +141,7 @@ def _candidate_ids_for_anchor(
     ]
 
     def contains_exact_source_text(item: dict[str, Any]) -> bool:
-        return any(quote in evidence_quote for evidence_quote in _evidence_quotes(item))
+        return any(quote in text for text in _evidence_quotes(item))
 
     return {
         "requirement_finding_ids": sorted(
@@ -156,7 +163,13 @@ def _candidate_ids_for_anchor(
 
 
 def _load_review_anchors(repo_root: Path) -> dict[str, Any]:
-    path = Path(__file__).resolve().parent / "fixtures" / "review_anchors.json"
+    path = (
+        repo_root
+        / "benchmark_evaluator"
+        / "product_quality"
+        / "fixtures"
+        / "review_anchors.json"
+    )
     return json.loads(path.read_text(encoding="utf-8"))
 
 
@@ -171,18 +184,17 @@ def _review_worksheet(
         for item in anchors_payload.get("anchors", [])
         if isinstance(item, dict) and str(item.get("sample_id") or "") == sample_id
     ]
-    rows: list[dict[str, Any]] = []
-    for anchor in sample_anchors:
-        rows.append(
-            {
-                **anchor,
-                "candidate_output_ids": _candidate_ids_for_anchor(
-                    anchor, requirement_analysis, test_analysis
-                ),
-                "human_verdict": "PENDING_REVIEW",
-                "human_notes": "",
-            }
-        )
+    rows = [
+        {
+            **anchor,
+            "candidate_output_ids": _candidate_ids_for_anchor(
+                anchor, requirement_analysis, test_analysis
+            ),
+            "human_verdict": "PENDING_REVIEW",
+            "human_notes": "",
+        }
+        for anchor in sample_anchors
+    ]
     return {
         "schema": REVIEW_SCHEMA,
         "sample_id": sample_id,
@@ -192,13 +204,14 @@ def _review_worksheet(
     }
 
 
-def _capture_sample(
+def _capture_product_sample(
     repo_root: Path,
     output_root: Path,
     sample_id: str,
     source_specs: tuple[tuple[str, str], ...],
-    anchors_payload: dict[str, Any],
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], dict[str, Any] | None, dict[str, Any] | None]:
+    """Run product capture with no access to external review anchors."""
+
     with tempfile.TemporaryDirectory(prefix=f"qualibug-audit-{sample_id}-") as temporary:
         work_root = Path(temporary).resolve()
         source_paths, hints, source_snapshot = _copy_sources(
@@ -214,13 +227,17 @@ def _capture_sample(
         if not bool(ingestion.get("ok")) or str(
             ingestion.get("transaction_status") or ""
         ) != "COMMITTED":
-            return {
-                "sample_id": sample_id,
-                "status": "BLOCKED",
-                "reason_code": "SOURCE_INGESTION_NOT_COMMITTED",
-                "source_snapshot": source_snapshot,
-                "ingestion_receipt": ingestion,
-            }
+            return (
+                {
+                    "sample_id": sample_id,
+                    "status": "BLOCKED",
+                    "reason_code": "SOURCE_INGESTION_NOT_COMMITTED",
+                    "source_snapshot": source_snapshot,
+                    "ingestion_receipt": ingestion,
+                },
+                None,
+                None,
+            )
 
         asset = build_enterprise_business_knowledge_asset(
             sample_id,
@@ -228,39 +245,33 @@ def _capture_sample(
             {"probe_limit": 0},
         )
         requirement_analysis = analyze_knowledge_asset(asset)
-        raw_test_analysis = analyze_test_intelligence(asset)
         test_analysis = compose_requirement_test_linkage(
             requirement_analysis,
-            raw_test_analysis,
+            analyze_test_intelligence(asset),
         )
 
         sample_output = output_root / sample_id
         _json_write(sample_output / "requirement_analysis.json", requirement_analysis)
         _json_write(sample_output / "test_intelligence_analysis.json", test_analysis)
-        worksheet = _review_worksheet(
-            sample_id,
-            anchors_payload,
-            requirement_analysis,
-            test_analysis,
-        )
-        _json_write(sample_output / "review_worksheet.json", worksheet)
 
         requirement_summary = requirement_analysis.get("summary") or {}
         test_summary = test_analysis.get("summary") or {}
-        return {
+        result = {
             "sample_id": sample_id,
             "status": "CAPTURED",
             "measurement_status": "PENDING_HUMAN_REVIEW",
             "source_snapshot": source_snapshot,
-            "requirement_readiness": (requirement_analysis.get("readiness") or {}).get("status"),
+            "requirement_readiness": (
+                requirement_analysis.get("readiness") or {}
+            ).get("status"),
             "requirement_finding_count": requirement_summary.get("finding_count", 0),
             "test_obligation_count": test_summary.get("obligation_count", 0),
             "test_design_count": test_summary.get("test_design_count", 0),
             "linked_requirement_finding_count": test_summary.get(
                 "linked_requirement_finding_count", 0
             ),
-            "review_anchor_count": worksheet["review_anchor_count"],
         }
+        return result, requirement_analysis, test_analysis
 
 
 def capture_current_product_audit(
@@ -280,19 +291,42 @@ def capture_current_product_audit(
         if output_dir is not None
         else repo_root / "evaluator_outputs" / "product_quality" / "current"
     )
-    anchors_payload = _load_review_anchors(repo_root)
 
-    sample_results = [
-        _capture_sample(
+    # Phase 1: capture all product outputs with no review truth loaded.
+    captures: list[tuple[dict[str, Any], dict[str, Any] | None, dict[str, Any] | None]] = [
+        _capture_product_sample(
             repo_root,
             output_root,
             sample_id,
             SAMPLE_SPECS[sample_id],
-            anchors_payload,
         )
         for sample_id in selected
     ]
-    status = "CAPTURED" if all(item.get("status") == "CAPTURED" for item in sample_results) else "BLOCKED"
+
+    # Phase 2: only after product capture, load independent human review anchors.
+    anchors_payload = _load_review_anchors(repo_root)
+    sample_results: list[dict[str, Any]] = []
+    for result, requirement_analysis, test_analysis in captures:
+        sample_id = str(result.get("sample_id") or "")
+        if requirement_analysis is not None and test_analysis is not None:
+            worksheet = _review_worksheet(
+                sample_id,
+                anchors_payload,
+                requirement_analysis,
+                test_analysis,
+            )
+            _json_write(
+                output_root / sample_id / "review_worksheet.json",
+                worksheet,
+            )
+            result = {**result, "review_anchor_count": worksheet["review_anchor_count"]}
+        sample_results.append(result)
+
+    status = (
+        "CAPTURED"
+        if all(item.get("status") == "CAPTURED" for item in sample_results)
+        else "BLOCKED"
+    )
     summary = {
         "schema": AUDIT_SCHEMA,
         "status": status,
@@ -300,6 +334,7 @@ def capture_current_product_audit(
         "product_feature_freeze": True,
         "human_scoring_required": True,
         "self_scored_model_quality": False,
+        "review_truth_loaded_after_all_product_capture": True,
         "sample_count": len(sample_results),
         "samples": sample_results,
     }
@@ -309,7 +344,10 @@ def capture_current_product_audit(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Capture current Requirement/Test Intelligence outputs for human quality audit."
+        description=(
+            "Capture current Requirement/Test Intelligence outputs for human "
+            "product-quality review."
+        )
     )
     parser.add_argument("--root", default=".")
     parser.add_argument("--output")
