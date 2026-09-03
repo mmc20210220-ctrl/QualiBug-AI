@@ -31,6 +31,7 @@ class RequirementIntelligenceManifest:
     status: ProductStatus
     evidence_required: bool
     supported_findings: tuple[RequirementFindingKind, ...]
+    implemented_findings: tuple[RequirementFindingKind, ...]
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -39,6 +40,7 @@ class RequirementIntelligenceManifest:
             "status": self.status.value,
             "evidence_required": self.evidence_required,
             "supported_findings": tuple(item.value for item in self.supported_findings),
+            "implemented_findings": tuple(item.value for item in self.implemented_findings),
         }
 
 
@@ -52,6 +54,7 @@ MANIFEST = RequirementIntelligenceManifest(
         RequirementFindingKind.MISSING,
         RequirementFindingKind.AMBIGUITY,
     ),
+    implemented_findings=(RequirementFindingKind.CONFLICT,),
 )
 
 
