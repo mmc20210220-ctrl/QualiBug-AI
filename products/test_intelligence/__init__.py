@@ -7,6 +7,12 @@ from .coverage import (
     analyze_test_intelligence,
     build_coverage_projection,
 )
+from .designs import (
+    TEST_DESIGN_PROJECTION_SCHEMA,
+    TEST_DESIGN_QUALITY_CLAIM,
+    TEST_DESIGN_SCHEMA,
+    project_test_designs,
+)
 from .obligations import OBLIGATION_SCHEMA, PROJECTION_SCHEMA, project_test_obligations
 from .product import (
     MANIFEST,
@@ -22,6 +28,9 @@ __all__ = [
     "COVERAGE_SCHEMA",
     "OBLIGATION_SCHEMA",
     "PROJECTION_SCHEMA",
+    "TEST_DESIGN_PROJECTION_SCHEMA",
+    "TEST_DESIGN_QUALITY_CLAIM",
+    "TEST_DESIGN_SCHEMA",
     "MANIFEST",
     "TestIntelligenceManifest",
     "TestIntelligenceStatus",
@@ -29,5 +38,6 @@ __all__ = [
     "analyze_test_intelligence",
     "build_coverage_projection",
     "get_product_manifest",
+    "project_test_designs",
     "project_test_obligations",
 ]
