@@ -168,6 +168,34 @@ def test_test_design_identity_is_stable_and_malformed_obligations_fail_closed() 
         "test-obligation:missing-evidence"
     ]
 
+    untraceable = dict(obligation)
+    untraceable["obligation_id"] = "test-obligation:untraceable"
+    untraceable["evidence"] = [{"source_id": "prd:order", "quote": "缺少来源锚点"}]
+    projection = project_test_designs([untraceable])
+    assert projection["status"] == "PARTIAL"
+    assert projection["designs"] == []
+    assert projection["undesigned_obligation_ids"] == ["test-obligation:untraceable"]
+
+
+def test_test_design_rejects_source_obligation_execution_or_verification_drift() -> None:
+    obligation = _obligation(
+        "test-obligation:truth",
+        "authorization",
+        expected_outcomes=[{"kind": "authorization_decision", "decision": "DENY"}],
+    )
+    for field, invalid in (
+        ("design_status", "DESIGNED"),
+        ("verification_status", "VERIFIED"),
+        ("runtime_linkage", "GROUNDED"),
+    ):
+        drifted = dict(obligation)
+        drifted["obligation_id"] = f"test-obligation:truth:{field}"
+        drifted[field] = invalid
+        projection = project_test_designs([drifted])
+        assert projection["status"] == "PARTIAL"
+        assert projection["designs"] == []
+        assert projection["undesigned_obligation_ids"] == [drifted["obligation_id"]]
+
 
 def test_empty_obligation_universe_is_not_presented_as_designed() -> None:
     projection = project_test_designs([])
@@ -276,7 +304,6 @@ def test_test_design_product_layer_does_not_import_runtime_authorities() -> None
     for path in sorted(PRODUCT_ROOT.rglob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for node in ast.walk(tree):
-            module = ""
             if isinstance(node, ast.Import):
                 modules = [alias.name for alias in node.names]
             elif isinstance(node, ast.ImportFrom) and node.module:
