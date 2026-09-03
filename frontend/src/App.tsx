@@ -88,8 +88,8 @@ export default function App() {
               <Route path="/test-tasks" element={<PreserveSearchRedirect to="/campaigns" />} />
               <Route path="/clues" element={<PreserveSearchRedirect to="/settings" />} />
               <Route path="/products" element={<PreserveSearchRedirect to="/requirements" />} />
-              {/* 未知旧链接 fail-safe 回到当前主产品入口，而不是渲染空白页 */}
-              <Route path="*" element={<PreserveSearchRedirect to="/requirements" />} />
+              {/* 未知旧链接保持原 fail-safe：回到验证总览，不改变历史兼容语义。 */}
+              <Route path="*" element={<PreserveSearchRedirect to="/dashboard" />} />
             </Route>
           </Route>
         </Routes>
