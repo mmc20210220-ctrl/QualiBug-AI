@@ -11,6 +11,9 @@ from .real_project_onboarding import _safe_project_id
 
 
 def _report_finding_dedupe_key(item: dict[str, Any]) -> str:
+    canonical_defect_id = str(item.get("canonical_defect_id") or "").strip()
+    if canonical_defect_id:
+        return f"canonical:{canonical_defect_id}"
     title = str(item.get("title") or item.get("description") or "")[:200].strip().lower()
     title = re.sub(r"^(\[[^\]]*\]\s*)+", "", title)
     title = re.sub(r"\s+", " ", title).strip()
