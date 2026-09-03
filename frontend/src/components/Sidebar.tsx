@@ -38,7 +38,10 @@ function SvgIcon({ name }: { name: string }) {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><path d={d} /></svg>;
 }
 
-type SidebarProps = { mobileOpen?: boolean; onClose?: () => void };
+type SidebarProps = {
+  mobileOpen?: boolean;
+  onClose?: () => void;
+};
 
 export function Sidebar({ mobileOpen = false, onClose }: SidebarProps) {
   const [params] = useSearchParams();
@@ -46,6 +49,7 @@ export function Sidebar({ mobileOpen = false, onClose }: SidebarProps) {
   const { projectName, currentDefectCount, clueCount, p0Count, error: summaryError } = useProjectSummary(project);
   const { scanActive, hasMaterializedMetrics } = useLiveStatus(project, 15_000);
 
+  // 后端故障时显式呈现失败状态；绝不把「读不到」渲染成健康的零值结论。
   const summaryFaulted = Boolean(project && summaryError);
   const countText = (value: number | null | undefined): string => (summaryFaulted ? '—' : String(value ?? 0));
 
@@ -67,21 +71,40 @@ export function Sidebar({ mobileOpen = false, onClose }: SidebarProps) {
 
   return (
     <>
-      <div className={`sidebar-backdrop${mobileOpen ? ' open' : ''}`} onClick={onClose} aria-hidden="true" />
+      <div
+        className={`sidebar-backdrop${mobileOpen ? ' open' : ''}`}
+        onClick={onClose}
+        aria-hidden="true"
+      />
       <aside id="primary-sidebar" className={`sidebar${mobileOpen ? ' mobile-open' : ''}`} aria-label="主导航">
         <div className="side-brand">
-          <button type="button" className="side-close" onClick={onClose} aria-label="关闭导航">×</button>
+          <button type="button" className="side-close" onClick={onClose} aria-label="关闭导航">
+            ×
+          </button>
           <BrandLogo variant="full" detail="compact" tone="dark" size={38} subtitle="企业软件智能审查" />
         </div>
 
         <div className="side-project">
           <span className="side-project-label">当前客户</span>
           <b>{projectName}</b>
-          {summaryFaulted && <p className="side-project-error" role="alert" title={summaryError}>项目状态读取失败：{summaryError}</p>}
+          {summaryFaulted && (
+            <p className="side-project-error" role="alert" title={summaryError}>
+              项目状态读取失败：{summaryError}
+            </p>
+          )}
           <div className="side-project-metrics">
-            <div className="side-project-metric"><span>验证状态</span><strong>{riskStateLabel}</strong></div>
-            <div className="side-project-metric" title={summaryFaulted ? '后端状态不可读取，计数未上报' : undefined}><span>已确认</span><strong>{countText(currentDefectCount)}</strong></div>
-            <div className="side-project-metric" title={summaryFaulted ? '后端状态不可读取，计数未上报' : undefined}><span>后台补证</span><strong>{countText(clueCount)}</strong></div>
+            <div className="side-project-metric">
+              <span>验证状态</span>
+              <strong>{riskStateLabel}</strong>
+            </div>
+            <div className="side-project-metric" title={summaryFaulted ? '后端状态不可读取，计数未上报' : undefined}>
+              <span>已确认</span>
+              <strong>{countText(currentDefectCount)}</strong>
+            </div>
+            <div className="side-project-metric" title={summaryFaulted ? '后端状态不可读取，计数未上报' : undefined}>
+              <span>后台补证</span>
+              <strong>{countText(clueCount)}</strong>
+            </div>
           </div>
         </div>
 
@@ -97,10 +120,17 @@ export function Sidebar({ mobileOpen = false, onClose }: SidebarProps) {
                     : undefined;
                 const badgeAlert = item.badgeKey === 'findings' && p0Count > 0;
                 return (
-                  <NavLink key={item.to} to={buildProjectPath(`/${item.to}`, project)} className={({ isActive }) => `side-link${isActive ? ' active' : ''}`} onClick={onClose}>
+                  <NavLink
+                    key={item.to}
+                    to={buildProjectPath(`/${item.to}`, project)}
+                    className={({ isActive }) => `side-link${isActive ? ' active' : ''}`}
+                    onClick={onClose}
+                  >
                     <SvgIcon name={item.icon} />
                     {item.label}
-                    {badge != null && badge > 0 && <span className={`side-badge${badgeAlert ? ' alert' : ''}`}>{badge}</span>}
+                    {badge != null && badge > 0 && (
+                      <span className={`side-badge${badgeAlert ? ' alert' : ''}`}>{badge}</span>
+                    )}
                   </NavLink>
                 );
               })}
