@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { lazy, Suspense, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { useFindingsData } from '../api/data';
 import { FindingDecisionSnapshot } from '../components/findings/FindingDecisionSnapshot';
@@ -6,12 +6,13 @@ import { FindingVerificationPanel } from '../components/findings/FindingVerifica
 import { AssertionDiff } from '../components/evidence/AssertionDiff';
 import { EvidenceDistributionTools } from '../components/evidence/EvidenceDistributionTools';
 import { EvidenceTimeline } from '../components/EvidenceTimeline';
-import { ReplayViewer } from '../components/ReplayViewer';
 import { Skeleton } from '../components/dashboard/DashboardPrimitives';
 import { buildProjectPath } from '../lib/project-navigation';
 import { buildFindingEvidencePackageText } from '../lib/finding-evidence-package';
 import { usePageTitle } from '../lib/page-title';
 import type { Finding } from '../types';
+
+const ReplayViewer = lazy(() => import('../components/ReplayViewer'));
 
 function formatTimestamp(value: string | undefined): string {
   const text = String(value || '').trim();
@@ -199,7 +200,9 @@ export function FindingDetail() {
       <EvidenceDistributionTools finding={finding} project={project} />
 
       {replayOpen && (
-        <ReplayViewer projectId={project} finding={finding} onClose={() => setReplayOpen(false)} />
+        <Suspense fallback={<div className="replay-loading"><div className="spinner spinner-centered" /></div>}>
+          <ReplayViewer projectId={project} finding={finding} onClose={() => setReplayOpen(false)} />
+        </Suspense>
       )}
     </div>
   );
