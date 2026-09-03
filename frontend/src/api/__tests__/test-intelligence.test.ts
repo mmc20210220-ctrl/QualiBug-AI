@@ -95,6 +95,12 @@ describe('Test Intelligence frontend projection', () => {
     expect(analysis.obligations[0].requirementFindingIds).toEqual(['requirement:conflict:cancel-rule']);
   });
 
+  it('fails closed when the linkage summary disagrees with actual linked obligations', () => {
+    const payload = validPayload();
+    payload.data.summary.requirement_finding_linked_obligation_count = 1;
+    expect(() => parseTestIntelligenceAnalysis(payload)).toThrow(/requirement_finding_linked_obligation_count/);
+  });
+
   it('fails closed on unknown coverage status', () => {
     const payload = validPayload();
     payload.data.analysis_status = 'HEALTHY';
