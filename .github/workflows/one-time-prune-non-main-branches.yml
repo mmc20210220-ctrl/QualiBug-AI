@@ -1,0 +1,56 @@
+name: One-time prune non-main branches
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/one-time-prune-non-main-branches.yml
+
+permissions:
+  contents: write
+
+jobs:
+  prune:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete every branch except main
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api --paginate "repos/${REPO}/branches?per_page=100" --jq '.[].name' > /tmp/branches.txt
+          while IFS= read -r branch; do
+            [ -n "$branch" ] || continue
+            if [ "$branch" = "main" ]; then
+              continue
+            fi
+            encoded="$(python -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "$branch")"
+            echo "Deleting branch: $branch"
+            gh api --method DELETE "repos/${REPO}/git/refs/heads/${encoded}"
+          done < /tmp/branches.txt
+
+      - name: Verify only main remains
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          remaining="$(gh api --paginate "repos/${REPO}/branches?per_page=100" --jq '.[].name')"
+          printf '%s\n' "$remaining"
+          test "$remaining" = "main"
+
+      - name: Remove this one-time workflow from main
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha="$(gh api "repos/${REPO}/contents/.github/workflows/one-time-prune-non-main-branches.yml?ref=main" --jq '.sha')"
+          gh api --method DELETE "repos/${REPO}/contents/.github/workflows/one-time-prune-non-main-branches.yml" \
+            -f message='chore: remove completed one-time branch cleanup' \
+            -f sha="$sha" \
+            -f branch='main'
