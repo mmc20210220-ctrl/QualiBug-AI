@@ -138,7 +138,7 @@ export function Sidebar({ mobileOpen = false, onClose }: SidebarProps) {
 
         <div className="side-bottom">
           <b>QualiBug AI</b>
-          多源理解 · 需求审查 · 证据追溯 · 真实验证
+          少配置 · 自动理解 · 真实验证 · 需求审查
         </div>
       </aside>
     </>
