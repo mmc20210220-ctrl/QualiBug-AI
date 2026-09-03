@@ -47,7 +47,7 @@ export function Topbar({ navOpen = false, onToggleNav }: TopbarProps) {
   const dotTone = isProductsPage
     ? 'success'
     : isRequirementsPage
-      ? (hasSelectedCustomer ? 'success' : 'muted')
+      ? 'muted'
       : !hasSelectedCustomer
         ? 'muted'
         : scanActive
@@ -82,7 +82,7 @@ export function Topbar({ navOpen = false, onToggleNav }: TopbarProps) {
         <div className="topbar-title-group"><span className="breadcrumb">QualiBug AI <b>/ {currentPage}</b></span><span className="topbar-subtitle">{topbarSubtitle}</span></div>
       </div>
       <div className="topbar-right">
-        <span className={`system-status ${isProductsPage || isRequirementsPage || (!project || !hasResolvedProject || scanActive || !hasMaterializedMetrics) ? '' : 'online'}${isProductsPage || (isRequirementsPage && hasSelectedCustomer) ? ' online' : ''}`}><span className={`system-status-dot tone-${dotTone}`} />{statusText}</span>
+        <span className={`system-status ${isProductsPage || (!isRequirementsPage && project && hasResolvedProject && !scanActive && hasMaterializedMetrics) ? 'online' : ''}`}><span className={`system-status-dot tone-${dotTone}`} />{statusText}</span>
         {hasSelectedCustomer && (
           <button
             type="button"
