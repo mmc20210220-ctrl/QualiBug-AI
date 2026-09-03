@@ -5,7 +5,7 @@ understanding, evidence, and persistence authorities are reused through explicit
 adapters as the product is implemented.
 """
 
-from .analysis import ANALYSIS_SCHEMA, analyze_knowledge_asset
+from .analysis import ANALYSIS_SCHEMA, READINESS_SCHEMA, analyze_knowledge_asset
 from .product import (
     MANIFEST,
     ProductStatus,
@@ -16,6 +16,7 @@ from .product import (
 
 __all__ = [
     "ANALYSIS_SCHEMA",
+    "READINESS_SCHEMA",
     "MANIFEST",
     "ProductStatus",
     "RequirementFindingKind",
