@@ -7,9 +7,9 @@ import { useProjectNavigation } from '../lib/project-navigation';
 
 const pageLabels: Record<string, string> = {
   '/requirements': '需求审查',
-  '/dashboard': '验证总览',
-  '/findings': '已确认问题',
-  '/integration': '资料接入',
+  '/dashboard': '总览',
+  '/findings': '问题',
+  '/integration': '接入',
   '/evidence': '证据',
   '/release': '发布结论',
   '/materials': '企业资料',
