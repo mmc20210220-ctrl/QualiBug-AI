@@ -1,0 +1,160 @@
+{
+  "schema": "qualibug.product-quality-review-anchors.v1",
+  "ground_truth_generated_from_product_output": false,
+  "purpose": "External source-backed anchors for human usefulness, noise, and miss review. Exact quotes are used only to narrow candidate outputs after product capture.",
+  "anchors": [
+    {
+      "sample_id": "object_source_conflict",
+      "anchor_id": "OSC-REQ-001",
+      "expected_surfaces": ["requirement_finding"],
+      "business_expectation": "同一中文业务对象“客户”在历史与当前批准 PRD 中指向不同 canonical object，未做人工 authority decision 前应作为需求/来源冲突暴露。",
+      "source_path": "benchmark/multi_source_object_conflict/PRD_LEGACY.md",
+      "exact_quote": "CustomerProfile（客户）",
+      "review_question": "Requirement Intelligence 是否明确指出“客户”的对象身份冲突，并给出两份 PRD 的证据，而不是自动选择新版本？"
+    },
+    {
+      "sample_id": "object_source_conflict",
+      "anchor_id": "OSC-REQ-002",
+      "expected_surfaces": ["requirement_finding"],
+      "business_expectation": "当前批准版本把“客户”定义为 CustomerAccount。",
+      "source_path": "benchmark/multi_source_object_conflict/PRD_CURRENT.md",
+      "exact_quote": "CustomerAccount（客户）",
+      "review_question": "同一冲突 Finding 是否同时携带当前版本证据，且 Readiness 在未人工解决前不应显示 READY？"
+    },
+    {
+      "sample_id": "benchmark_mall",
+      "anchor_id": "MALL-TEST-001",
+      "expected_surfaces": ["test_obligation", "test_design"],
+      "business_expectation": "支付只允许在待支付订单上进行。",
+      "source_path": "projects/benchmark_mall/input/PRD.md",
+      "exact_quote": "订单必须处于 `PENDING_PAYMENT` 状态",
+      "review_question": "是否形成真正可用的状态/前置条件测试义务与设计，而不是泛化成“测试支付功能”？"
+    },
+    {
+      "sample_id": "benchmark_mall",
+      "anchor_id": "MALL-TEST-002",
+      "expected_surfaces": ["test_obligation", "test_design"],
+      "business_expectation": "支付成功后订单进入 PAID。",
+      "source_path": "projects/benchmark_mall/input/PRD.md",
+      "exact_quote": "支付成功后订单状态变为 `PAID`",
+      "review_question": "是否产生可判断状态结果的 Obligation/Design，并保留来源证据？"
+    },
+    {
+      "sample_id": "benchmark_mall",
+      "anchor_id": "MALL-TEST-003",
+      "expected_surfaces": ["test_obligation", "test_design"],
+      "business_expectation": "已支付订单不得直接取消。",
+      "source_path": "projects/benchmark_mall/input/PRD.md",
+      "exact_quote": "已支付订单不能直接取消，只能发起退款",
+      "review_question": "是否形成负向约束，而不是只生成正向取消测试？"
+    },
+    {
+      "sample_id": "benchmark_mall",
+      "anchor_id": "MALL-TEST-004",
+      "expected_surfaces": ["test_obligation", "test_design"],
+      "business_expectation": "取消订单必须释放库存。",
+      "source_path": "projects/benchmark_mall/input/PRD.md",
+      "exact_quote": "取消订单后必须释放库存",
+      "review_question": "是否形成副作用/后置条件验证，并在 Test Design 中形成明确观察点与 Oracle？"
+    },
+    {
+      "sample_id": "benchmark_mall",
+      "anchor_id": "MALL-TEST-005",
+      "expected_surfaces": ["test_obligation", "test_design"],
+      "business_expectation": "退款审批只能由 finance/admin 处理。",
+      "source_path": "projects/benchmark_mall/input/PRD.md",
+      "exact_quote": "退款审批应由财务或管理员处理",
+      "review_question": "是否形成角色授权边界，且没有把角色信息丢成普通描述？"
+    },
+    {
+      "sample_id": "benchmark_mall",
+      "anchor_id": "MALL-TEST-006",
+      "expected_surfaces": ["test_obligation", "test_design"],
+      "business_expectation": "普通买家只能操作自己的业务数据。",
+      "source_path": "projects/benchmark_mall/input/PRD.md",
+      "exact_quote": "普通买家只能操作自己的购物车、订单、退款",
+      "review_question": "是否识别 ownership/authorization 约束，而不是只识别 buyer 角色名称？"
+    },
+    {
+      "sample_id": "benchmark_mall",
+      "anchor_id": "MALL-TEST-007",
+      "expected_surfaces": ["test_obligation", "test_design"],
+      "business_expectation": "取消订单后的库存数量必须从 locked 恢复到 available。",
+      "source_path": "projects/benchmark_mall/input/BUSINESS_RULES.md",
+      "exact_quote": "订单取消时，应减少 locked_qty 并恢复 available_qty",
+      "review_question": "Test Design 是否把这一业务副作用拆成可观察结果，而不是只有一句自然语言摘要？"
+    },
+    {
+      "sample_id": "warehouse_e",
+      "anchor_id": "WMS-TEST-001",
+      "expected_surfaces": ["test_obligation", "test_design"],
+      "business_expectation": "unit_price 修改只能 ADMIN 执行。",
+      "source_path": "projects/warehouse_e/input/BUSINESS_RULES.md",
+      "exact_quote": "BR-AUTH-001: 商品价格修改（unit_price）仅ADMIN可执行",
+      "review_question": "是否形成明确的授权决策义务，角色、操作、对象均可辨认？"
+    },
+    {
+      "sample_id": "warehouse_e",
+      "anchor_id": "WMS-TEST-002",
+      "expected_surfaces": ["test_obligation", "test_design"],
+      "business_expectation": "OPERATOR 只能操作自己所属仓库资源。",
+      "source_path": "projects/warehouse_e/input/BUSINESS_RULES.md",
+      "exact_quote": "BR-AUTH-005: OPERATOR仅可操作自己所属仓库的资源",
+      "review_question": "是否保留 warehouse ownership/scope 语义，而不是退化成泛权限检查？"
+    },
+    {
+      "sample_id": "warehouse_e",
+      "anchor_id": "WMS-TEST-003",
+      "expected_surfaces": ["test_obligation", "test_design"],
+      "business_expectation": "confirm 仅能从 CREATED 状态执行。",
+      "source_path": "projects/warehouse_e/input/BUSINESS_RULES.md",
+      "exact_quote": "BR-STATE-001: 确认（confirm）仅允许从CREATED状态执行",
+      "review_question": "是否形成状态前置条件 + 操作 + 预期允许结果的结构化设计？"
+    },
+    {
+      "sample_id": "warehouse_e",
+      "anchor_id": "WMS-TEST-004",
+      "expected_surfaces": ["test_obligation", "test_design"],
+      "business_expectation": "SHIPPED/DELIVERED 状态禁止 cancel。",
+      "source_path": "projects/warehouse_e/input/BUSINESS_RULES.md",
+      "exact_quote": "BR-STATE-003: 取消（cancel）不允许从SHIPPED或DELIVERED状态执行",
+      "review_question": "是否覆盖负向状态流转，而不是只覆盖允许路径？"
+    },
+    {
+      "sample_id": "warehouse_e",
+      "anchor_id": "WMS-TEST-005",
+      "expected_surfaces": ["test_obligation", "test_design"],
+      "business_expectation": "退货退款后库存必须恢复。",
+      "source_path": "projects/warehouse_e/input/BUSINESS_RULES.md",
+      "exact_quote": "BR-RET-003: 退款（refund）后应恢复对应库存数量",
+      "review_question": "是否形成 refund 的副作用观察点和来源 Oracle？"
+    },
+    {
+      "sample_id": "warehouse_e",
+      "anchor_id": "WMS-TEST-006",
+      "expected_surfaces": ["test_obligation", "test_design"],
+      "business_expectation": "发货失败需要恢复已拣货库存。",
+      "source_path": "projects/warehouse_e/input/BUSINESS_RULES.md",
+      "exact_quote": "BR-COMP-001: 发货失败后，已拣货的库存应恢复到拣货前状态",
+      "review_question": "系统是否能把补偿规则提升为真正的测试义务和观察点？"
+    },
+    {
+      "sample_id": "warehouse_e",
+      "anchor_id": "WMS-TEST-007",
+      "expected_surfaces": ["test_obligation", "test_design"],
+      "business_expectation": "相同 order_ref 创建必须幂等并返回 409。",
+      "source_path": "projects/warehouse_e/input/BUSINESS_RULES.md",
+      "exact_quote": "BR-IDEM-001: 相同order_ref的订单不可重复创建，应返回409",
+      "review_question": "当前 Test Intelligence 能否理解这种非状态机、非权限的业务规则；如果不能，应记录为漏项，而不是继续扩架构。"
+    },
+    {
+      "sample_id": "warehouse_e",
+      "anchor_id": "WMS-TEST-008",
+      "expected_surfaces": ["test_obligation", "test_design"],
+      "business_expectation": "批量分配必须原子回滚。",
+      "source_path": "projects/warehouse_e/input/BUSINESS_RULES.md",
+      "exact_quote": "BR-BULK-001: 批量分配为原子操作，任一订单分配失败应全部回滚",
+      "review_question": "当前产品是否把事务原子性作为业务义务保留下来；若没有，作为产品质量缺口记录，不新增新引擎。"
+    }
+  ]
+}
