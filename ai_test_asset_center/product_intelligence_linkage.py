@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Application-layer linkage between Requirement Findings and Test Obligations.
+"""Application-layer linkage between Requirement Findings and Test Intelligence.
 
 The product packages remain independent authorities. This module receives their
 already-projected analyses and adds only deterministic cross-product references.
@@ -51,8 +51,6 @@ def _link_proof(
 ) -> tuple[str, dict[str, Any]] | None:
     finding_type = _text(finding.get("finding_type"))
 
-    # Strongest proof: the Requirement Finding and Test Obligation explicitly
-    # reference the same upstream business fact identity.
     shared_fact_ids = sorted(
         _fact_ids(finding.get("evidence")) & _obligation_fact_ids(obligation)
     )
@@ -61,8 +59,6 @@ def _link_proof(
 
     obligation_objects = _strings(obligation.get("object_refs"))
 
-    # Identity ambiguity is itself about a bounded set of exact candidate entity
-    # identities. An obligation that references one of those same IDs is affected.
     if finding_type == "requirement_ambiguity":
         shared_objects = sorted(
             _strings(finding.get("candidate_entity_ids")) & obligation_objects
@@ -72,10 +68,6 @@ def _link_proof(
                 "shared_object_refs": shared_objects,
             }
 
-    # Lifecycle missing findings may only link to lifecycle-transition obligations,
-    # and only when both object and operation coordinates match exactly. If a
-    # missing target/from-state prevented lifecycle projection entirely, the finding
-    # intentionally remains unlinked rather than being attached to a nearby rule.
     if (
         finding_type == "requirement_missing"
         and _text(obligation.get("obligation_kind")) == "lifecycle_transition"
@@ -102,7 +94,8 @@ def compose_requirement_test_linkage(
 
     The input product analyses are not mutated. Unproven relationships are emitted
     as explicit unlinked receipts so callers can distinguish "not linked" from
-    "not evaluated".
+    "not evaluated". Test Design inherits only the links already proven against
+    its source Test Obligation; no additional matching is performed at design level.
     """
 
     if _text(requirement_analysis.get("product_id")) != "requirement_intelligence":
@@ -117,6 +110,7 @@ def compose_requirement_test_linkage(
 
     composed = deepcopy(test_analysis)
     obligations = _rows(composed.get("obligations"))
+    designs = _rows(composed.get("test_designs"))
     findings = _rows(requirement_analysis.get("findings"))
 
     links: list[dict[str, Any]] = []
@@ -171,9 +165,24 @@ def compose_requirement_test_linkage(
             links_by_obligation.get(obligation_id, set())
         )
 
+    linked_design_ids: set[str] = set()
+    for design in designs:
+        design_id = _text(design.get("design_id"))
+        source_obligation_id = _text(design.get("source_obligation_id"))
+        requirement_finding_ids = sorted(
+            links_by_obligation.get(source_obligation_id, set())
+        )
+        design["requirement_finding_ids"] = requirement_finding_ids
+        if design_id and requirement_finding_ids:
+            linked_design_ids.add(design_id)
+
     composed["obligations"] = obligations
+    if "test_designs" in composed:
+        composed["test_designs"] = designs
+
     summary = dict(composed.get("summary")) if isinstance(composed.get("summary"), dict) else {}
     summary["requirement_finding_linked_obligation_count"] = len(linked_obligation_ids)
+    summary["requirement_finding_linked_design_count"] = len(linked_design_ids)
     summary["linked_requirement_finding_count"] = len(linked_finding_ids)
     summary["unlinked_requirement_finding_count"] = len(unlinked_finding_ids)
     summary["requirement_finding_link_count"] = len(links)
@@ -185,6 +194,7 @@ def compose_requirement_test_linkage(
         "linked_requirement_finding_count": len(linked_finding_ids),
         "unlinked_requirement_finding_count": len(unlinked_finding_ids),
         "linked_test_obligation_count": len(linked_obligation_ids),
+        "linked_test_design_count": len(linked_design_ids),
         "link_count": len(links),
         "links": links,
         "unlinked_findings": [

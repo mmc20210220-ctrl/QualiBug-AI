@@ -63,7 +63,7 @@ export function Topbar({ navOpen = false, onToggleNav }: TopbarProps) {
   const topbarSubtitle = isProductsPage
     ? '产品策略与版本路径'
     : isTestIntelligencePage
-      ? '证据化测试义务与支持语义覆盖'
+      ? '测试义务、结构化设计与支持语义覆盖'
       : isRequirementsPage
         ? '跨资料需求审查与证据追溯'
         : hasSelectedCustomer

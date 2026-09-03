@@ -2,9 +2,10 @@ from __future__ import annotations
 
 """Stable product contract for Test Intelligence v1.
 
-Test Intelligence owns obligation and supported-semantic coverage semantics only.
-It does not execute a target system, persist a second evidence model, or import
-Bug Discovery runtime authorities.
+Test Intelligence owns obligation, supported-semantic coverage, and structured
+Test Design semantics. It does not ground designs onto a runtime surface,
+execute a target system, persist a second evidence model, or import Bug
+Discovery runtime authorities.
 """
 
 from dataclasses import dataclass
@@ -29,6 +30,8 @@ class TestIntelligenceManifest:
     display_name: str
     status: TestIntelligenceStatus
     evidence_required: bool
+    structured_test_design_owned: bool
+    runtime_grounding_owned: bool
     runtime_execution_owned: bool
     supported_obligation_kinds: tuple[TestObligationKind, ...]
     implemented_obligation_kinds: tuple[TestObligationKind, ...]
@@ -39,6 +42,8 @@ class TestIntelligenceManifest:
             "display_name": self.display_name,
             "status": self.status.value,
             "evidence_required": self.evidence_required,
+            "structured_test_design_owned": self.structured_test_design_owned,
+            "runtime_grounding_owned": self.runtime_grounding_owned,
             "runtime_execution_owned": self.runtime_execution_owned,
             "supported_obligation_kinds": tuple(
                 item.value for item in self.supported_obligation_kinds
@@ -54,6 +59,8 @@ MANIFEST = TestIntelligenceManifest(
     display_name="Test Intelligence",
     status=TestIntelligenceStatus.EXPERIMENTAL,
     evidence_required=True,
+    structured_test_design_owned=True,
+    runtime_grounding_owned=False,
     runtime_execution_owned=False,
     supported_obligation_kinds=(
         TestObligationKind.BUSINESS_RULE,

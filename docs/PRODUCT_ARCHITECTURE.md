@@ -9,10 +9,10 @@ QualiBug remains one repository and one deployable product platform. The reposit
 The product portfolio is:
 
 1. **Requirement Intelligence** — primary commercial-validation entry.
-2. **Test Intelligence** — experimental validation surface that derives evidence-backed Test Obligations and supported-semantic coverage from shared enterprise understanding.
+2. **Test Intelligence** — experimental validation surface that derives evidence-backed Test Obligations, structured Test Design, and supported-semantic coverage from shared enterprise understanding.
 3. **Bug Discovery** — experimental advanced runtime; feature development is frozen except P0 correctness and convergence work.
 
-The near-term objective is to reuse the existing multi-source enterprise understanding stack across requirement review, test obligation design, and—only when needed—runtime bug confirmation.
+The near-term objective is to reuse the existing multi-source enterprise understanding stack across requirement review, test obligation/design, and—only when needed—runtime bug confirmation.
 
 ## Dependency direction
 
@@ -125,9 +125,11 @@ The readiness receipt must carry the quality claim `DETERMINISTIC_FINDING_GATE_N
 
 ## Test Intelligence v1
 
-Test Intelligence answers a different question from Requirement Intelligence:
+Test Intelligence answers two upstream-of-runtime questions:
 
 > Given the source-backed business semantics the platform already understands, what must be verified?
+
+> Given one evidence-backed Test Obligation, what semantic setup, action, observations, and Oracle are required to verify it?
 
 It does **not** generate arbitrary prose test cases and it does **not** execute the target system.
 
@@ -139,6 +141,7 @@ enterprise source material
         -> confirmed Business Behavior IR / lifecycle truth
         -> Test Obligation projection
         -> supported-semantic obligation coverage
+        -> structured Test Design
 ```
 
 The current API surface is:
@@ -164,17 +167,61 @@ Every delivered Test Obligation requires source-backed evidence. Candidate-only 
 
 Test Obligation IDs are stable projection identities derived from upstream semantic units. They are not a new persisted canonical test/finding identity.
 
+### Test Design v1
+
+Test Design is a deterministic projection from a Test Obligation. It structures the semantic verification contract but deliberately stops before executable grounding.
+
+The design receipt uses:
+
+`DETERMINISTIC_OBLIGATION_DERIVED_TEST_DESIGN_NOT_RUNTIME_GROUNDING_OR_EXECUTION`
+
+A Test Design may contain only information already represented by its source Obligation:
+
+- source-derived preconditions and test-data requirements;
+- actor, business object, and semantic operation references;
+- semantic observation targets derived from expected outcomes;
+- source-derived Oracle assertions;
+- business constraints, Requirement Finding links, and source evidence.
+
+Test Design v1 must **not** invent:
+
+- HTTP/API paths or request payload bindings;
+- UI selectors, click sequences, or browser steps;
+- concrete test accounts, IDs, amounts, timestamps, or fixture values not present in the source semantics;
+- target environment selection;
+- Observer or Oracle runtime bindings;
+- execution success, verification, or reproducibility claims.
+
+The truth states are explicit:
+
+- `design_status = STRUCTURED_DESIGN_ONLY`;
+- `action.execution_surface = NOT_SELECTED`;
+- `action.binding_status = NOT_GROUNDED`;
+- `test_data_materialization_status = NOT_MATERIALIZED`;
+- `environment_status = NOT_SELECTED`;
+- `observer_binding_status = NOT_GROUNDED`;
+- `oracle_binding_status = NOT_GROUNDED`;
+- `runtime_handoff_status = NOT_REQUESTED`;
+- `execution_status = NOT_EXECUTED`;
+- `safety_review_status = NOT_ASSESSED`.
+
+A Test Obligation itself remains `design_status = OBLIGATION_ONLY`. The existence of a separate Test Design does not mutate the semantic meaning of the source Obligation.
+
+Test Design IDs are stable projection identities derived from Test Obligation IDs. They are not a new persisted canonical test-case identity.
+
 ### Runtime boundary
 
-V1 stops at obligation semantics:
+Test Intelligence now owns obligation semantics and structured Test Design, but still stops before runtime grounding:
 
-- `design_status = OBLIGATION_ONLY`;
-- `verification_status = NOT_MEASURED`;
-- `runtime_linkage = NOT_EVALUATED`.
+```text
+Test Obligation
+        -> structured Test Design
+        -> STOP
+```
 
-Those values are deliberate. Generating an obligation must never be represented as having designed, executed, or verified a test.
+It does not select API/UI execution surfaces, materialize test data, bind Observers/Oracles, create Executable Experiments, or execute a target system.
 
-A future handoff may transform selected Test Obligations into Test Design and then an explicit Bug Discovery execution adapter, but Test Intelligence itself must remain upstream of runtime authority.
+A future explicit grounding/handoff adapter may transform a selected Test Design into an Executable Experiment owned by Bug Discovery runtime. That adapter must remain optional, observable, and separately tested.
 
 ### Test Intelligence coverage v1
 
@@ -194,6 +241,8 @@ It reports:
 
 When there are no eligible supported semantic units, coverage is `NOT_MEASURED`, never a healthy-looking 100%.
 
+Test Design projection is reported separately as `NOT_MEASURED`, `PARTIAL`, or `DESIGNED`. `DESIGNED` means every current Test Obligation has a structured Test Design; it does not mean any design is grounded, executable, or verified.
+
 ### Requirement Finding linkage v1
 
 Requirement-to-Test linkage is application composition over the two independent product projections. It does not make either product package import the other and it does not create a second finding, obligation, evidence, or persistence authority.
@@ -210,20 +259,21 @@ A link is emitted only when one of these exact proofs exists:
 
 The linkage layer explicitly does **not** use text similarity, shared filenames/source IDs, recency, model confidence, nearby operations, or broad object-name resemblance as proof. Findings without an exact proof remain visible as unlinked rather than being force-attached to an Obligation.
 
-Linkage updates `requirement_finding_ids` on the API projection and emits a `requirement_linkage` receipt with linked/unlinked counts and reason codes. It does not alter `OBLIGATION_ONLY`, `NOT_MEASURED`, or `NOT_EVALUATED`, and it does not imply runtime verification.
+Linkage updates `requirement_finding_ids` on the Test Obligation API projection. A Test Design inherits only the already-proven links of its exact source Obligation; the design layer performs no second matching pass. The linkage receipt reports linked Obligation and Design counts. Linkage does not imply runtime verification.
 
-## Finding, obligation, and evidence authority
+## Finding, obligation, design, and evidence authority
 
-`Finding` and `Test Obligation` are different platform concepts:
+`Finding`, `Test Obligation`, and `Test Design` are different platform concepts:
 
 - a Finding says a problem/risk was detected;
-- a Test Obligation says a source-backed semantic must be verified.
+- a Test Obligation says a source-backed semantic must be verified;
+- a Test Design structures how that Obligation should be verified before runtime grounding.
 
-A confirmed bug remains one type of Finding. A Test Obligation is not a Finding and is not evidence that execution occurred.
+A confirmed bug remains one type of Finding. Neither a Test Obligation nor a Test Design is evidence that execution occurred.
 
 Near-term rules:
 
-- do not introduce a second persisted finding or obligation table merely for the new product surfaces;
+- do not introduce a second persisted finding, obligation, or test-design table merely for the new product surfaces;
 - do not invent a second evidence store;
 - do not use title/method/path as a new canonical identity mechanism;
 - preserve existing canonical defect identity for confirmed bugs;
@@ -267,11 +317,13 @@ Completed:
 8. Add deterministic supported-semantic coverage.
 9. Expose the authenticated project Test Intelligence API and frontend workspace.
 10. Add exact application-layer Requirement Finding → Test Obligation linkage without introducing product-to-product imports.
+11. Add deterministic Test Obligation → structured Test Design projection without runtime grounding or execution claims.
 
 Next validation sequence:
 
-1. Validate Requirement Finding and Test Obligation quality on real enterprise materials.
-2. Measure how often exact linkage is useful versus legitimately unlinked.
-3. Only after Test Design quality is proven, define an explicit optional handoff into Bug Discovery execution.
+1. Validate Requirement Finding, Test Obligation, and Test Design quality on real enterprise materials.
+2. Measure how often exact Requirement-to-Test linkage is useful versus legitimately unlinked.
+3. Identify which Test Designs have enough real API/UI/data bindings for a separate grounding experiment.
+4. Only after grounding quality is proven, define an explicit optional handoff into Bug Discovery execution.
 
 This document is an architecture constraint, not a request for an immediate repository-wide rewrite.

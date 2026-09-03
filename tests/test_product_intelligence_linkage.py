@@ -301,9 +301,19 @@ def test_test_intelligence_http_route_returns_composed_requirement_linkage() -> 
     data = payload["data"]
     assert data["product_id"] == "test_intelligence"
     assert data["summary"]["obligation_count"] == 1
+    assert data["summary"]["test_design_count"] == 1
     assert data["summary"]["requirement_finding_linked_obligation_count"] == 1
+    assert data["summary"]["requirement_finding_linked_design_count"] == 1
     assert data["obligations"][0]["requirement_finding_ids"] == [
         "requirement:conflict:cancel-rule"
     ]
+    assert data["test_designs"][0]["source_obligation_id"] == data["obligations"][0]["obligation_id"]
+    assert data["test_designs"][0]["requirement_finding_ids"] == [
+        "requirement:conflict:cancel-rule"
+    ]
+    assert data["test_designs"][0]["design_status"] == "STRUCTURED_DESIGN_ONLY"
+    assert data["test_designs"][0]["action"]["binding_status"] == "NOT_GROUNDED"
+    assert data["test_designs"][0]["execution_status"] == "NOT_EXECUTED"
     assert data["requirement_linkage"]["link_count"] == 1
+    assert data["requirement_linkage"]["linked_test_design_count"] == 1
     assert data["requirement_linkage"]["links"][0]["reason_code"] == "SHARED_SOURCE_FACT_ID"

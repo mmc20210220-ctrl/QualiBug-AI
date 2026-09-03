@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import {
   getTestIntelligence,
   type TestCoverageStatus,
+  type TestDesign,
   type TestEvidence,
   type TestIntelligenceAnalysis,
   type TestObligation,
@@ -11,6 +12,7 @@ import {
 import { usePageTitle } from '../lib/page-title';
 import { useProjectNavigation } from '../lib/project-navigation';
 import './TestIntelligence.css';
+import './TestDesign.css';
 
 const KIND_META: Record<TestObligationKind, { label: string; short: string; description: string }> = {
   business_rule: { label: '业务规则', short: '规则', description: '验证来源明确声明的业务约束与模态' },
@@ -85,7 +87,63 @@ function EvidenceList({ evidence }: { evidence: TestEvidence[] }) {
   );
 }
 
-function ObligationCard({ obligation }: { obligation: TestObligation }) {
+function TestDesignPanel({ design }: { design: TestDesign }) {
+  const setup = design.setup.preconditions.map(displayValue).filter(Boolean);
+  const dataRequirements = design.setup.testDataRequirements.map(displayValue).filter(Boolean);
+  const oracleAssertions = design.oracle.assertions.map(displayValue).filter(Boolean);
+  return (
+    <details className="ti-design">
+      <summary>
+        <span><b>Test Design</b> 已形成结构化设计</span>
+        <code>{design.designId}</code>
+      </summary>
+      <div className="ti-design-truth">
+        <strong>只定义“如何验证”的语义结构，不代表已经找到 API / UI 执行入口。</strong>
+        <span>{design.designStatus} · {design.action.bindingStatus} · {design.executionStatus}</span>
+      </div>
+      <div className="ti-design-grid">
+        <section>
+          <span>准备</span>
+          {setup.length ? <ul>{setup.map((item, index) => <li key={`${item}:${index}`}>{item}</li>)}</ul> : <p>无额外来源前置条件</p>}
+          <small>测试数据：{design.setup.testDataMaterializationStatus} · 环境：{design.setup.environmentStatus}</small>
+        </section>
+        <section>
+          <span>动作</span>
+          <strong>{design.action.operationRef || '语义动作待运行时绑定'}</strong>
+          <p>执行表面：{design.action.executionSurface} · 绑定：{design.action.bindingStatus}</p>
+        </section>
+        <section>
+          <span>观察点</span>
+          <ul>{design.observations.map((item, index) => (
+            <li key={`${item.observationKind}:${item.target}:${index}`}>
+              <b>{item.target}</b>：{displayValue(item.expected)} <small>{item.bindingStatus}</small>
+            </li>
+          ))}</ul>
+        </section>
+        <section>
+          <span>Oracle</span>
+          <ul>{oracleAssertions.map((item, index) => <li key={`${item}:${index}`}>{item}</li>)}</ul>
+          <small>{design.oracle.semanticStatus} · {design.oracle.bindingStatus}</small>
+        </section>
+      </div>
+      {dataRequirements.length > 0 && (
+        <div className="ti-design-data">
+          <span>测试数据要求</span>
+          <div>{dataRequirements.map((item, index) => <code key={`${item}:${index}`}>{item}</code>)}</div>
+          <p>这里只保留来源约束，不生成账号、ID、金额或其他具体测试数据值。</p>
+        </div>
+      )}
+      <div className="ti-design-status">
+        <span><b>Observer</b>{design.observerBindingStatus}</span>
+        <span><b>Oracle Binding</b>{design.oracleBindingStatus}</span>
+        <span><b>Runtime Handoff</b>{design.runtimeHandoffStatus}</span>
+        <span><b>Safety Review</b>{design.safetyReviewStatus}</span>
+      </div>
+    </details>
+  );
+}
+
+function ObligationCard({ obligation, design }: { obligation: TestObligation; design?: TestDesign }) {
   const meta = KIND_META[obligation.obligationKind];
   const preconditions = obligation.preconditions.map(displayValue).filter(Boolean);
   const outcomes = obligation.expectedOutcomes.map(displayValue).filter(Boolean);
@@ -137,11 +195,15 @@ function ObligationCard({ obligation }: { obligation: TestObligation }) {
       )}
 
       <div className="ti-status-strip" aria-label="测试义务状态">
-        <span><b>设计</b>{obligation.designStatus}</span>
+        <span><b>设计对象</b>{obligation.designStatus}</span>
         <span><b>验证</b>{obligation.verificationStatus}</span>
         <span><b>运行时</b>{obligation.runtimeLinkage}</span>
         <span><b>风险</b>{obligation.riskLevel}</span>
       </div>
+
+      {design ? <TestDesignPanel design={design} /> : (
+        <div className="ti-design-missing"><strong>当前义务尚未形成结构化 Test Design</strong><span>系统不会用自由文本或虚构执行步骤补齐。</span></div>
+      )}
 
       <details className="ti-evidence-disclosure">
         <summary>查看来源证据 <span>{obligation.evidence.length} 条 · {obligation.sourceIds.length} 个来源</span></summary>
@@ -155,8 +217,8 @@ function WorkspaceEmpty({ onMaterials }: { onMaterials: () => void }) {
   return (
     <section className="ti-empty">
       <span>Test Intelligence</span>
-      <h1>先选择项目，再生成测试义务视图</h1>
-      <p>接入 PRD、业务规则、接口、状态机等资料后，QualiBug 会从已有企业理解中投影需要验证的业务规则、状态流转、权限边界与业务副作用。</p>
+      <h1>先选择项目，再生成测试义务与 Test Design</h1>
+      <p>接入 PRD、业务规则、接口、状态机等资料后，QualiBug 会从已有企业理解中投影需要验证的业务语义，并把可证明的 Test Obligation 继续结构化成 Test Design。</p>
       <button type="button" className="btn btn-primary" onClick={onMaterials}>查看资料接入</button>
     </section>
   );
@@ -201,13 +263,20 @@ export function TestIntelligence() {
     return analysis.obligations.filter((item) => item.obligationKind === activeKind);
   }, [activeKind, analysis]);
 
+  const designsByObligation = useMemo<Map<string, TestDesign>>(() => {
+    if (!analysis) return new Map<string, TestDesign>();
+    return new Map<string, TestDesign>(
+      analysis.testDesigns.map((item): [string, TestDesign] => [item.sourceObligationId, item]),
+    );
+  }, [analysis]);
+
   if (!project) return <WorkspaceEmpty onMaterials={() => navigateToProjectPath('/materials', '')} />;
 
   if (loading) {
     return (
       <section className="ti-loading" role="status" aria-live="polite">
         <span className="spinner" aria-hidden="true" />
-        <div><strong>正在读取 Test Intelligence…</strong><p>正在把已有业务语义投影为证据化 Test Obligation。</p></div>
+        <div><strong>正在读取 Test Intelligence…</strong><p>正在把业务语义投影为 Test Obligation 与结构化 Test Design。</p></div>
       </section>
     );
   }
@@ -216,14 +285,14 @@ export function TestIntelligence() {
     return (
       <section className="ti-error" role="alert">
         <span>Test Intelligence 暂不可用</span>
-        <h1>无法读取当前项目的测试义务</h1>
+        <h1>无法读取当前项目的测试智能结果</h1>
         <p>{error || '后端未返回有效分析结果。'}</p>
         <button type="button" className="btn btn-primary" onClick={() => void load()}>重新读取</button>
       </section>
     );
   }
 
-  const { coverage, summary } = analysis;
+  const { coverage, summary, testDesignProjection } = analysis;
   const statusMeta = COVERAGE_META[coverage.status];
   const counts = coverage.countsByObligationKind;
 
@@ -236,7 +305,7 @@ export function TestIntelligence() {
           <p>{statusMeta.description}</p>
           <div className="ti-hero-actions">
             <button type="button" className="btn btn-primary" onClick={() => navigateToProjectPath('/materials', project)}>管理企业资料</button>
-            <button type="button" className="btn btn-secondary" onClick={() => void load()}>刷新测试义务</button>
+            <button type="button" className="btn btn-secondary" onClick={() => void load()}>刷新测试智能</button>
             <button type="button" className="btn btn-secondary" onClick={() => navigateToProjectPath('/requirements', project)}>查看需求审查</button>
           </div>
         </div>
@@ -258,26 +327,26 @@ export function TestIntelligence() {
       <section className="ti-metrics" aria-label="测试智能摘要">
         <article><span>资料来源</span><strong>{summary.sourceCount}</strong><p>参与当前企业理解的来源</p></article>
         <article><span>Test Obligation</span><strong>{summary.obligationCount}</strong><p>当前可交付的证据化测试义务</p></article>
-        <article><span>支持语义单元</span><strong>{coverage.eligibleSupportedSemanticUnitCount}</strong><p>当前 v1 denominator，不是全部潜在测试空间</p></article>
+        <article><span>Test Design</span><strong>{summary.testDesignCount}</strong><p>{testDesignProjection.status} · 结构化设计，不是执行脚本</p></article>
         <article><span>未覆盖支持语义</span><strong>{coverage.uncoveredSupportedSemanticUnitCount}</strong><p>满足 denominator 但尚未形成义务</p></article>
       </section>
 
       <section className="ti-truth-note">
-        <div><span>当前产品边界</span><strong>需求审查与测试义务只做可证明的精确关联</strong></div>
-        <p>当前有 {summary.requirementFindingLinkedObligationCount} 个 Test Obligation 关联到 Requirement Finding。关联不会改变 OBLIGATION_ONLY / NOT_MEASURED / NOT_EVALUATED，也不会自动制造 requirement_risk 义务或宣称测试已经执行。</p>
+        <div><span>当前产品边界</span><strong>已经结构化“怎么验证”，但还没有做运行时 Grounding</strong></div>
+        <p>{summary.testDesignCount} 个 Test Design 保持 STRUCTURED_DESIGN_ONLY / NOT_GROUNDED / NOT_EXECUTED。当前有 {summary.requirementFindingLinkedDesignCount} 个设计继承已证明的 Requirement Finding 关联；不会生成 API 路径、UI 点击步骤、测试账号或具体数据值。</p>
       </section>
 
-      {(summary.suppressedWithoutEvidenceCount > 0 || summary.unsupportedFormalBehaviorCount > 0) && (
+      {(summary.suppressedWithoutEvidenceCount > 0 || summary.unsupportedFormalBehaviorCount > 0 || summary.undesignedObligationCount > 0) && (
         <section className="ti-diagnostics" aria-label="投影诊断">
           <div><span>因证据不足未提升</span><strong>{summary.suppressedWithoutEvidenceCount}</strong></div>
-          <div><span>当前 v1 未支持正式行为</span><strong>{summary.unsupportedFormalBehaviorCount}</strong></div>
-          <p>这些数字是投影边界诊断，不是缺陷数量，也不代表业务风险等级。</p>
+          <div><span>尚未形成 Test Design</span><strong>{summary.undesignedObligationCount}</strong></div>
+          <p>当前 v1 未支持正式行为 {summary.unsupportedFormalBehaviorCount} 个。这些是投影边界诊断，不是缺陷数量，也不代表业务风险等级。</p>
         </section>
       )}
 
       <section className="ti-obligations-section">
         <div className="ti-section-heading">
-          <div><span>Test Obligations</span><h2>必须验证的业务语义</h2></div>
+          <div><span>Test Obligations + Test Design</span><h2>从“必须验证什么”到“如何验证”</h2></div>
           <div className="ti-filter" role="group" aria-label="按测试义务类型筛选">
             <button type="button" className={activeKind === 'all' ? 'active' : ''} onClick={() => setActiveKind('all')}>全部 {analysis.obligations.length}</button>
             {(Object.keys(KIND_META) as TestObligationKind[]).map((kind) => (
@@ -287,7 +356,9 @@ export function TestIntelligence() {
         </div>
 
         {obligations.length > 0 ? (
-          <div className="ti-obligations-list">{obligations.map((item) => <ObligationCard obligation={item} key={item.obligationId} />)}</div>
+          <div className="ti-obligations-list">{obligations.map((item) => (
+            <ObligationCard obligation={item} design={designsByObligation.get(item.obligationId)} key={item.obligationId} />
+          ))}</div>
         ) : (
           <div className="ti-no-obligations">
             <strong>{activeKind === 'all' ? '当前没有可交付 Test Obligation' : `当前没有${KIND_META[activeKind as TestObligationKind].label}义务`}</strong>
@@ -297,6 +368,13 @@ export function TestIntelligence() {
           </div>
         )}
       </section>
+
+      {testDesignProjection.undesignedObligationIds.length > 0 && (
+        <details className="ti-uncovered">
+          <summary>查看尚未形成 Test Design 的义务 <span>{testDesignProjection.undesignedObligationIds.length} 个</span></summary>
+          <div>{testDesignProjection.undesignedObligationIds.map((id) => <code key={id}>{id}</code>)}</div>
+        </details>
+      )}
 
       {coverage.uncoveredSupportedSemanticUnitIds.length > 0 && (
         <details className="ti-uncovered">
