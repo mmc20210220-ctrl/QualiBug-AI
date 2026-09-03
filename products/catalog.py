@@ -2,18 +2,23 @@ from __future__ import annotations
 
 """Product capability catalog independent of runtime implementation details."""
 
-from products.requirement_intelligence import get_product_manifest
+from products.requirement_intelligence import (
+    get_product_manifest as get_requirement_intelligence_manifest,
+)
+from products.test_intelligence import (
+    get_product_manifest as get_test_intelligence_manifest,
+)
 
 
 def get_product_catalog() -> tuple[dict[str, object], ...]:
-    """Return the product surfaces exposed by the platform.
-
-    Bug Discovery is declared here without importing its legacy/runtime modules.
-    That keeps catalog/navigation concerns independent from execution authority.
-    """
+    """Return product surfaces without importing Bug Discovery runtime modules."""
 
     requirement_intelligence = {
-        **get_product_manifest(),
+        **get_requirement_intelligence_manifest(),
+        "entry_mode": "analysis",
+    }
+    test_intelligence = {
+        **get_test_intelligence_manifest(),
         "entry_mode": "analysis",
     }
     bug_discovery = {
@@ -23,4 +28,4 @@ def get_product_catalog() -> tuple[dict[str, object], ...]:
         "evidence_required": True,
         "entry_mode": "advanced_runtime",
     }
-    return (requirement_intelligence, bug_discovery)
+    return (requirement_intelligence, test_intelligence, bug_discovery)
