@@ -12,6 +12,7 @@ import {
 import { usePageTitle } from '../lib/page-title';
 import { useProjectNavigation } from '../lib/project-navigation';
 import './TestIntelligence.css';
+import './TestDesign.css';
 
 const KIND_META: Record<TestObligationKind, { label: string; short: string; description: string }> = {
   business_rule: { label: '业务规则', short: '规则', description: '验证来源明确声明的业务约束与模态' },
@@ -262,9 +263,11 @@ export function TestIntelligence() {
     return analysis.obligations.filter((item) => item.obligationKind === activeKind);
   }, [activeKind, analysis]);
 
-  const designsByObligation = useMemo(() => {
+  const designsByObligation = useMemo<Map<string, TestDesign>>(() => {
     if (!analysis) return new Map<string, TestDesign>();
-    return new Map(analysis.testDesigns.map((item) => [item.sourceObligationId, item]));
+    return new Map<string, TestDesign>(
+      analysis.testDesigns.map((item): [string, TestDesign] => [item.sourceObligationId, item]),
+    );
   }, [analysis]);
 
   if (!project) return <WorkspaceEmpty onMaterials={() => navigateToProjectPath('/materials', '')} />;
