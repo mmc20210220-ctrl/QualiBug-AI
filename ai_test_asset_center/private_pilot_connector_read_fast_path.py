@@ -8,6 +8,8 @@ rebuilding the complete connector inventory.
 """
 from __future__ import annotations
 
+import logging
+import threading
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -16,6 +18,8 @@ from .connector_acl_authority import filter_connector_sources_for_actor
 from .connector_sync_authority import ConnectorSyncError, list_connector_instances
 from .enterprise_knowledge_center import list_enterprise_knowledge_sources
 from .private_pilot_connector_handlers import _coverage_projection, _safe_int, _text
+
+_fast_path_logger = logging.getLogger("qualibug.fast-path")
 
 
 def _target_connector_instance(
@@ -154,7 +158,74 @@ def project_connector_resources_fast(
 
 
 class ConnectorReadFastPathMixin:
-    """Intercept only the expensive resource-preview GET; delegate all else."""
+    """Fast-path expensive reads and shift post-scan projection work off first GET."""
+
+    def _schedule_command_center_prewarm(
+        self,
+        project: str,
+        root: Path,
+        tenant_id: str,
+    ) -> None:
+        """Build the new command-center snapshot after scan persistence completes.
+
+        The scan request has already left the write phase when this is called, so
+        unlike polling-triggered rebuilds there is no need to wait for the generic
+        write-settle window. The existing per-project single-flight lock remains the
+        authority: an overlapping GET or rebuild can never create a duplicate build.
+        """
+        cache_key = f"{tenant_id}:{project}"
+
+        def _run() -> None:
+            try:
+                from .private_pilot_http_routing import (
+                    _command_center_build_lock,
+                    _project_data_fingerprint,
+                )
+
+                build_lock = _command_center_build_lock(cache_key)
+                if not build_lock.acquire(blocking=False):
+                    return
+                try:
+                    fingerprint = _project_data_fingerprint(root, project)
+                    self._build_and_cache_command_center(
+                        project,
+                        root,
+                        cache_key,
+                        fingerprint,
+                    )
+                finally:
+                    build_lock.release()
+            except Exception:
+                # Prewarm is an optimization only. Scan success and persistence
+                # semantics must never depend on this background projection.
+                _fast_path_logger.exception(
+                    "command-center post-scan prewarm failed",
+                    extra={"context": {"project": project}},
+                )
+
+        threading.Thread(
+            target=_run,
+            daemon=True,
+            name=f"cc-prewarm-{project}",
+        ).start()
+
+    def _handle_v12_scan(
+        self,
+        project: str,
+        root: Path,
+        actor: dict[str, str],
+        body: dict[str, Any],
+    ) -> Any:
+        """Delegate the canonical scan, then prewarm only when project data changed."""
+        from .private_pilot_http_routing import _project_data_fingerprint
+
+        tenant_id = self._request_tenant()
+        before_fingerprint = _project_data_fingerprint(root, project)
+        response = super()._handle_v12_scan(project, root, actor, body)
+        after_fingerprint = _project_data_fingerprint(root, project)
+        if after_fingerprint != before_fingerprint:
+            self._schedule_command_center_prewarm(project, root, tenant_id)
+        return response
 
     def _handle_knowledge_connector_get(
         self,
