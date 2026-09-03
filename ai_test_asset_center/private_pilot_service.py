@@ -125,6 +125,7 @@ from .private_pilot_command_center_understanding import (
     UnderstandingCommandCenterProjectionMixin,
 )
 from .private_pilot_connector_handlers import KnowledgeConnectorHandlersMixin
+from .private_pilot_connector_read_fast_path import ConnectorReadFastPathMixin
 from .private_pilot_finding_collaboration_handlers import (
     FindingCollaborationHandlersMixin,
 )
@@ -212,6 +213,7 @@ def _normalize_command_center_envelope(payload: dict[str, Any]) -> dict[str, Any
 
 class PrivatePilotHandler(
     IdentityBenchmarkHttpMixin,
+    ConnectorReadFastPathMixin,
     KnowledgeConnectorHandlersMixin,
     FindingCollaborationHandlersMixin,
     ProductCatalogHttpMixin,
