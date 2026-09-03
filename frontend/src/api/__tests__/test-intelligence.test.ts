@@ -86,6 +86,21 @@ describe('Test Intelligence frontend projection', () => {
     });
   });
 
+  it('preserves backend-proven Requirement Finding ids on the linked obligation', () => {
+    const payload = validPayload();
+    payload.data.summary.requirement_finding_linked_obligation_count = 1;
+    payload.data.obligations[0].requirement_finding_ids = ['requirement:conflict:cancel-rule'];
+    const analysis = parseTestIntelligenceAnalysis(payload);
+    expect(analysis.summary.requirementFindingLinkedObligationCount).toBe(1);
+    expect(analysis.obligations[0].requirementFindingIds).toEqual(['requirement:conflict:cancel-rule']);
+  });
+
+  it('fails closed when the linkage summary disagrees with actual linked obligations', () => {
+    const payload = validPayload();
+    payload.data.summary.requirement_finding_linked_obligation_count = 1;
+    expect(() => parseTestIntelligenceAnalysis(payload)).toThrow(/requirement_finding_linked_obligation_count/);
+  });
+
   it('fails closed on unknown coverage status', () => {
     const payload = validPayload();
     payload.data.analysis_status = 'HEALTHY';

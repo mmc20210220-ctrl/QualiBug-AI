@@ -134,3 +134,4 @@ tests/test_obligation_compiler_cjk_demotion.py
 tests/test_behavior_semantic_mapper_neutral.py
 tests/test_requirement_intelligence_architecture_boundary.py
 tests/test_test_intelligence_architecture_boundary.py
+tests/test_product_intelligence_linkage.py

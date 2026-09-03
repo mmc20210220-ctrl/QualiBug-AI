@@ -26,6 +26,8 @@ for (const expected of [
   "requireExact(row.design_status, 'OBLIGATION_ONLY'",
   "requireExact(row.verification_status, 'NOT_MEASURED'",
   "requireExact(row.runtime_linkage, 'NOT_EVALUATED'",
+  'requirementFindingIds: asStringArray(row.requirement_finding_ids)',
+  "throw contractError('summary.requirement_finding_linked_obligation_count/obligations')",
   "throw contractError('coverage.supported_semantic_unit_counts')",
 ]) requireText(api, expected, 'Test Intelligence API truth contract');
 
@@ -37,6 +39,9 @@ for (const expected of [
   'OBLIGATION_ONLY / NOT_MEASURED / NOT_EVALUATED',
   '系统不会把空集合显示成 100% 覆盖',
   '必须验证的业务语义',
+  '关联需求审查项',
+  '只做可证明的精确关联',
+  '相似文本、同来源或邻近业务语义不会自动绑定',
 ]) requireText(page, expected, 'Test Intelligence workspace');
 
 for (const expected of [

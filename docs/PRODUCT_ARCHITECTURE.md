@@ -158,7 +158,7 @@ Implemented obligation kinds are:
 - **side_effect** — confirmed formal business behavior with source-backed expected effects, data effects, or compensations;
 - **lifecycle_transition** — complete lifecycle transitions already classified upstream as `ALLOWED` or `FORBIDDEN`.
 
-`requirement_risk` is a supported future obligation kind but is **not implemented in v1**. Test Intelligence does not import Requirement Intelligence to create it. A future bridge must use application composition or a domain-neutral shared contract.
+`requirement_risk` remains a supported future obligation kind and is **not implemented in v1**. Test Intelligence does not import Requirement Intelligence to create it. Requirement Finding linkage is composed above both product packages in the application layer and does not create new obligations.
 
 Every delivered Test Obligation requires source-backed evidence. Candidate-only behaviors, incomplete lifecycle transitions, unresolved semantics, and evidence-less units are not promoted to customer-facing obligations.
 
@@ -193,6 +193,24 @@ It reports:
 - `execution_coverage_status = NOT_MEASURED`.
 
 When there are no eligible supported semantic units, coverage is `NOT_MEASURED`, never a healthy-looking 100%.
+
+### Requirement Finding linkage v1
+
+Requirement-to-Test linkage is application composition over the two independent product projections. It does not make either product package import the other and it does not create a second finding, obligation, evidence, or persistence authority.
+
+The linkage receipt uses:
+
+`DETERMINISTIC_EXACT_REQUIREMENT_TEST_LINKAGE_NOT_SEMANTIC_SIMILARITY_OR_COMPLETENESS`
+
+A link is emitted only when one of these exact proofs exists:
+
+- **shared source fact identity** — a Requirement Finding evidence `fact_id` exactly matches a Test Obligation source/evidence fact identity;
+- **exact ambiguous object identity** — a pending identity-ambiguity Finding candidate entity ID exactly matches an Obligation `object_ref`;
+- **exact lifecycle coordinates** — a lifecycle-missing Finding and lifecycle-transition Obligation share both an exact object reference and exact operation reference.
+
+The linkage layer explicitly does **not** use text similarity, shared filenames/source IDs, recency, model confidence, nearby operations, or broad object-name resemblance as proof. Findings without an exact proof remain visible as unlinked rather than being force-attached to an Obligation.
+
+Linkage updates `requirement_finding_ids` on the API projection and emits a `requirement_linkage` receipt with linked/unlinked counts and reason codes. It does not alter `OBLIGATION_ONLY`, `NOT_MEASURED`, or `NOT_EVALUATED`, and it does not imply runtime verification.
 
 ## Finding, obligation, and evidence authority
 
@@ -244,15 +262,16 @@ Completed:
 3. Implement evidence-backed Requirement Conflict / Missing / Ambiguity.
 4. Add deterministic Requirement Readiness.
 5. Add the Requirement Intelligence frontend workspace.
+6. Establish the Test Intelligence package boundary.
+7. Project evidence-backed Test Obligations from existing Business Behavior IR and lifecycle truth.
+8. Add deterministic supported-semantic coverage.
+9. Expose the authenticated project Test Intelligence API and frontend workspace.
+10. Add exact application-layer Requirement Finding → Test Obligation linkage without introducing product-to-product imports.
 
-Current Test Intelligence sequence:
+Next validation sequence:
 
-1. Establish the Test Intelligence package boundary.
-2. Project evidence-backed Test Obligations from existing Business Behavior IR and lifecycle truth.
-3. Add deterministic supported-semantic coverage.
-4. Expose the authenticated project Test Intelligence API.
-5. Validate obligation quality on real enterprise materials.
-6. Only after validation, add Requirement Finding linkage and a Test Intelligence frontend workspace.
-7. Only after Test Design quality is proven, define an explicit optional handoff into Bug Discovery execution.
+1. Validate Requirement Finding and Test Obligation quality on real enterprise materials.
+2. Measure how often exact linkage is useful versus legitimately unlinked.
+3. Only after Test Design quality is proven, define an explicit optional handoff into Bug Discovery execution.
 
 This document is an architecture constraint, not a request for an immediate repository-wide rewrite.

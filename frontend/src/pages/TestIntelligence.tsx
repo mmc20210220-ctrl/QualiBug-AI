@@ -128,6 +128,14 @@ function ObligationCard({ obligation }: { obligation: TestObligation }) {
         </div>
       )}
 
+      {obligation.requirementFindingIds.length > 0 && (
+        <div className="ti-requirement-links">
+          <span>关联需求审查项</span>
+          <div>{obligation.requirementFindingIds.map((id) => <code key={id}>{id}</code>)}</div>
+          <p>仅展示后端已证明的精确关联；相似文本、同来源或邻近业务语义不会自动绑定。</p>
+        </div>
+      )}
+
       <div className="ti-status-strip" aria-label="测试义务状态">
         <span><b>设计</b>{obligation.designStatus}</span>
         <span><b>验证</b>{obligation.verificationStatus}</span>
@@ -255,8 +263,8 @@ export function TestIntelligence() {
       </section>
 
       <section className="ti-truth-note">
-        <div><span>当前产品边界</span><strong>知道“必须验证什么”，不等于已经设计或执行测试</strong></div>
-        <p>所有义务都保持 OBLIGATION_ONLY / NOT_MEASURED / NOT_EVALUATED。当前 Requirement Finding → Test Obligation 联动数量为 {summary.requirementFindingLinkedObligationCount}，v1 不会跨产品自动制造需求风险义务。</p>
+        <div><span>当前产品边界</span><strong>需求审查与测试义务只做可证明的精确关联</strong></div>
+        <p>当前有 {summary.requirementFindingLinkedObligationCount} 个 Test Obligation 关联到 Requirement Finding。关联不会改变 OBLIGATION_ONLY / NOT_MEASURED / NOT_EVALUATED，也不会自动制造 requirement_risk 义务或宣称测试已经执行。</p>
       </section>
 
       {(summary.suppressedWithoutEvidenceCount > 0 || summary.unsupportedFormalBehaviorCount > 0) && (
