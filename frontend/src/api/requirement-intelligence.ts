@@ -69,36 +69,50 @@ export type RequirementIntelligenceAnalysis = {
   findings: RequirementFinding[];
 };
 
-function asBoolean(value: unknown): boolean {
-  return value === true;
+const QUALITY_CLAIM = 'DETERMINISTIC_FINDING_GATE_NOT_COMPLETENESS_OR_RECALL';
+
+function contractError(field: string): Error {
+  return new Error(`需求审查响应缺少或包含无效字段：${field}`);
 }
 
-function asNumber(value: unknown): number {
-  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+function requireBoolean(value: unknown, field: string): boolean {
+  if (typeof value !== 'boolean') throw contractError(field);
+  return value;
+}
+
+function requireNumber(value: unknown, field: string): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) throw contractError(field);
+  return value;
+}
+
+function requireString(value: unknown, field: string): string {
+  const text = asString(value);
+  if (!text) throw contractError(field);
+  return text;
 }
 
 function asStringArray(value: unknown): string[] {
   return asArray(value).map(asString).filter(Boolean);
 }
 
-function parseFindingType(value: unknown): RequirementFindingType | null {
+function parseFindingType(value: unknown): RequirementFindingType {
   const type = asString(value);
   if (
     type === 'requirement_conflict'
     || type === 'requirement_missing'
     || type === 'requirement_ambiguity'
   ) return type;
-  return null;
+  throw contractError('findings[].finding_type');
 }
 
-function parseReadinessStatus(value: unknown): RequirementReadinessStatus {
+function parseReadinessStatus(value: unknown, field: string): RequirementReadinessStatus {
   const status = asString(value).toUpperCase();
-  if (status === 'READY' || status === 'REVIEW_REQUIRED') return status;
-  return 'NOT_READY';
+  if (status === 'READY' || status === 'REVIEW_REQUIRED' || status === 'NOT_READY') return status;
+  throw contractError(field);
 }
 
-function parseEvidence(value: unknown): RequirementEvidence[] {
-  return asArray(value).map(asRecord).map((row) => ({
+function parseEvidence(value: unknown, findingId: string): RequirementEvidence[] {
+  const evidence = asArray(value).map(asRecord).map((row) => ({
     sourceId: asString(row.source_id),
     sourceLocator: asString(row.source_locator),
     assetRef: asString(row.asset_ref),
@@ -109,36 +123,29 @@ function parseEvidence(value: unknown): RequirementEvidence[] {
     factId: asString(row.fact_id),
     derivation: asString(row.derivation),
   })).filter((row) => Boolean(row.sourceId || row.sourceLocator || row.assetRef || row.quote || row.factId));
+  if (!evidence.length) throw contractError(`findings[${findingId}].evidence`);
+  return evidence;
 }
 
-function parseFinding(value: unknown): RequirementFinding | null {
+function parseFinding(value: unknown): RequirementFinding {
   const row = asRecord(value);
-  const findingId = asString(row.finding_id);
+  const findingId = requireString(row.finding_id, 'findings[].finding_id');
   const findingType = parseFindingType(row.finding_type);
-  if (!findingId || !findingType) return null;
   return {
     findingId,
     findingType,
-    title: asString(row.title) || '需求审查项',
+    title: requireString(row.title, `findings[${findingId}].title`),
     description: asString(row.description),
     status: asString(row.status),
     severity: asString(row.severity),
-    blocking: asBoolean(row.blocking),
+    blocking: requireBoolean(row.blocking, `findings[${findingId}].blocking`),
     sourceIds: asStringArray(row.source_ids),
-    evidence: parseEvidence(row.evidence),
+    evidence: parseEvidence(row.evidence, findingId),
     operatorAction: asString(row.operator_action),
     relatedObjectRefs: asStringArray(row.related_object_refs),
     relatedOperationRefs: asStringArray(row.related_operation_refs),
     reviewStatus: asString(row.review_status),
     reasonCode: asString(row.conflict_kind || row.missing_kind || row.reason_code),
-  };
-}
-
-function emptyCounts(): Record<RequirementFindingType, number> {
-  return {
-    requirement_conflict: 0,
-    requirement_missing: 0,
-    requirement_ambiguity: 0,
   };
 }
 
@@ -148,37 +155,52 @@ export function parseRequirementIntelligenceAnalysis(value: unknown): Requiremen
   const summary = asRecord(data.summary);
   const readiness = asRecord(data.readiness);
   const rawCounts = asRecord(readiness.counts_by_type);
-  const counts = emptyCounts();
-  counts.requirement_conflict = asNumber(rawCounts.requirement_conflict);
-  counts.requirement_missing = asNumber(rawCounts.requirement_missing);
-  counts.requirement_ambiguity = asNumber(rawCounts.requirement_ambiguity);
-  const findings = asArray(data.findings).map(parseFinding).filter((item): item is RequirementFinding => item !== null);
-  const status = parseReadinessStatus(readiness.status || data.analysis_status);
+  const status = parseReadinessStatus(readiness.status, 'readiness.status');
+  const analysisStatus = parseReadinessStatus(data.analysis_status, 'analysis_status');
+  if (analysisStatus !== status) throw contractError('analysis_status/readiness.status');
+
+  const ready = requireBoolean(readiness.ready, 'readiness.ready');
+  if (ready !== (status === 'READY')) throw contractError('readiness.ready');
+
+  const qualityClaim = requireString(readiness.quality_claim, 'readiness.quality_claim');
+  if (qualityClaim !== QUALITY_CLAIM) throw contractError('readiness.quality_claim');
+
+  const counts: Record<RequirementFindingType, number> = {
+    requirement_conflict: requireNumber(rawCounts.requirement_conflict, 'readiness.counts_by_type.requirement_conflict'),
+    requirement_missing: requireNumber(rawCounts.requirement_missing, 'readiness.counts_by_type.requirement_missing'),
+    requirement_ambiguity: requireNumber(rawCounts.requirement_ambiguity, 'readiness.counts_by_type.requirement_ambiguity'),
+  };
+  const findings = asArray(data.findings).map(parseFinding);
+  const findingCount = requireNumber(readiness.finding_count, 'readiness.finding_count');
+  if (findingCount !== findings.length) throw contractError('readiness.finding_count/findings');
+  if (Object.values(counts).reduce((total, count) => total + count, 0) !== findingCount) {
+    throw contractError('readiness.counts_by_type');
+  }
 
   return {
-    schema: asString(data.schema),
-    productId: asString(data.product_id) || 'requirement_intelligence',
-    projectId: asString(data.project_id),
-    analysisStatus: status,
+    schema: requireString(data.schema, 'schema'),
+    productId: requireString(data.product_id, 'product_id'),
+    projectId: requireString(data.project_id, 'project_id'),
+    analysisStatus,
     summary: {
-      sourceCount: asNumber(summary.source_count),
-      conflictCount: asNumber(summary.requirement_conflict_count),
-      missingCount: asNumber(summary.requirement_missing_count),
-      ambiguityCount: asNumber(summary.requirement_ambiguity_count),
-      blockingFindingCount: asNumber(summary.blocking_finding_count),
-      reviewRequiredFindingCount: asNumber(summary.review_required_finding_count),
-      suppressedWithoutEvidenceCount: asNumber(summary.suppressed_without_evidence_count),
+      sourceCount: requireNumber(summary.source_count, 'summary.source_count'),
+      conflictCount: requireNumber(summary.requirement_conflict_count, 'summary.requirement_conflict_count'),
+      missingCount: requireNumber(summary.requirement_missing_count, 'summary.requirement_missing_count'),
+      ambiguityCount: requireNumber(summary.requirement_ambiguity_count, 'summary.requirement_ambiguity_count'),
+      blockingFindingCount: requireNumber(summary.blocking_finding_count, 'summary.blocking_finding_count'),
+      reviewRequiredFindingCount: requireNumber(summary.review_required_finding_count, 'summary.review_required_finding_count'),
+      suppressedWithoutEvidenceCount: requireNumber(summary.suppressed_without_evidence_count, 'summary.suppressed_without_evidence_count'),
     },
     readiness: {
       status,
-      ready: asBoolean(readiness.ready),
-      findingCount: asNumber(readiness.finding_count),
-      blockingFindingCount: asNumber(readiness.blocking_finding_count),
-      reviewRequiredFindingCount: asNumber(readiness.review_required_finding_count),
+      ready,
+      findingCount,
+      blockingFindingCount: requireNumber(readiness.blocking_finding_count, 'readiness.blocking_finding_count'),
+      reviewRequiredFindingCount: requireNumber(readiness.review_required_finding_count, 'readiness.review_required_finding_count'),
       blockingFindingIds: asStringArray(readiness.blocking_finding_ids),
       reviewRequiredFindingIds: asStringArray(readiness.review_required_finding_ids),
       countsByType: counts,
-      qualityClaim: asString(readiness.quality_claim),
+      qualityClaim,
     },
     findings,
   };
