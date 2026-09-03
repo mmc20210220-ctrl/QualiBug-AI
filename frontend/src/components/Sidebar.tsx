@@ -11,6 +11,7 @@ const sections: NavSection[] = [
     label: '主导航',
     items: [
       { to: 'requirements', icon: 'requirements', label: '需求审查' },
+      { to: 'test-intelligence', icon: 'test-intelligence', label: '测试智能' },
       { to: 'dashboard', icon: 'overview', label: '总览' },
       { to: 'findings', icon: 'bug', label: '问题', badgeKey: 'findings' },
       { to: 'integration', icon: 'materials', label: '接入' },
@@ -20,6 +21,7 @@ const sections: NavSection[] = [
 
 const icons: Record<string, string> = {
   requirements: 'M5 4h14v16H5V4Zm3 4h8M8 12h5M8 16h7M3 7h2M3 11h2M3 15h2',
+  'test-intelligence': 'M8 3h8v3h3v15H5V6h3V3Zm1 0v4h6V3H9Zm0 9 2 2 4-4m-6 8h6',
   overview: 'M4 4h6v6H4V4Zm10 0h6v6h-6V4ZM4 14h6v6H4v-6Zm10 0h6v6h-6v-6Z',
   bug: 'M8 2v3m8-3v3M3 8h18M5.5 5.5l1.5 1.5m10 0 1.5-1.5M10 14l-2 3m6-3 2 3M12 12v3',
   shield: 'M12 3 20 6v5c0 5-3.3 8.5-8 10-4.7-1.5-8-5-8-10V6l8-3Z',
@@ -36,10 +38,7 @@ function SvgIcon({ name }: { name: string }) {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><path d={d} /></svg>;
 }
 
-type SidebarProps = {
-  mobileOpen?: boolean;
-  onClose?: () => void;
-};
+type SidebarProps = { mobileOpen?: boolean; onClose?: () => void };
 
 export function Sidebar({ mobileOpen = false, onClose }: SidebarProps) {
   const [params] = useSearchParams();
@@ -47,7 +46,6 @@ export function Sidebar({ mobileOpen = false, onClose }: SidebarProps) {
   const { projectName, currentDefectCount, clueCount, p0Count, error: summaryError } = useProjectSummary(project);
   const { scanActive, hasMaterializedMetrics } = useLiveStatus(project, 15_000);
 
-  // 后端故障时显式呈现失败状态；绝不把「读不到」渲染成健康的零值结论。
   const summaryFaulted = Boolean(project && summaryError);
   const countText = (value: number | null | undefined): string => (summaryFaulted ? '—' : String(value ?? 0));
 
@@ -69,40 +67,21 @@ export function Sidebar({ mobileOpen = false, onClose }: SidebarProps) {
 
   return (
     <>
-      <div
-        className={`sidebar-backdrop${mobileOpen ? ' open' : ''}`}
-        onClick={onClose}
-        aria-hidden="true"
-      />
+      <div className={`sidebar-backdrop${mobileOpen ? ' open' : ''}`} onClick={onClose} aria-hidden="true" />
       <aside id="primary-sidebar" className={`sidebar${mobileOpen ? ' mobile-open' : ''}`} aria-label="主导航">
         <div className="side-brand">
-          <button type="button" className="side-close" onClick={onClose} aria-label="关闭导航">
-            ×
-          </button>
+          <button type="button" className="side-close" onClick={onClose} aria-label="关闭导航">×</button>
           <BrandLogo variant="full" detail="compact" tone="dark" size={38} subtitle="企业软件智能审查" />
         </div>
 
         <div className="side-project">
           <span className="side-project-label">当前客户</span>
           <b>{projectName}</b>
-          {summaryFaulted && (
-            <p className="side-project-error" role="alert" title={summaryError}>
-              项目状态读取失败：{summaryError}
-            </p>
-          )}
+          {summaryFaulted && <p className="side-project-error" role="alert" title={summaryError}>项目状态读取失败：{summaryError}</p>}
           <div className="side-project-metrics">
-            <div className="side-project-metric">
-              <span>验证状态</span>
-              <strong>{riskStateLabel}</strong>
-            </div>
-            <div className="side-project-metric" title={summaryFaulted ? '后端状态不可读取，计数未上报' : undefined}>
-              <span>已确认</span>
-              <strong>{countText(currentDefectCount)}</strong>
-            </div>
-            <div className="side-project-metric" title={summaryFaulted ? '后端状态不可读取，计数未上报' : undefined}>
-              <span>后台补证</span>
-              <strong>{countText(clueCount)}</strong>
-            </div>
+            <div className="side-project-metric"><span>验证状态</span><strong>{riskStateLabel}</strong></div>
+            <div className="side-project-metric" title={summaryFaulted ? '后端状态不可读取，计数未上报' : undefined}><span>已确认</span><strong>{countText(currentDefectCount)}</strong></div>
+            <div className="side-project-metric" title={summaryFaulted ? '后端状态不可读取，计数未上报' : undefined}><span>后台补证</span><strong>{countText(clueCount)}</strong></div>
           </div>
         </div>
 
@@ -118,17 +97,10 @@ export function Sidebar({ mobileOpen = false, onClose }: SidebarProps) {
                     : undefined;
                 const badgeAlert = item.badgeKey === 'findings' && p0Count > 0;
                 return (
-                  <NavLink
-                    key={item.to}
-                    to={buildProjectPath(`/${item.to}`, project)}
-                    className={({ isActive }) => `side-link${isActive ? ' active' : ''}`}
-                    onClick={onClose}
-                  >
+                  <NavLink key={item.to} to={buildProjectPath(`/${item.to}`, project)} className={({ isActive }) => `side-link${isActive ? ' active' : ''}`} onClick={onClose}>
                     <SvgIcon name={item.icon} />
                     {item.label}
-                    {badge != null && badge > 0 && (
-                      <span className={`side-badge${badgeAlert ? ' alert' : ''}`}>{badge}</span>
-                    )}
+                    {badge != null && badge > 0 && <span className={`side-badge${badgeAlert ? ' alert' : ''}`}>{badge}</span>}
                   </NavLink>
                 );
               })}
@@ -138,7 +110,7 @@ export function Sidebar({ mobileOpen = false, onClose }: SidebarProps) {
 
         <div className="side-bottom">
           <b>QualiBug AI</b>
-          少配置 · 自动理解 · 真实验证 · 需求审查
+          少配置 · 自动理解 · 真实验证 · 需求审查 · 测试智能
         </div>
       </aside>
     </>
