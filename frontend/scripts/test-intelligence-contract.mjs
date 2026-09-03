@@ -9,7 +9,6 @@ const requireText = (content, expected, label) => assert(content.includes(expect
 const app = read('src/App.tsx');
 const api = read('src/api/test-intelligence.ts');
 const page = read('src/pages/TestIntelligence.tsx');
-const main = read('src/main.tsx');
 const designCss = read('src/pages/TestDesign.css');
 const layout = read('src/components/Layout.tsx');
 const sidebar = read('src/components/Sidebar.tsx');
@@ -45,6 +44,7 @@ for (const expected of [
 ]) requireText(api, expected, 'Test Intelligence API truth contract');
 
 for (const expected of [
+  "import './TestDesign.css';",
   'Supported Semantic Coverage',
   '不是总测试完整率',
   '仅义务',
@@ -57,7 +57,6 @@ for (const expected of [
   '系统不会把空集合显示成 100% 覆盖',
 ]) requireText(page, expected, 'Test Intelligence workspace');
 
-requireText(main, "import './pages/TestDesign.css';", 'Test Design CSS registration');
 for (const expected of ['.ti-design', '.ti-design-grid', '.ti-design-status']) {
   requireText(designCss, expected, 'Test Design presentation');
 }
