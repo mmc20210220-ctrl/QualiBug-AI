@@ -11,9 +11,9 @@ const sections: NavSection[] = [
     label: '主导航',
     items: [
       { to: 'requirements', icon: 'requirements', label: '需求审查' },
-      { to: 'dashboard', icon: 'overview', label: '验证总览' },
-      { to: 'findings', icon: 'bug', label: '已确认问题', badgeKey: 'findings' },
-      { to: 'integration', icon: 'materials', label: '资料接入' },
+      { to: 'dashboard', icon: 'overview', label: '总览' },
+      { to: 'findings', icon: 'bug', label: '问题', badgeKey: 'findings' },
+      { to: 'integration', icon: 'materials', label: '接入' },
     ],
   },
 ];
