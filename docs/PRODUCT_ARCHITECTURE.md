@@ -9,10 +9,10 @@ QualiBug remains one repository and one deployable product platform. The reposit
 The product portfolio is:
 
 1. **Requirement Intelligence** — primary commercial-validation entry.
-2. **Test Intelligence** — planned product surface built on shared understanding and evidence.
+2. **Test Intelligence** — experimental validation surface that derives evidence-backed Test Obligations and supported-semantic coverage from shared enterprise understanding.
 3. **Bug Discovery** — experimental advanced runtime; feature development is frozen except P0 correctness and convergence work.
 
-The near-term objective is to reuse the existing multi-source enterprise understanding stack to review requirements for conflicts, missing rules, ambiguity, and traceable risk before forcing every finding through executable bug reproduction.
+The near-term objective is to reuse the existing multi-source enterprise understanding stack across requirement review, test obligation design, and—only when needed—runtime bug confirmation.
 
 ## Dependency direction
 
@@ -31,9 +31,10 @@ shared intelligence authorities
 Rules:
 
 - Shared intelligence code must not import product-domain packages.
-- Product domains may consume shared authorities through explicit adapters or stable APIs.
+- Product domains may consume shared authorities through explicit adapters or stable asset contracts.
 - Application/runtime composition may combine multiple product domains.
-- Requirement Intelligence must not import Bug Discovery runtime patches, v12 scheduling/execution authority, search-policy patches, experiment execution, observers, oracles, or scan-result repair mechanisms.
+- Requirement Intelligence and Test Intelligence must not import Bug Discovery runtime patches, v12 scheduling/execution authority, search-policy patches, experiment execution, observers, oracles, or scan-result repair mechanisms.
+- Test Intelligence must not import Requirement Intelligence merely to obtain findings; cross-product composition belongs in an application layer or a future domain-neutral shared contract.
 - A new product must not create a duplicate ingestion, evidence, canonical identity, or persistence authority.
 
 ## Current shared authorities
@@ -44,7 +45,7 @@ Existing capabilities are classified before migration:
 
 - multi-source ingestion and project assets: shared candidate;
 - enterprise knowledge / business understanding: shared candidate;
-- Behavior IR and source relationships: shared candidate;
+- Business Behavior IR, Behavior IR, lifecycle models, and source relationships: shared candidates;
 - evidence and source traceability: shared candidate;
 - canonical finding/defect identity: shared authority that must remain singular;
 - persistence: shared authority that must remain singular;
@@ -60,13 +61,13 @@ New product-domain work lives under `products/`.
 ```text
 products/
   requirement_intelligence/
-  test_intelligence/          # planned; do not create until needed
+  test_intelligence/
   bug_discovery/              # planned boundary; existing runtime is not mass-moved
 ```
 
-`products/requirement_intelligence` is deliberately thin. It owns Requirement Intelligence semantics and orchestration, not copies of shared storage or evidence models.
+Product packages are deliberately thin. They own product semantics and projections, not copies of shared storage, ingestion, evidence, or runtime engines.
 
-### Requirement Intelligence v1 scope
+## Requirement Intelligence v1
 
 The first validation surface is intentionally bounded to three finding categories:
 
@@ -76,15 +77,15 @@ The first validation surface is intentionally bounded to three finding categorie
 
 Every delivered finding must be traceable to source evidence. Unsupported conclusions must not be promoted to formal findings.
 
-The first product flow is:
+The product flow is:
 
 ```text
 enterprise source material
         -> existing ingestion / understanding
         -> requirement-oriented projection
-        -> conflict / missing / ambiguity analysis
+        -> conflict / missing / ambiguity
         -> evidence-backed findings
-        -> requirement readiness projection
+        -> requirement readiness
 ```
 
 It is explicitly **not**:
@@ -107,7 +108,7 @@ The product layer does not rediscover or reinterpret upstream truth. The current
 - **Missing** consumes only source-backed enterprise-understanding lifecycle unknowns currently classified as `LIFECYCLE_FROM_STATE_UNKNOWN`, `LIFECYCLE_TO_STATE_UNKNOWN`, or `LIFECYCLE_DISCONNECTED`.
 - Parser failures, document-structure failures, runtime gaps, and test/search coverage gaps are not relabelled as missing requirements.
 - `LIFECYCLE_TARGET_CONTRADICTION` remains a conflict-class semantic problem and is not duplicated as a missing finding.
-- **Ambiguity** consumes only evidence-backed `PENDING_REVIEW` tasks from the existing enterprise identity structural-review queue. Confirmed, rejected, stale, or unsupported candidates do not remain active product findings.
+- **Ambiguity** consumes only evidence-backed `PENDING_REVIEW` tasks from the existing enterprise identity structural-review queue.
 - Requirement Intelligence never automatically resolves a source authority conflict, invents a missing business fact, or automatically unions ambiguous business identities.
 
 ### Requirement Readiness v1
@@ -116,33 +117,111 @@ Requirement Readiness is a deterministic gate over currently projected Requireme
 
 The states are:
 
-- `NOT_READY` — at least one finding is an upstream hard blocker, such as an unresolved requirement conflict or a missing lifecycle definition that already blocks formal enterprise understanding.
+- `NOT_READY` — at least one finding is an upstream hard blocker.
 - `REVIEW_REQUIRED` — no hard blocker remains, but at least one non-blocking missing definition or identity ambiguity still requires explicit human review.
 - `READY` — no currently supported active Requirement Finding remains.
 
-The readiness receipt must expose finding IDs and counts so every gate decision is explainable. It must carry the quality claim `DETERMINISTIC_FINDING_GATE_NOT_COMPLETENESS_OR_RECALL` and must not expose a synthetic completeness/recall percentage.
+The readiness receipt must carry the quality claim `DETERMINISTIC_FINDING_GATE_NOT_COMPLETENESS_OR_RECALL`.
 
-## Finding and evidence authority
+## Test Intelligence v1
 
-`Finding` is a platform concept; a confirmed bug is one type of finding, but this migration must not prematurely replace the current canonical defect contract.
+Test Intelligence answers a different question from Requirement Intelligence:
+
+> Given the source-backed business semantics the platform already understands, what must be verified?
+
+It does **not** generate arbitrary prose test cases and it does **not** execute the target system.
+
+The current flow is:
+
+```text
+enterprise source material
+        -> existing enterprise understanding
+        -> confirmed Business Behavior IR / lifecycle truth
+        -> Test Obligation projection
+        -> supported-semantic obligation coverage
+```
+
+The current API surface is:
+
+```text
+GET /api/v1/projects/{project}/test-intelligence
+```
+
+### Test Obligation authority mapping
+
+V1 consumes the already-built `enterprise_understanding_model` and does not import enterprise-understanding builders.
+
+Implemented obligation kinds are:
+
+- **business_rule** — confirmed formal business behavior with an explicit source modality when no more specific implemented semantic applies;
+- **authorization** — confirmed formal business behavior whose existing authorization authority is explicit, resolved, and yields `ALLOW` or `DENY`;
+- **side_effect** — confirmed formal business behavior with source-backed expected effects, data effects, or compensations;
+- **lifecycle_transition** — complete lifecycle transitions already classified upstream as `ALLOWED` or `FORBIDDEN`.
+
+`requirement_risk` is a supported future obligation kind but is **not implemented in v1**. Test Intelligence does not import Requirement Intelligence to create it. A future bridge must use application composition or a domain-neutral shared contract.
+
+Every delivered Test Obligation requires source-backed evidence. Candidate-only behaviors, incomplete lifecycle transitions, unresolved semantics, and evidence-less units are not promoted to customer-facing obligations.
+
+Test Obligation IDs are stable projection identities derived from upstream semantic units. They are not a new persisted canonical test/finding identity.
+
+### Runtime boundary
+
+V1 stops at obligation semantics:
+
+- `design_status = OBLIGATION_ONLY`;
+- `verification_status = NOT_MEASURED`;
+- `runtime_linkage = NOT_EVALUATED`.
+
+Those values are deliberate. Generating an obligation must never be represented as having designed, executed, or verified a test.
+
+A future handoff may transform selected Test Obligations into Test Design and then an explicit Bug Discovery execution adapter, but Test Intelligence itself must remain upstream of runtime authority.
+
+### Test Intelligence coverage v1
+
+Coverage is a deterministic projection over the semantic units supported by the current implementation. It is not total test completeness and it is not execution coverage.
+
+The coverage receipt uses:
+
+`DETERMINISTIC_SUPPORTED_SEMANTIC_OBLIGATION_COVERAGE_NOT_TOTAL_TEST_COMPLETENESS`
+
+It reports:
+
+- eligible supported semantic units;
+- units successfully projected to evidence-backed obligations;
+- uncovered supported semantic unit IDs;
+- counts by obligation kind;
+- `execution_coverage_status = NOT_MEASURED`.
+
+When there are no eligible supported semantic units, coverage is `NOT_MEASURED`, never a healthy-looking 100%.
+
+## Finding, obligation, and evidence authority
+
+`Finding` and `Test Obligation` are different platform concepts:
+
+- a Finding says a problem/risk was detected;
+- a Test Obligation says a source-backed semantic must be verified.
+
+A confirmed bug remains one type of Finding. A Test Obligation is not a Finding and is not evidence that execution occurred.
 
 Near-term rules:
 
-- do not introduce a second persisted finding table for Requirement Intelligence;
+- do not introduce a second persisted finding or obligation table merely for the new product surfaces;
 - do not invent a second evidence store;
 - do not use title/method/path as a new canonical identity mechanism;
 - preserve existing canonical defect identity for confirmed bugs;
-- introduce a generic canonical finding identity only through a dedicated migration with compatibility tests, not as part of the Requirement Intelligence entry work.
+- introduce generic persisted identities only through dedicated migrations with compatibility tests.
 
 ## Bug Discovery freeze
 
-Bug Discovery remains available as an Experimental/Advanced capability. Until Requirement Intelligence validation produces evidence that a deeper refactor is justified:
+Bug Discovery remains available as an Experimental/Advanced capability. Until upstream product validation produces evidence that a deeper refactor is justified:
 
 - no new Bug Discovery feature families;
 - P0 correctness fixes are allowed;
 - authority convergence is allowed;
 - benchmark-backed search-policy work is allowed only under the existing frozen evaluation discipline;
-- broad legacy cleanup must not be mixed with Requirement Intelligence feature work.
+- broad legacy cleanup must not be mixed with Requirement/Test Intelligence feature work.
+
+Bug Discovery is the optional downstream execution authority, not the place where Requirement/Test Intelligence re-implement their semantics.
 
 ## Repository migration discipline
 
@@ -154,16 +233,26 @@ For every change:
 4. Existing code is classified as shared/product/legacy/retire before relocation.
 5. One capability must have one authoritative implementation and an explicit composition point.
 6. Compatibility adapters need an exit condition.
-7. Product-facing claims must be backed by measured evidence; Bug Discovery commercial quality remains unproven until measured on an appropriate frozen target set.
+7. Product-facing claims must be backed by measured evidence.
 
-## Initial integration sequence
+## Current integration sequence
+
+Completed:
 
 1. Establish and CI-enforce the Requirement Intelligence package boundary.
-2. Expose an authenticated product-capability entry from the existing private-pilot service.
-3. Add a thin adapter over existing enterprise source ingestion/understanding.
-4. Implement evidence-backed conflict analysis.
-5. Add missing-rule and ambiguity analysis.
-6. Add Requirement Readiness projection.
-7. Validate with real enterprise materials before expanding scope.
+2. Expose authenticated product-capability APIs from the existing private-pilot service.
+3. Implement evidence-backed Requirement Conflict / Missing / Ambiguity.
+4. Add deterministic Requirement Readiness.
+5. Add the Requirement Intelligence frontend workspace.
+
+Current Test Intelligence sequence:
+
+1. Establish the Test Intelligence package boundary.
+2. Project evidence-backed Test Obligations from existing Business Behavior IR and lifecycle truth.
+3. Add deterministic supported-semantic coverage.
+4. Expose the authenticated project Test Intelligence API.
+5. Validate obligation quality on real enterprise materials.
+6. Only after validation, add Requirement Finding linkage and a Test Intelligence frontend workspace.
+7. Only after Test Design quality is proven, define an explicit optional handoff into Bug Discovery execution.
 
 This document is an architecture constraint, not a request for an immediate repository-wide rewrite.
