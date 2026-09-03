@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { parseTestIntelligenceAnalysis } from '../test-intelligence';
 
-function validPayload() {
+function validPayload(): any {
   return {
     ok: true,
     data: {
