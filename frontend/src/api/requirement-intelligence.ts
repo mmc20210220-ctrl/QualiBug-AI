@@ -81,10 +81,14 @@ function asStringArray(value: unknown): string[] {
   return asArray(value).map(asString).filter(Boolean);
 }
 
-function parseFindingType(value: unknown): RequirementFindingType {
+function parseFindingType(value: unknown): RequirementFindingType | null {
   const type = asString(value);
-  if (type === 'requirement_missing' || type === 'requirement_ambiguity') return type;
-  return 'requirement_conflict';
+  if (
+    type === 'requirement_conflict'
+    || type === 'requirement_missing'
+    || type === 'requirement_ambiguity'
+  ) return type;
+  return null;
 }
 
 function parseReadinessStatus(value: unknown): RequirementReadinessStatus {
@@ -110,8 +114,8 @@ function parseEvidence(value: unknown): RequirementEvidence[] {
 function parseFinding(value: unknown): RequirementFinding | null {
   const row = asRecord(value);
   const findingId = asString(row.finding_id);
-  if (!findingId) return null;
   const findingType = parseFindingType(row.finding_type);
+  if (!findingId || !findingType) return null;
   return {
     findingId,
     findingType,
@@ -168,7 +172,7 @@ export function parseRequirementIntelligenceAnalysis(value: unknown): Requiremen
     readiness: {
       status,
       ready: asBoolean(readiness.ready),
-      findingCount: asNumber(readiness.finding_count) || findings.length,
+      findingCount: asNumber(readiness.finding_count),
       blockingFindingCount: asNumber(readiness.blocking_finding_count),
       reviewRequiredFindingCount: asNumber(readiness.review_required_finding_count),
       blockingFindingIds: asStringArray(readiness.blocking_finding_ids),
