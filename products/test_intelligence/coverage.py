@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-"""Deterministic coverage projection for Test Intelligence v1."""
+"""Deterministic coverage and structured-design projection for Test Intelligence v1."""
 
 from typing import Any
 
+from .designs import project_test_designs
 from .obligations import project_test_obligations
 
 ANALYSIS_SCHEMA = "qualibug.test-intelligence.analysis.v1"
@@ -90,6 +91,12 @@ def analyze_test_intelligence(asset: dict[str, Any]) -> dict[str, Any]:
         for item in projection.get("obligations", [])
         if isinstance(item, dict)
     ]
+    design_projection = project_test_designs(obligations)
+    designs = [
+        dict(item)
+        for item in design_projection.get("designs", [])
+        if isinstance(item, dict)
+    ]
     linked_to_requirement_findings = sum(
         1 for item in obligations if item.get("requirement_finding_ids")
     )
@@ -117,7 +124,18 @@ def analyze_test_intelligence(asset: dict[str, Any]) -> dict[str, Any]:
             "implemented_obligation_kinds": projection[
                 "implemented_obligation_kinds"
             ],
+            "test_design_count": len(designs),
+            "undesigned_obligation_count": design_projection[
+                "undesigned_obligation_count"
+            ],
+            "test_design_status": design_projection["status"],
         },
         "coverage": coverage,
         "obligations": obligations,
+        "test_design_projection": {
+            key: value
+            for key, value in design_projection.items()
+            if key != "designs"
+        },
+        "test_designs": designs,
     }
