@@ -88,7 +88,7 @@ qualibug-connector-tenant-acceptance = "ai_test_asset_center.connector_tenant_ac
 qualibug-local-runner = "ai_test_asset_center.local_runner_connector:main"
 
 [tool.setuptools.packages.find]
-include = ["aitestops*", "ai_test_asset_center*"]
+include = ["aitestops*", "ai_test_asset_center*", "products*"]
 
 # Non-Python data files are NOT picked up by packages.find. Without this, a wheel or
 # sdist omits the semantic lexicon entirely, so `pip install .` -- which is what both
