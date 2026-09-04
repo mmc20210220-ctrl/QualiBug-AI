@@ -1,5 +1,5 @@
-import { NavLink, useSearchParams } from 'react-router-dom';
-import { useLiveStatus, useProjectSummary } from '../api/data';
+import { NavLink, useLocation, useSearchParams } from 'react-router-dom';
+import { useLiveStatus, useProjectSummary, useWorkspaceDirectory } from '../api/data';
 import { BrandLogo } from './BrandLogo';
 import { buildProjectPath } from '../lib/project-navigation';
 
@@ -19,9 +19,21 @@ const sections: NavSection[] = [
   },
 ];
 
+// 仅在页面自身本来就读取 command-center 时展示实时结果计数。
+// /findings/:id 等轻量页面不能因为侧栏数字反向触发整包项目数据。
+const COMMAND_CENTER_STATUS_PATHS = new Set([
+  '/dashboard',
+  '/findings',
+  '/evidence',
+  '/release',
+  '/campaigns',
+  '/coverage',
+  '/settings',
+]);
+
 const icons: Record<string, string> = {
   requirements: 'M5 4h14v16H5V4Zm3 4h8M8 12h5M8 16h7M3 7h2M3 11h2M3 15h2',
-  'test-intelligence': 'M8 3h8v3h3v15H5V6h3V3Zm1 0v4h6V3H9Zm0 9 2 2 4-4m-6 8h6',
+  'test-intelligence': 'M8 3h8v3h3v3h15H5V6h3V3Zm1 0v4h6V3H9Zm0 9 2 2 4-4m-6 8h6',
   overview: 'M4 4h6v6H4V4Zm10 0h6v6h-6V4ZM4 14h6v6H4v-6Zm10 0h6v6h-6v-6Z',
   bug: 'M8 2v3m8-3v3M3 8h18M5.5 5.5l1.5 1.5m10 0 1.5-1.5M10 14l-2 3m6-3 2 3M12 12v3',
   shield: 'M12 3 20 6v5c0 5-3.3 8.5-8 10-4.7-1.5-8-5-8-10V6l8-3Z',
@@ -29,7 +41,7 @@ const icons: Record<string, string> = {
   release: 'M6 4h12v16H6z M9 8h6M9 12h6M9 16h3',
   workflow: 'M4 5h5v4H4V5Zm11 0h5v4h-5V5ZM9 7h6M6.5 9v4m0 0h11m0 0V9M10 15h4v4h-4v-4Z',
   materials: 'M5 4h14v4H5V4Zm0 6h14v10H5V10Zm3 3h8M8 16h5',
-  settings: 'M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8Zm8.2 4a7.6 7.6 0 0 0-.13-1.4l2.04-1.58-2-3.46-2.4.97a7.4 7.4 0 0 0-2.42-1.4L14.93 2h-4l-.37 3.13a7.4 7.4 0 0 0-2.42 1.4l-2.4-.97-2 3.46 2.04 1.58A7.6 7.6 0 0 0 5.8 12c0 .48.05.95.13 1.4l-2.04 1.58 2 3.46 2.4-.97a7.4 7.4 0 0 0 2.42 1.4l.37 3.13h4l.37-3.13a7.4 7.4 0 0 0 2.42-1.4l2.4.97 2-3.46-2.04-1.58c.08-.45.13-.92.13-1.4Z',
+  settings: 'M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8Zm8.2 4a7.6 7.6 0 0 0-.13-1.4l2.04-1.58-2-3.46-2.4.97a7.4 7.4 0 0 0-2.42-1.4L14.93 2h-4l-.37 3.13a7.4 7.4 0 0 0-2.42 1.4l-2.4-.97-2 3.46 2.04 1.58A7.6 7.6 0 0 0 5.8 12c0 .48.05.95.13 1.4l-2.04 1.58 2 3.46 2.4-.97a7.4 7.4 0 0 0 2.42 1.4l.37 3.13h4l.37-3.13a7.4 7.4 0 0 0 2.42-1.4l2.4.97 2 3.46-2.04-1.58c.08-.45.13-.92.13-1.4Z',
   matrix: 'M4 4h16v16H4V4Zm4 0v16M4 9h16M4 14h16M12 4v16',
 };
 
@@ -45,29 +57,42 @@ type SidebarProps = {
 
 export function Sidebar({ mobileOpen = false, onClose }: SidebarProps) {
   const [params] = useSearchParams();
+  const location = useLocation();
   const project = params.get('project')?.trim() || '';
-  const { projectName, currentDefectCount, clueCount, p0Count, error: summaryError } = useProjectSummary(project);
-  const { scanActive, hasMaterializedMetrics } = useLiveStatus(project, 15_000);
+  const statusDataEnabled = COMMAND_CENTER_STATUS_PATHS.has(location.pathname);
+  const statusProject = statusDataEnabled ? project : '';
+  const { workspaceOptions } = useWorkspaceDirectory();
+  const { projectName, currentDefectCount, clueCount, p0Count, error: summaryError } = useProjectSummary(statusProject);
+  const { scanActive, hasMaterializedMetrics } = useLiveStatus(statusProject, 15_000);
+  const workspaceName = workspaceOptions.find((item) => item.id === project)?.label || '';
+  const visibleProjectName = statusDataEnabled
+    ? projectName
+    : workspaceName || project || '未选择客户';
 
   // 后端故障时显式呈现失败状态；绝不把「读不到」渲染成健康的零值结论。
-  const summaryFaulted = Boolean(project && summaryError);
-  const countText = (value: number | null | undefined): string => (summaryFaulted ? '—' : String(value ?? 0));
+  const summaryFaulted = Boolean(statusDataEnabled && project && summaryError);
+  const countText = (value: number | null | undefined): string => {
+    if (!statusDataEnabled || summaryFaulted) return '—';
+    return String(value ?? 0);
+  };
 
   const riskStateLabel = !project
     ? '请选择客户'
-    : summaryFaulted
-      ? '状态读取失败'
-      : scanActive
-        ? '检测进行中'
-        : p0Count > 0
-          ? '需先处理阻断'
-          : (currentDefectCount || 0) > 0
-            ? '可进入整改'
-            : (clueCount || 0) > 0
-              ? '后台补证中'
-              : hasMaterializedMetrics
-                ? '本轮暂无已确认问题'
-                : '等待首次验证';
+    : !statusDataEnabled
+      ? '结果按需加载'
+      : summaryFaulted
+        ? '状态读取失败'
+        : scanActive
+          ? '检测进行中'
+          : p0Count > 0
+            ? '需先处理阻断'
+            : (currentDefectCount || 0) > 0
+              ? '可进入整改'
+              : (clueCount || 0) > 0
+                ? '后台补证中'
+                : hasMaterializedMetrics
+                  ? '本轮暂无已确认问题'
+                  : '等待首次验证';
 
   return (
     <>
@@ -86,7 +111,7 @@ export function Sidebar({ mobileOpen = false, onClose }: SidebarProps) {
 
         <div className="side-project">
           <span className="side-project-label">当前客户</span>
-          <b>{projectName}</b>
+          <b>{visibleProjectName}</b>
           {summaryFaulted && (
             <p className="side-project-error" role="alert" title={summaryError}>
               项目状态读取失败：{summaryError}
@@ -97,11 +122,11 @@ export function Sidebar({ mobileOpen = false, onClose }: SidebarProps) {
               <span>验证状态</span>
               <strong>{riskStateLabel}</strong>
             </div>
-            <div className="side-project-metric" title={summaryFaulted ? '后端状态不可读取，计数未上报' : undefined}>
+            <div className="side-project-metric" title={!statusDataEnabled ? '进入结果页后加载项目结果计数' : summaryFaulted ? '后端状态不可读取，计数未上报' : undefined}>
               <span>已确认</span>
               <strong>{countText(currentDefectCount)}</strong>
             </div>
-            <div className="side-project-metric" title={summaryFaulted ? '后端状态不可读取，计数未上报' : undefined}>
+            <div className="side-project-metric" title={!statusDataEnabled ? '进入结果页后加载项目结果计数' : summaryFaulted ? '后端状态不可读取，计数未上报' : undefined}>
               <span>后台补证</span>
               <strong>{countText(clueCount)}</strong>
             </div>
@@ -113,12 +138,14 @@ export function Sidebar({ mobileOpen = false, onClose }: SidebarProps) {
             <div key={section.label} className="side-section-group">
               <div className="side-section">{section.label}</div>
               {section.items.map((item) => {
-                const badge = item.badgeKey === 'findings'
-                  ? (currentDefectCount || 0)
-                  : item.badgeKey === 'clues'
-                    ? (clueCount || 0)
-                    : undefined;
-                const badgeAlert = item.badgeKey === 'findings' && p0Count > 0;
+                const badge = !statusDataEnabled
+                  ? undefined
+                  : item.badgeKey === 'findings'
+                    ? (currentDefectCount || 0)
+                    : item.badgeKey === 'clues'
+                      ? (clueCount || 0)
+                      : undefined;
+                const badgeAlert = statusDataEnabled && item.badgeKey === 'findings' && p0Count > 0;
                 return (
                   <NavLink
                     key={item.to}
