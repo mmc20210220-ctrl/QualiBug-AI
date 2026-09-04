@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { asRecord, asString } from '../lib/value-guards';
 import type { Finding } from '../types';
-import { API_V1_BASE, ApiError, fetchJSON, resolveProjectId } from './session';
+import { API_V1_BASE, ApiError, fetchJSON } from './session';
 
 type JsonRecord = Record<string, unknown>;
 type ScanCompletedDetail = { project: string };
@@ -34,13 +34,13 @@ function findingFrom(value: unknown): Finding | null {
 }
 
 export async function getFinding(projectId: string, findingId: string): Promise<Finding | null> {
-  const resolvedProjectId = await resolveProjectId(projectId);
+  const normalizedProjectId = projectId.trim();
   const normalizedFindingId = findingId.trim();
-  if (!resolvedProjectId || !normalizedFindingId) return null;
+  if (!normalizedProjectId || !normalizedFindingId) return null;
   try {
     const envelope = asRecord(
       await fetchJSON<unknown>(
-        `${API_V1_BASE}/projects/${encodeURIComponent(resolvedProjectId)}/findings/${encodeURIComponent(normalizedFindingId)}`,
+        `${API_V1_BASE}/projects/${encodeURIComponent(normalizedProjectId)}/findings/${encodeURIComponent(normalizedFindingId)}`,
       ),
     );
     return findingFrom(envelope.data);
