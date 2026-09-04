@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
+import {
+  cancelAgentTask,
+  getAgentTaskBundle,
+  type AgentTask,
+  type AgentTaskEvent,
+} from '../api/agent-tasks';
 import { getTestIntelligence, type TestIntelligenceAnalysis } from '../api/test-intelligence';
 import { isCustomerReadyFinding, usePipelineData } from '../api/data';
 import { EnterpriseCampaigns } from './EnterpriseCampaigns';
@@ -20,11 +26,13 @@ type AgentMilestone = {
   state: WorkState;
 };
 
+const TERMINAL_TASK_STATUSES = new Set(['COMPLETED', 'FAILED', 'CANCELLED']);
+
 function toneForStatus(value: string): 'success' | 'warning' | 'danger' | 'neutral' {
   const status = value.toLowerCase();
   if (['passed', 'pass', 'completed', 'executed', 'ready'].includes(status)) return 'success';
-  if (['failed', 'fail', 'blocked', 'error', 'failed_safe', 'hold'].includes(status)) return 'danger';
-  if (['running', 'pending', 'partial', 'coverage_deferred', 'not_ready'].includes(status)) return 'warning';
+  if (['failed', 'fail', 'blocked', 'error', 'failed_safe', 'hold', 'cancelled'].includes(status)) return 'danger';
+  if (['running', 'pending', 'partial', 'coverage_deferred', 'not_ready', 'created', 'planning', 'understanding', 'evaluating'].includes(status)) return 'warning';
   return 'neutral';
 }
 
@@ -45,6 +53,11 @@ function statusLabel(value: string): string {
     coverage_deferred: '部分范围待后续验证',
     hold: '建议暂缓',
     ready: '可以发布',
+    created: '任务已创建',
+    understanding: '正在理解',
+    planning: '正在规划',
+    evaluating: '正在判断',
+    cancelled: '任务已取消',
   };
   return map[normalized.toLowerCase()] || normalized;
 }
@@ -56,16 +69,50 @@ function milestoneIcon(state: WorkState): string {
   return '○';
 }
 
+function eventLabel(eventType: string): string {
+  const labels: Record<string, string> = {
+    TASK_CREATED: 'Agent Task 已创建',
+    TASK_CANCELLED: 'Agent Task 已取消',
+    UNDERSTANDING_STARTED: '开始理解上下文',
+    UNDERSTANDING_COMPLETED: '上下文理解完成',
+    PLANNING_STARTED: '开始规划验证',
+    PLAN_CREATED: '验证计划已形成',
+    PREFLIGHT_STARTED: '开始运行前检查',
+    PREFLIGHT_PASSED: '运行前检查通过',
+    PREFLIGHT_BLOCKED: '运行前检查阻断',
+    EXECUTION_STARTED: '真实执行开始',
+    OBSERVATION_RECORDED: '收到真实 Observation',
+    ORACLE_EVALUATED: 'Oracle 已判定',
+    FINDING_CREATED: '已形成 Finding',
+    DECISION_UPDATED: '发布判断已更新',
+  };
+  return labels[eventType] || eventType;
+}
+
+function eventDetail(event: AgentTaskEvent): string {
+  const intent = asText(event.detail.intent);
+  const previousStatus = asText(event.detail.previous_status);
+  if (intent) return `Intent · ${intent}`;
+  if (previousStatus) return `Previous status · ${previousStatus}`;
+  return '后端事件账本已记录；没有附加可展示详情。';
+}
+
 export function Verify() {
   usePageTitle('Live Workspace');
   const [params, setParams] = useSearchParams();
   const project = params.get('project')?.trim() || '';
+  const taskId = params.get('task')?.trim() || '';
   const goal = params.get('goal')?.trim() || '';
   const activeView: VerifyView = params.get('view') === 'run-control' ? 'run-control' : 'workspace';
   const { data, loading, error, refetch } = usePipelineData(project);
   const [intelligence, setIntelligence] = useState<TestIntelligenceAnalysis | null>(null);
   const [intelligenceLoading, setIntelligenceLoading] = useState(Boolean(project));
   const [intelligenceError, setIntelligenceError] = useState('');
+  const [agentTask, setAgentTask] = useState<AgentTask | null>(null);
+  const [agentEvents, setAgentEvents] = useState<AgentTaskEvent[]>([]);
+  const [agentTaskLoading, setAgentTaskLoading] = useState(Boolean(project && taskId));
+  const [agentTaskError, setAgentTaskError] = useState('');
+  const [cancellingTask, setCancellingTask] = useState(false);
 
   const selectView = (view: VerifyView) => {
     const next = new URLSearchParams(params);
@@ -92,9 +139,54 @@ export function Verify() {
     }
   }, [project]);
 
+  const loadAgentTask = useCallback(async () => {
+    if (!project || !taskId) {
+      setAgentTask(null);
+      setAgentEvents([]);
+      setAgentTaskError('');
+      setAgentTaskLoading(false);
+      return;
+    }
+    setAgentTaskLoading(true);
+    try {
+      const bundle = await getAgentTaskBundle(project, taskId);
+      setAgentTask(bundle.task);
+      setAgentEvents(bundle.events);
+      setAgentTaskError('');
+    } catch (caught: unknown) {
+      setAgentTask(null);
+      setAgentEvents([]);
+      setAgentTaskError(caught instanceof Error ? caught.message : 'Agent Task 读取失败');
+    } finally {
+      setAgentTaskLoading(false);
+    }
+  }, [project, taskId]);
+
   useEffect(() => {
     void loadIntelligence();
   }, [loadIntelligence]);
+
+  useEffect(() => {
+    void loadAgentTask();
+    if (!project || !taskId) return undefined;
+    const timer = window.setInterval(() => {
+      void loadAgentTask();
+    }, 5_000);
+    return () => window.clearInterval(timer);
+  }, [project, taskId, loadAgentTask]);
+
+  const cancelCurrentTask = async () => {
+    if (!project || !taskId || !agentTask || cancellingTask || TERMINAL_TASK_STATUSES.has(agentTask.status)) return;
+    setCancellingTask(true);
+    try {
+      await cancelAgentTask(project, taskId);
+      await loadAgentTask();
+    } catch (caught: unknown) {
+      setAgentTaskError(caught instanceof Error ? caught.message : 'Agent Task 取消失败');
+    } finally {
+      setCancellingTask(false);
+    }
+  };
 
   const record = asRecord(data);
   const campaign = asRecord(record.campaign);
@@ -122,8 +214,23 @@ export function Verify() {
   const runtimeActive = runtimeNormalized === 'running';
   const runtimeFailed = ['failed', 'fail', 'blocked', 'error', 'failed_safe'].includes(runtimeNormalized);
   const hasRuntimeReceipt = Boolean(runtimeStatus || latestRunAt);
+  const taskGoal = agentTask?.goal || goal || '验证当前系统并形成证据化质量判断';
+  const taskTone = toneForStatus(agentTask?.status || '');
+  const taskIsTerminal = Boolean(agentTask && TERMINAL_TASK_STATUSES.has(agentTask.status));
 
   const milestones: AgentMilestone[] = [
+    {
+      key: 'task',
+      label: 'Task',
+      detail: agentTaskLoading
+        ? '正在读取 Agent Task'
+        : agentTaskError
+          ? 'Agent Task 读取失败'
+          : agentTask
+            ? `后端任务 ${agentTask.taskId} · ${statusLabel(agentTask.status)}`
+            : '当前工作区没有绑定 Agent Task',
+      state: agentTaskLoading ? 'active' : agentTaskError ? 'attention' : agentTask ? (taskIsTerminal && agentTask.status !== 'COMPLETED' ? 'attention' : 'done') : 'pending',
+    },
     {
       key: 'understanding',
       label: 'Understanding',
@@ -159,7 +266,7 @@ export function Verify() {
       label: 'Observing',
       detail: evidenceBackedFindings > 0
         ? `${evidenceBackedFindings} 个 Finding 已携带证据链`
-        : '逐步骤 Observation / Live Surface 尚未由统一事件流上报',
+        : '逐步骤 Observation / Live Surface 尚未由真实执行事件上报',
       state: evidenceBackedFindings > 0 ? 'done' : 'pending',
     },
     {
@@ -181,7 +288,7 @@ export function Verify() {
       <StatePanel
         eyebrow="Live Workspace"
         title="选择项目后，让 QualiBug 开始工作"
-        description="Knowledge 可以只基于企业资料工作；Live Workspace 只展示真实 Test Targets、真实运行回执、真实 Finding 和真实 Release Gate。"
+        description="Knowledge 可以只基于企业资料工作；Live Workspace 只展示真实 Agent Task、真实 Test Targets、真实运行回执、真实 Finding 和真实 Release Gate。"
       />
     );
   }
@@ -193,7 +300,7 @@ export function Verify() {
           <div>
             <span className="panel-kicker">Live Workspace · Run Control</span>
             <h1>真实运行控制</h1>
-            <p>继续复用现有 Preflight、服务配置、测试数据与扫描主链，不创建第二套 Agent 执行系统。</p>
+            <p>继续复用现有 Preflight、服务配置、测试数据与扫描主链。Agent Task 只负责持久化目标和编排状态，不创建第二套执行系统。</p>
           </div>
           <button type="button" className="btn btn-secondary" onClick={() => selectView('workspace')}>返回 Live Workspace</button>
         </header>
@@ -222,9 +329,15 @@ export function Verify() {
       <section className="verify-live-shell">
         <aside className="verify-agent-rail" aria-label="Agent 工作状态">
           <div className="verify-context-card">
-            <span>Task context</span>
-            <strong>{goal || '验证当前项目的真实质量状态'}</strong>
-            <p>任务文本不会绕过资料 authority、Preflight 或执行安全边界。</p>
+            <span>Agent Task</span>
+            <strong>{taskGoal}</strong>
+            <p>
+              {agentTask
+                ? `${agentTask.taskId} · ${statusLabel(agentTask.status)} · Runtime Grounding ${agentTask.runtimeGroundingStatus || '未上报'}`
+                : taskId
+                  ? '正在读取后端 Agent Task。'
+                  : '当前未绑定 Agent Task；可从 New Task 创建。'}
+            </p>
           </div>
 
           <div className="verify-agent-message">
@@ -232,7 +345,8 @@ export function Verify() {
             <div>
               <strong>QualiBug</strong>
               <p>
-                我会先消费已有企业理解与 Test Targets，再读取真实运行和证据。缺少 Runtime Grounding 或实时事件时会明确告诉你，而不是补造步骤。
+                Agent Task 已成为后端持久化对象。Event Ledger 只记录后端真正发生的工作事件；
+                Runtime Grounding、Preflight 和 Scan 尚未绑定到该 Task 时，不会补造 Planning / Acting 日志。
               </p>
             </div>
           </div>
@@ -247,28 +361,35 @@ export function Verify() {
           </div>
 
           <div className="verify-agent-rail-actions">
-            <Link className="btn btn-secondary" to={buildProjectPath('/analyze', project)}>查看 Knowledge</Link>
+            <Link className="btn btn-secondary" to={buildProjectPath('/analyze', project, taskId ? `task=${encodeURIComponent(taskId)}&goal=${encodeURIComponent(taskGoal)}` : '')}>查看 Knowledge</Link>
+            {agentTask && !taskIsTerminal ? (
+              <button type="button" className="btn btn-secondary" onClick={() => void cancelCurrentTask()} disabled={cancellingTask}>
+                {cancellingTask ? '正在取消…' : '取消 Agent Task'}
+              </button>
+            ) : null}
             <button type="button" className="btn btn-primary" onClick={() => selectView('run-control')}>运行控制</button>
           </div>
+          {agentTaskError && <div className="settings-inline-feedback" role="alert">{agentTaskError}</div>}
         </aside>
 
         <main className="verify-live-main">
           <header className="verify-goal-bar">
             <div>
               <span>Goal</span>
-              <h1>{goal || '验证当前系统并形成证据化质量判断'}</h1>
+              <h1>{taskGoal}</h1>
             </div>
             <div className="verify-goal-status">
-              <span className={`verify-live-dot tone-${runtimeTone}`} />
-              {statusLabel(runtimeStatus)}
+              <span className={`verify-live-dot tone-${agentTask ? taskTone : runtimeTone}`} />
+              {agentTask ? `Task · ${statusLabel(agentTask.status)}` : statusLabel(runtimeStatus)}
             </div>
           </header>
 
           <div className="verify-context-chips" aria-label="当前真实上下文">
+            <span>Agent Task · {agentTaskLoading ? '…' : agentTask ? agentTask.status : '未绑定'}</span>
+            <span>Task Events · {agentTask ? agentEvents.length : '未绑定'}</span>
             <span>Test Targets · {intelligenceLoading ? '…' : intelligence ? targetCount : '未上报'}</span>
             <span>Findings · {findings.length}</span>
             <span>Evidence-backed · {evidenceBackedFindings}</span>
-            <span>Background clues · {clues.length}</span>
             <span>Decision · {statusLabel(releaseStatus)}</span>
           </div>
 
@@ -321,18 +442,37 @@ export function Verify() {
                 <div className="verify-live-surface-tabs"><b>Execution Surface</b><span>Browser</span><span>API</span><span>Network</span><span>DB</span><span>Trace</span></div>
                 <div className="verify-live-surface-body">
                   <div className="verify-surface-pulse" aria-hidden="true"><span /></div>
-                  <strong>统一逐步骤 Agent Run / Live Surface 尚未上报</strong>
+                  <strong>Agent Task 已接通，真实 Execution Event Stream 尚未绑定</strong>
                   <p>
-                    当前工作台不会用静态示意图冒充 Browser Live View，也不会把推测的 API 请求当作真实执行。
-                    Runtime Grounding 接通后，这里将直接承载真实 Action → Observation → Oracle → Evidence 事件。
+                    当前已经能看到真实 Task Event Ledger，但 `execution_run_id` 和 Runtime Grounding 仍未接入 Agent Task。
+                    因此这里继续不冒充 Browser Live View，也不会把现有 Campaign 状态改写成某个 Task 的执行事件。
                   </p>
                 </div>
               </div>
             </article>
 
             <aside className="verify-activity-panel">
-              <div className="verify-panel-title"><div><span>Activity</span><strong>已上报事实</strong></div></div>
-              {findings.length > 0 ? (
+              <div className="verify-panel-title"><div><span>Activity</span><strong>Agent Event Ledger</strong></div></div>
+              {taskId ? (
+                agentTaskLoading && !agentTask ? (
+                  <div className="verify-empty"><span className="spinner" /><p>正在读取 Task Events…</p></div>
+                ) : agentTaskError && !agentTask ? (
+                  <div className="verify-empty danger"><strong>Agent Task 不可读取</strong><p>{agentTaskError}</p></div>
+                ) : agentEvents.length > 0 ? (
+                  <div className="verify-event-list">
+                    {agentEvents.slice().reverse().map((event) => (
+                      <div className="verify-event-row" key={event.eventId}>
+                        <span>{event.eventType}</span>
+                        <strong>{eventLabel(event.eventType)}</strong>
+                        <p>{eventDetail(event)}</p>
+                        <small>{event.occurredAt || '时间未上报'}</small>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="verify-empty"><strong>Task 尚无事件</strong><p>前端不会用模拟日志填充 Event Ledger。</p></div>
+                )
+              ) : findings.length > 0 ? (
                 <div className="verify-activity-list">
                   {findings.slice(0, 6).map((finding) => (
                     <Link key={finding.id} to={buildProjectPath(`/findings/${finding.id}`, project)}>
@@ -344,7 +484,7 @@ export function Verify() {
                   ))}
                 </div>
               ) : (
-                <div className="verify-empty"><strong>当前没有已确认 Finding</strong><p>Activity 只展示真实上报事件，不用模拟日志制造 Agent “忙碌感”。</p></div>
+                <div className="verify-empty"><strong>当前没有 Agent Task Event</strong><p>从 New Task 创建任务后，这里才会显示后端真实事件；不会模拟 Agent “忙碌感”。</p></div>
               )}
             </aside>
           </section>
