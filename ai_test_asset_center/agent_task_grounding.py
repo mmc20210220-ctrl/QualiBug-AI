@@ -174,16 +174,15 @@ def build_agent_task_grounding(
         project_id,
     )
     is_current = persisted_fingerprint == current_fingerprint
+    summary = analysis.get("summary") if isinstance(analysis.get("summary"), dict) else {}
+    raw_source_count = summary.get("source_count", 0)
+    source_count = int(raw_source_count) if isinstance(raw_source_count, (int, float)) else 0
     source_snapshot = {
         "status": "PINNED" if is_current else "PINNED_STALE",
         "snapshot_ref": _snapshot_ref(persisted_fingerprint),
         "source_revision_state": "CURRENT" if is_current else "STALE",
         "analysis_schema": _text(analysis.get("schema")),
-        "source_count": int(
-            (analysis.get("summary") or {}).get("source_count", 0)
-            if isinstance(analysis.get("summary"), dict)
-            else 0
-        ),
+        "source_count": source_count,
     }
 
     obligations = [
@@ -265,7 +264,7 @@ def build_agent_task_grounding(
                         "source": "scan_preflight",
                     }
                 )
-        if not selected_ids and intent not in {"verify_changes"}:
+        if not selected_ids and intent != "verify_changes":
             blockers.append(
                 {
                     "code": "NO_TEST_TARGETS",
