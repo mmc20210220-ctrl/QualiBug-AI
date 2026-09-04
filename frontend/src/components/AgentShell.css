@@ -1,0 +1,42 @@
+.agent-shell .content {
+  background:
+    radial-gradient(circle at 72% -20%, color-mix(in srgb, var(--primary) 7%, transparent), transparent 34%),
+    var(--bg);
+}
+
+.agent-shell .topbar.agent-topbar {
+  border-bottom-color: color-mix(in srgb, var(--line) 82%, transparent);
+  background: color-mix(in srgb, var(--surface) 94%, transparent);
+  backdrop-filter: blur(14px);
+}
+
+.agent-shell .agent-topbar .breadcrumb {
+  font-size: 13px;
+  letter-spacing: -.01em;
+}
+
+.agent-shell .agent-topbar .topbar-subtitle {
+  font-size: 11px;
+}
+
+.side-project-agent-copy {
+  margin: 8px 0 0;
+  color: rgba(255, 255, 255, .58);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.agent-shell .side-bottom {
+  line-height: 1.55;
+}
+
+.agent-shell .side-bottom b {
+  display: block;
+  margin-bottom: 4px;
+}
+
+@media (max-width: 760px) {
+  .agent-shell .agent-topbar .system-status {
+    display: none;
+  }
+}
