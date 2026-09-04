@@ -5,6 +5,8 @@ import { ScrollToTop } from './components/ScrollToTop';
 import { AuthProvider } from './components/AuthProvider';
 import { useAuth } from './components/useAuth';
 import { AgentHome } from './pages/AgentHome';
+import { AgentFindings } from './pages/AgentFindings';
+import { AgentDecision } from './pages/AgentDecision';
 import { Dashboard } from './pages/Dashboard';
 import { Analyze } from './pages/Analyze';
 import { Verify } from './pages/Verify';
@@ -71,12 +73,13 @@ export default function App() {
             <Route element={<RequireAuth />}>
               <Route element={<Layout />}>
                 <Route path="/" element={<PreserveSearchRedirect to="/dashboard" />} />
+
                 {/* Agent-first 主链：New Task → Live Workspace → Findings → Decision。 */}
                 <Route path="/dashboard" element={<AgentHome />} />
                 <Route path="/verify" element={<Verify />} />
-                <Route path="/findings" element={<Findings />} />
+                <Route path="/findings" element={<AgentFindings />} />
                 <Route path="/findings/:id" element={<FindingDetail />} />
-                <Route path="/release" element={<ReleaseGate />} />
+                <Route path="/release" element={<AgentDecision />} />
 
                 {/* Knowledge / Understanding 是 Agent 能力，不再作为客户第一层流水线导航。 */}
                 <Route path="/analyze" element={<Analyze />} />
@@ -85,6 +88,8 @@ export default function App() {
 
                 {/* 兼容与高级页面：保留既有能力和 URL，不复制第二套数据模型。 */}
                 <Route path="/advanced-dashboard" element={<Dashboard />} />
+                <Route path="/advanced-findings" element={<Findings />} />
+                <Route path="/release/details" element={<ReleaseGate />} />
                 <Route path="/requirements" element={<RequirementIntelligence />} />
                 <Route path="/test-intelligence" element={<TestIntelligence />} />
                 <Route path="/evidence" element={<EvidenceChain />} />
