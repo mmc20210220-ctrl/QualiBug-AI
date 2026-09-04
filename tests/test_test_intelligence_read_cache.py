@@ -6,7 +6,6 @@ from typing import Any
 
 import pytest
 
-from ai_test_asset_center import private_pilot_http_routing as routing
 from ai_test_asset_center import private_pilot_product_catalog as catalog
 
 
@@ -42,6 +41,9 @@ def _clear_intelligence_caches() -> None:
         catalog._TEST_INTELLIGENCE_BUILD_LOCKS.clear()
     with catalog._TEST_INTELLIGENCE_DB_DIGEST_LOCK:
         catalog._TEST_INTELLIGENCE_DB_DIGEST_CACHE.clear()
+    with catalog._TEST_INTELLIGENCE_REVALIDATE_LOCK:
+        catalog._TEST_INTELLIGENCE_REVALIDATING.clear()
+        catalog._TEST_INTELLIGENCE_LAST_REVALIDATE.clear()
     yield
     with catalog._REQUIREMENT_INTELLIGENCE_CACHE_LOCK:
         catalog._REQUIREMENT_INTELLIGENCE_CACHE.clear()
@@ -51,6 +53,9 @@ def _clear_intelligence_caches() -> None:
         catalog._TEST_INTELLIGENCE_BUILD_LOCKS.clear()
     with catalog._TEST_INTELLIGENCE_DB_DIGEST_LOCK:
         catalog._TEST_INTELLIGENCE_DB_DIGEST_CACHE.clear()
+    with catalog._TEST_INTELLIGENCE_REVALIDATE_LOCK:
+        catalog._TEST_INTELLIGENCE_REVALIDATING.clear()
+        catalog._TEST_INTELLIGENCE_LAST_REVALIDATE.clear()
 
 
 def _install_analysis_spies(monkeypatch: pytest.MonkeyPatch) -> dict[str, int]:
@@ -148,7 +153,7 @@ def test_hot_read_reuses_analysis_without_reloading_asset(
     assert "mutated" not in second["requirement"]
 
 
-def test_source_fingerprint_change_rebuilds_analysis_once(
+def test_source_fingerprint_change_serves_stale_then_revalidates(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -158,19 +163,87 @@ def test_source_fingerprint_change_rebuilds_analysis_once(
         "_test_intelligence_source_fingerprint",
         lambda root, tenant_id, project: fingerprint[0],
     )
+    monkeypatch.setattr(
+        _DummyCatalog,
+        "_spawn_test_intelligence_revalidation",
+        lambda self, *args, **kwargs: None,
+    )
     calls = _install_analysis_spies(monkeypatch)
     handler = _DummyCatalog()
 
     first = handler._get_test_intelligence_analysis("acme", tmp_path, "actor")
     fingerprint[0] = "fp-2"
-    second = handler._get_test_intelligence_analysis("acme", tmp_path, "actor")
-    third = handler._get_test_intelligence_analysis("acme", tmp_path, "actor")
+    stale = handler._get_test_intelligence_analysis("acme", tmp_path, "actor")
 
     assert first["requirement"]["load_count"] == 1
-    assert second["requirement"]["load_count"] == 2
-    assert third["requirement"]["load_count"] == 2
+    assert stale["requirement"]["load_count"] == 1
+    assert handler.load_count == 1
+
+    handler._revalidate_test_intelligence_projection(
+        "acme",
+        tmp_path,
+        "actor",
+        tenant_id="tenant-a",
+        cache_key="tenant-a:acme",
+    )
+    fresh = handler._get_test_intelligence_analysis("acme", tmp_path, "actor")
+
+    assert fresh["requirement"]["load_count"] == 2
     assert handler.load_count == 2
     assert calls == {"requirement": 2, "test": 2, "compose": 2}
+
+
+def test_persisted_projection_survives_process_cache_reset_without_sync_rebuild(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(
+        catalog,
+        "_test_intelligence_source_fingerprint",
+        lambda root, tenant_id, project: "fp-1",
+    )
+    calls = _install_analysis_spies(monkeypatch)
+    first_handler = _DummyCatalog()
+    built = first_handler._get_test_intelligence_analysis("acme", tmp_path, "actor")
+
+    assert built["project_id"] == "acme"
+    assert first_handler.load_count == 1
+    projection_path = catalog._test_intelligence_projection_path(
+        tmp_path,
+        "tenant-a",
+        "acme",
+    )
+    assert projection_path.is_file()
+
+    with catalog._REQUIREMENT_INTELLIGENCE_CACHE_LOCK:
+        catalog._REQUIREMENT_INTELLIGENCE_CACHE.clear()
+    with catalog._TEST_INTELLIGENCE_CACHE_LOCK:
+        catalog._TEST_INTELLIGENCE_CACHE.clear()
+
+    monkeypatch.setattr(
+        _DummyCatalog,
+        "_spawn_test_intelligence_revalidation",
+        lambda self, *args, **kwargs: None,
+    )
+
+    def fail_fingerprint(*args: Any, **kwargs: Any) -> str:
+        raise AssertionError("persisted hot read must not fingerprint synchronously")
+
+    monkeypatch.setattr(catalog, "_test_intelligence_source_fingerprint", fail_fingerprint)
+    second_handler = _DummyCatalog()
+    restored = second_handler._get_test_intelligence_analysis("acme", tmp_path, "actor")
+
+    assert restored["project_id"] == "acme"
+    assert restored["requirement"]["load_count"] == 1
+    assert second_handler.load_count == 0
+    assert calls == {"requirement": 1, "test": 1, "compose": 1}
+
+
+def test_persisted_projection_is_tenant_scoped(tmp_path: Path) -> None:
+    tenant_a = catalog._test_intelligence_projection_path(tmp_path, "tenant-a", "acme")
+    tenant_b = catalog._test_intelligence_projection_path(tmp_path, "tenant-b", "acme")
+    assert tenant_a != tenant_b
+    assert tenant_a.parent == tenant_b.parent
 
 
 def test_cache_is_tenant_scoped(
@@ -198,7 +271,6 @@ def test_db_fingerprint_ignores_unrelated_writes_but_tracks_project_content(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setattr(routing, "_project_data_fingerprint", lambda root, project: "files")
     db_revision = ["db-rev-1"]
     monkeypatch.setattr(catalog, "_test_intelligence_db_identity", lambda root: db_revision[0])
 
@@ -262,3 +334,34 @@ def test_db_fingerprint_ignores_unrelated_writes_but_tracks_project_content(
 
     assert first == after_unrelated_write
     assert after_project_write != first
+
+
+def test_file_fingerprint_ignores_runtime_scan_outputs_but_tracks_knowledge_inputs(
+    tmp_path: Path,
+) -> None:
+    project = "acme"
+    knowledge = (
+        tmp_path
+        / "platform_workspace"
+        / project
+        / "enterprise_knowledge_center"
+        / "enterprise_business_knowledge_asset.json"
+    )
+    knowledge.parent.mkdir(parents=True, exist_ok=True)
+    knowledge.write_text('{"version":1}', encoding="utf-8")
+
+    first = catalog._test_intelligence_file_source_fingerprint(tmp_path, project)
+
+    scan = tmp_path / "platform_outputs" / project / "scan_result.json"
+    scan.parent.mkdir(parents=True, exist_ok=True)
+    scan.write_text('{"scan":1}', encoding="utf-8")
+    after_scan_write = catalog._test_intelligence_file_source_fingerprint(tmp_path, project)
+
+    knowledge.write_text('{"version":22}', encoding="utf-8")
+    after_knowledge_write = catalog._test_intelligence_file_source_fingerprint(
+        tmp_path,
+        project,
+    )
+
+    assert after_scan_write == first
+    assert after_knowledge_write != first
