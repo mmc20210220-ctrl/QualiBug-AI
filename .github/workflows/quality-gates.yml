@@ -49,6 +49,13 @@ jobs:
           echo "Executing $(wc -l < "$GATE_TESTS") declared backend contract tests"
           xargs -a "$GATE_TESTS" python -m pytest -q
 
+      - name: Agent Task runtime contract
+        env:
+          QUALIBUG_JWT_SECRET: ci-quality-gates-secret
+          QUALIBUG_LOCAL_DEV_ACTOR: '1'
+          QUALIBUG_ALLOW_PUBLIC_BIND: '0'
+        run: python -m pytest -q tests/test_agent_task_runtime.py
+
   # Permanent frontend gate. Keep this independent of a running backend so the
   # SPA contract can be validated deterministically on every PR.
   frontend-contract-gate:
