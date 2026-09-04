@@ -41,6 +41,19 @@ export type AgentGroundingSummary = {
   preflightReady: boolean;
 };
 
+export type AgentPinnedTestTarget = {
+  obligationId: string;
+  obligationKind: string;
+  title: string;
+  objective: string;
+  operationRef: string;
+  designId: string;
+  executionSurface: string;
+  actionBindingStatus: string;
+  observerBindingStatus: string;
+  oracleBindingStatus: string;
+};
+
 export type AgentTask = {
   schemaVersion: string;
   taskId: string;
@@ -52,6 +65,7 @@ export type AgentTask = {
   sourceSnapshotRef: string;
   sourceRevisionState: string;
   selectedTestTargets: string[];
+  selectedTargetSnapshots: AgentPinnedTestTarget[];
   executionRunId: string;
   runtimeGroundingStatus: string;
   runtimeContext: Record<string, unknown>;
@@ -111,6 +125,21 @@ function parseBlockers(value: unknown): AgentGroundingBlocker[] {
   })).filter((blocker) => Boolean(blocker.code));
 }
 
+function parsePinnedTargets(value: unknown): AgentPinnedTestTarget[] {
+  return asArray(value).map(asRecord).map((record) => ({
+    obligationId: asString(record.obligation_id),
+    obligationKind: asString(record.obligation_kind),
+    title: asString(record.title),
+    objective: asString(record.objective),
+    operationRef: asString(record.operation_ref),
+    designId: asString(record.design_id),
+    executionSurface: asString(record.execution_surface),
+    actionBindingStatus: asString(record.action_binding_status),
+    observerBindingStatus: asString(record.observer_binding_status),
+    oracleBindingStatus: asString(record.oracle_binding_status),
+  })).filter((target) => Boolean(target.obligationId));
+}
+
 function parseTask(value: unknown): AgentTask {
   const record = asRecord(value);
   const sourceSnapshot = asRecord(record.source_snapshot);
@@ -134,6 +163,7 @@ function parseTask(value: unknown): AgentTask {
     sourceSnapshotRef: asString(sourceSnapshot.snapshot_ref),
     sourceRevisionState: asString(sourceSnapshot.source_revision_state),
     selectedTestTargets: asArray(record.selected_test_targets).map(asString).filter(Boolean),
+    selectedTargetSnapshots: parsePinnedTargets(record.selected_test_target_snapshot),
     executionRunId: asString(record.execution_run_id),
     runtimeGroundingStatus: asString(record.runtime_grounding_status),
     runtimeContext: asRecord(record.runtime_context),
