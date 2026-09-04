@@ -13,11 +13,10 @@ vi.mock('./session', () => {
     API_V1_BASE: '/api/v1',
     ApiError,
     fetchJSON: vi.fn(),
-    resolveProjectId: vi.fn(),
   };
 });
 
-import { fetchJSON, resolveProjectId } from './session';
+import { fetchJSON } from './session';
 import { getFinding } from './finding-detail';
 
 describe('getFinding', () => {
@@ -26,7 +25,6 @@ describe('getFinding', () => {
   });
 
   it('reads only the requested finding endpoint and preserves evidence fields', async () => {
-    vi.mocked(resolveProjectId).mockResolvedValue('acme');
     vi.mocked(fetchJSON).mockResolvedValue({
       ok: true,
       data: {
