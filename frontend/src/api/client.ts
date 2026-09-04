@@ -120,10 +120,22 @@ export async function replayFinding(projectId: string, findingId: string, baseUr
 
 export async function getKnowledgeAsset(projectId: string): Promise<unknown> {
   // Historical name retained for callers that only consume the source inventory.
-  // Do not ship the 100MB+ full knowledge asset to list/read pages such as Materials.
+  // The transport uses the lightweight source view, then restores the historical
+  // `knowledge_asset` envelope so older display consumers remain compatible.
   const project = projectId.trim();
-  if (!project) return { project_id: '', summary: { active_source_count: 0 }, sources: [] };
-  return fetchJSON<unknown>(`${API_BASE}/knowledge/summary?project=${encodeURIComponent(project)}&view=sources`);
+  if (!project) {
+    const knowledgeAsset = { project_id: '', summary: { active_source_count: 0 }, sources: [] };
+    return { ...knowledgeAsset, knowledge_asset: knowledgeAsset };
+  }
+  const payload = asRecord(await fetchJSON<unknown>(
+    `${API_BASE}/knowledge/summary?project=${encodeURIComponent(project)}&view=sources`,
+  ));
+  const knowledgeAsset = {
+    project_id: asString(payload.project_id) || project,
+    summary: asRecord(payload.summary),
+    sources: asArray(payload.sources),
+  };
+  return { ...payload, knowledge_asset: knowledgeAsset };
 }
 
 export function getKnowledgePreview(sourceId: string): Promise<unknown> {
