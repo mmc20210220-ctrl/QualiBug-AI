@@ -390,6 +390,7 @@ export function Verify() {
             <span>Test Targets · {intelligenceLoading ? '…' : intelligence ? targetCount : '未上报'}</span>
             <span>Findings · {findings.length}</span>
             <span>Evidence-backed · {evidenceBackedFindings}</span>
+            <span>Background clues · {clues.length}</span>
             <span>Decision · {statusLabel(releaseStatus)}</span>
           </div>
 
