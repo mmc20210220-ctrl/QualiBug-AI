@@ -23,11 +23,12 @@ function forbidAll(content, forbidden, label) {
   }
 }
 
-const [app, sidebar, home, verify, findings, decision, analyze, frontendAgents] = await Promise.all([
+const [app, sidebar, home, verify, agentTasks, findings, decision, analyze, frontendAgents] = await Promise.all([
   source('src/App.tsx'),
   source('src/components/Sidebar.tsx'),
   source('src/pages/AgentHome.tsx'),
   source('src/pages/Verify.tsx'),
+  source('src/api/agent-tasks.ts'),
   source('src/pages/AgentFindings.tsx'),
   source('src/pages/AgentDecision.tsx'),
   source('src/pages/Analyze.tsx'),
@@ -54,28 +55,58 @@ requireAll(sidebar, [
   'AI Quality Engineer',
 ], 'Agent navigation');
 
+requireAll(agentTasks, [
+  'export type AgentTaskIntent =',
+  'export type AgentTaskStatus =',
+  'export type AgentGroundingBlocker =',
+  'export type AgentPinnedTestTarget =',
+  'export async function createAgentTask(',
+  'export async function groundAgentTask(',
+  'export async function getAgentTaskBundle(',
+  'export async function cancelAgentTask(',
+  '/projects/${encodeURIComponent(project)}/agent-tasks',
+  '/${encodeURIComponent(taskId)}/ground',
+  'selected_test_target_snapshot',
+], 'Agent Task API');
+
 requireAll(home, [
   '今天要我帮你验证什么？',
-  '真实执行范围仍由已连接资料、运行环境和 Preflight 决定',
-  "navigateToProjectPath(mode === 'analyze' ? '/analyze' : '/verify'",
+  'createAgentTask(project',
+  "next.set('task', task.taskId);",
+  'Goal 是任务上下文，不是执行授权',
+  'Runtime Grounding 和 Preflight',
   '没有已确认 Finding 不等于系统安全',
 ], 'Agent Home');
 forbidAll(home, ['Math.random(', 'setInterval('], 'Agent Home');
 
 requireAll(verify, [
-  "type AgentMilestone =",
+  'type AgentMilestone =',
+  "label: 'Task'",
   "label: 'Understanding'",
   "label: 'Planning'",
+  "label: 'Grounding'",
   "label: 'Acting'",
   "label: 'Observing'",
   "label: 'Evaluating'",
   "label: 'Finding'",
-  '任务文本不会绕过资料 authority、Preflight 或执行安全边界',
-  '统一逐步骤 Agent Run / Live Surface 尚未上报',
-  '当前工作台不会用静态示意图冒充 Browser Live View',
+  'if (!project || taskId)',
+  'getAgentTaskBundle(project, taskId)',
+  'groundAgentTask(project, taskId)',
+  'Agent Event Ledger',
+  'UNDERSTANDING_SNAPSHOT_PINNED',
+  'RUNTIME_GROUNDING_EVALUATED',
+  '该 Task 固定的 Test Targets',
+  'Runtime Grounding 被真实条件阻断',
+  '尚未绑定 execution_run_id；现有 Campaign 状态不会冒充 Task 执行事件',
+  'Runtime Grounding 已就绪，尚未开始 Task-specific Execution',
+  '前端不会用模拟日志填充 Event Ledger',
   '<EnterpriseCampaigns />',
 ], 'Live Workspace');
-forbidAll(verify, ['Math.random(', 'fakeBrowser', 'mockAgent'], 'Live Workspace');
+forbidAll(verify, [
+  'Math.random(',
+  'fakeBrowser',
+  'mockAgent',
+], 'Live Workspace');
 
 requireAll(findings, [
   'isCustomerReadyFinding',
@@ -104,9 +135,12 @@ requireAll(analyze, [
 
 requireAll(frontendAgents, [
   '**Agent-first**',
-  'Free-text goal input is task context only',
-  'These are explainable work states, not hidden chain-of-thought',
-  'must never fabricate Agent steps, browser previews, execution surfaces, runtime grounding, logs or observations',
+  'creates a real project-scoped backend Agent Task',
+  'read-only grounding evaluation',
+  'Task events are observable work events, not hidden chain-of-thought',
+  'frontend must never synthesize missing Agent events',
+  'Agent Task grounding is not execution',
+  'cancels only the orchestration record',
 ], 'Frontend SSOT');
 
 process.stdout.write('agent workspace contract: OK\n');

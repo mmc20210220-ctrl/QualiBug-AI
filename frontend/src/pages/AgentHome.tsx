@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
+import { createAgentTask, type AgentTaskIntent } from '../api/agent-tasks';
 import { isCustomerReadyFinding, usePipelineData } from '../api/data';
 import { StatePanel } from '../components/dashboard/DashboardPrimitives';
 import { usePageTitle } from '../lib/page-title';
@@ -9,6 +10,13 @@ import type { Finding } from '../types';
 import './AgentHome.css';
 
 type TaskMode = 'analyze' | 'verify';
+
+const DEFAULT_GOALS: Record<AgentTaskIntent, string> = {
+  release_readiness: '检查当前版本是否存在发布阻断风险，并基于真实证据形成发布判断。',
+  find_blockers: '找出当前最严重、最可能阻断发布的已验证质量问题。',
+  verify_changes: '验证当前版本变更影响到的关键行为，并保留真实证据。',
+  analyze_requirements: '分析当前企业资料中的需求、业务规则、缺口和验证目标。',
+};
 
 function visibleStatus(value: string): string {
   const normalized = value.trim().toLowerCase();
@@ -35,6 +43,8 @@ export function AgentHome() {
   const project = params.get('project')?.trim() || '';
   const { data, loading, error, refetch } = usePipelineData(project);
   const [goal, setGoal] = useState('');
+  const [creatingTask, setCreatingTask] = useState(false);
+  const [taskError, setTaskError] = useState('');
 
   const record = asRecord(data);
   const campaign = asRecord(record.campaign);
@@ -50,12 +60,28 @@ export function AgentHome() {
     [record.defects, record.risks],
   );
 
-  const beginTask = (mode: TaskMode) => {
-    if (!project) return;
-    const next = new URLSearchParams();
-    if (goal.trim()) next.set('goal', goal.trim());
-    if (mode === 'analyze') next.set('from', 'agent-home');
-    navigateToProjectPath(mode === 'analyze' ? '/analyze' : '/verify', project, next.toString());
+  const beginTask = async (
+    mode: TaskMode,
+    intent: AgentTaskIntent = mode === 'analyze' ? 'analyze_requirements' : 'release_readiness',
+  ) => {
+    if (!project || creatingTask) return;
+    setCreatingTask(true);
+    setTaskError('');
+    try {
+      const task = await createAgentTask(project, {
+        goal: goal.trim() || DEFAULT_GOALS[intent],
+        intent,
+      });
+      const next = new URLSearchParams();
+      next.set('task', task.taskId);
+      next.set('goal', task.goal);
+      if (mode === 'analyze') next.set('from', 'agent-home');
+      navigateToProjectPath(mode === 'analyze' ? '/analyze' : '/verify', project, next.toString());
+    } catch (caught: unknown) {
+      setTaskError(caught instanceof Error ? caught.message : 'Agent Task 创建失败');
+    } finally {
+      setCreatingTask(false);
+    }
   };
 
   if (!project) {
@@ -77,8 +103,8 @@ export function AgentHome() {
         <span className="agent-home-kicker">Your AI Quality Engineer</span>
         <h1>今天要我帮你验证什么？</h1>
         <p>
-          描述质量目标，QualiBug 会沿着“理解 → 计划 → 真实执行 → 证据 → 判断”的主链工作。
-          当前自由文本作为工作目标上下文；真实执行范围仍由已连接资料、运行环境和 Preflight 决定，不会因为一句提示词绕过安全边界。
+          描述质量目标后，QualiBug 会先创建一个持久化 Agent Task，再沿着“理解 → 计划 → 真实执行 → 证据 → 判断”的主链工作。
+          Goal 是任务上下文，不是执行授权；真实执行范围仍由已连接资料、运行环境、Runtime Grounding 和 Preflight 决定。
         </p>
 
         <div className="agent-goal-composer">
@@ -90,9 +116,14 @@ export function AgentHome() {
             aria-label="质量验证目标"
           />
           <div className="agent-goal-actions">
-            <button type="button" className="btn btn-secondary" onClick={() => beginTask('analyze')}>先理解资料</button>
-            <button type="button" className="btn btn-primary" onClick={() => beginTask('verify')}>进入验证工作台</button>
+            <button type="button" className="btn btn-secondary" onClick={() => void beginTask('analyze')} disabled={creatingTask}>
+              {creatingTask ? '正在创建任务…' : '先理解资料'}
+            </button>
+            <button type="button" className="btn btn-primary" onClick={() => void beginTask('verify')} disabled={creatingTask}>
+              {creatingTask ? '正在创建任务…' : '开始 Agent Task'}
+            </button>
           </div>
+          {taskError && <div className="settings-inline-feedback" role="alert">{taskError}</div>}
         </div>
 
         <div className="agent-source-actions" aria-label="常用起点">
@@ -103,10 +134,10 @@ export function AgentHome() {
       </section>
 
       <section className="agent-intent-grid" aria-label="建议任务">
-        <button type="button" onClick={() => beginTask('verify')}>
-          <span>01</span><strong>找发布阻断</strong><p>基于当前真实运行、Finding 与 Gate 判断下一步。</p>
+        <button type="button" onClick={() => void beginTask('verify', 'find_blockers')} disabled={creatingTask}>
+          <span>01</span><strong>找发布阻断</strong><p>创建真实 Agent Task，并基于当前运行、Finding 与 Gate 判断下一步。</p>
         </button>
-        <button type="button" onClick={() => beginTask('analyze')}>
+        <button type="button" onClick={() => void beginTask('analyze', 'analyze_requirements')} disabled={creatingTask}>
           <span>02</span><strong>分析需求与风险</strong><p>只给 PRD 也可以开始，先理解应该怎样工作。</p>
         </button>
         <Link to={buildProjectPath('/findings', project)}>
