@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 from typing import Any
 
@@ -37,11 +38,15 @@ def _clear_test_intelligence_cache() -> None:
         catalog._TEST_INTELLIGENCE_CACHE.clear()
     with catalog._TEST_INTELLIGENCE_BUILD_LOCKS_GUARD:
         catalog._TEST_INTELLIGENCE_BUILD_LOCKS.clear()
+    with catalog._TEST_INTELLIGENCE_DB_DIGEST_LOCK:
+        catalog._TEST_INTELLIGENCE_DB_DIGEST_CACHE.clear()
     yield
     with catalog._TEST_INTELLIGENCE_CACHE_LOCK:
         catalog._TEST_INTELLIGENCE_CACHE.clear()
     with catalog._TEST_INTELLIGENCE_BUILD_LOCKS_GUARD:
         catalog._TEST_INTELLIGENCE_BUILD_LOCKS.clear()
+    with catalog._TEST_INTELLIGENCE_DB_DIGEST_LOCK:
+        catalog._TEST_INTELLIGENCE_DB_DIGEST_CACHE.clear()
 
 
 def _install_analysis_spies(monkeypatch: pytest.MonkeyPatch) -> dict[str, int]:
@@ -80,7 +85,7 @@ def test_hot_read_reuses_analysis_without_reloading_asset(
     monkeypatch.setattr(
         catalog,
         "_test_intelligence_source_fingerprint",
-        lambda root, project: fingerprint[0],
+        lambda root, tenant_id, project: fingerprint[0],
     )
     calls = _install_analysis_spies(monkeypatch)
     handler = _DummyCatalog()
@@ -103,7 +108,7 @@ def test_source_fingerprint_change_rebuilds_analysis_once(
     monkeypatch.setattr(
         catalog,
         "_test_intelligence_source_fingerprint",
-        lambda root, project: fingerprint[0],
+        lambda root, tenant_id, project: fingerprint[0],
     )
     calls = _install_analysis_spies(monkeypatch)
     handler = _DummyCatalog()
@@ -127,7 +132,7 @@ def test_cache_is_tenant_scoped(
     monkeypatch.setattr(
         catalog,
         "_test_intelligence_source_fingerprint",
-        lambda root, project: "fp-1",
+        lambda root, tenant_id, project: "fp-1",
     )
     calls = _install_analysis_spies(monkeypatch)
     tenant_a = _DummyCatalog("tenant-a")
@@ -141,21 +146,71 @@ def test_cache_is_tenant_scoped(
     assert calls == {"requirement": 2, "test": 2, "compose": 2}
 
 
-def test_fingerprint_tracks_sqlite_and_wal_changes(
+def test_db_fingerprint_ignores_unrelated_writes_but_tracks_project_content(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     monkeypatch.setattr(routing, "_project_data_fingerprint", lambda root, project: "files")
-
-    initial = catalog._test_intelligence_source_fingerprint(tmp_path, "acme")
+    db_revision = ["db-rev-1"]
+    monkeypatch.setattr(catalog, "_test_intelligence_db_identity", lambda root: db_revision[0])
 
     db_path = tmp_path / "qualibug.db"
-    db_path.write_bytes(b"db-v1")
-    with_db = catalog._test_intelligence_source_fingerprint(tmp_path, "acme")
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.execute(
+            """
+            CREATE TABLE knowledge_docs (
+                id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL,
+                project_id TEXT NOT NULL,
+                filename TEXT NOT NULL,
+                type TEXT NOT NULL,
+                content TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO knowledge_docs VALUES (?, ?, ?, ?, ?, ?, ?)",
+            ("doc-a", "tenant-a", "acme", "prd.md", "prd", "ABCD", "2026-09-04T00:00:00Z"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
-    wal_path = tmp_path / "qualibug.db-wal"
-    wal_path.write_bytes(b"wal-v1")
-    with_wal = catalog._test_intelligence_source_fingerprint(tmp_path, "acme")
+    first = catalog._test_intelligence_source_fingerprint(tmp_path, "tenant-a", "acme")
 
-    assert initial != with_db
-    assert with_db != with_wal
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.execute(
+            "INSERT INTO knowledge_docs VALUES (?, ?, ?, ?, ?, ?, ?)",
+            ("doc-b", "tenant-b", "other", "other.md", "prd", "other", "2026-09-04T00:00:01Z"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    db_revision[0] = "db-rev-2"
+    after_unrelated_write = catalog._test_intelligence_source_fingerprint(
+        tmp_path,
+        "tenant-a",
+        "acme",
+    )
+
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.execute(
+            "UPDATE knowledge_docs SET content = ? WHERE id = ?",
+            ("WXYZ", "doc-a"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    db_revision[0] = "db-rev-3"
+    after_project_write = catalog._test_intelligence_source_fingerprint(
+        tmp_path,
+        "tenant-a",
+        "acme",
+    )
+
+    assert first == after_unrelated_write
+    assert after_project_write != first
