@@ -29,6 +29,18 @@ export type AgentTaskEvent = {
   detail: Record<string, unknown>;
 };
 
+export type AgentGroundingBlocker = {
+  code: string;
+  message: string;
+  source: string;
+};
+
+export type AgentGroundingSummary = {
+  selectedTargetCount: number;
+  runtimeBoundTargetCount: number;
+  preflightReady: boolean;
+};
+
 export type AgentTask = {
   schemaVersion: string;
   taskId: string;
@@ -38,9 +50,14 @@ export type AgentTask = {
   status: AgentTaskStatus;
   sourceSnapshotStatus: string;
   sourceSnapshotRef: string;
+  sourceRevisionState: string;
   selectedTestTargets: string[];
   executionRunId: string;
   runtimeGroundingStatus: string;
+  runtimeContext: Record<string, unknown>;
+  groundingBlockers: AgentGroundingBlocker[];
+  groundingSummary: AgentGroundingSummary;
+  groundingEvaluatedAt: string;
   createdAt: string;
   updatedAt: string;
   completedAt: string;
@@ -86,9 +103,18 @@ function parseEvent(value: unknown): AgentTaskEvent | null {
   };
 }
 
+function parseBlockers(value: unknown): AgentGroundingBlocker[] {
+  return asArray(value).map(asRecord).map((record) => ({
+    code: asString(record.code),
+    message: asString(record.message),
+    source: asString(record.source),
+  })).filter((blocker) => Boolean(blocker.code));
+}
+
 function parseTask(value: unknown): AgentTask {
   const record = asRecord(value);
   const sourceSnapshot = asRecord(record.source_snapshot);
+  const groundingSummary = asRecord(record.grounding_summary);
   const taskId = asString(record.task_id);
   const projectId = asString(record.project_id);
   const goal = asString(record.goal);
@@ -106,9 +132,18 @@ function parseTask(value: unknown): AgentTask {
     status: statusValue,
     sourceSnapshotStatus: asString(sourceSnapshot.status),
     sourceSnapshotRef: asString(sourceSnapshot.snapshot_ref),
+    sourceRevisionState: asString(sourceSnapshot.source_revision_state),
     selectedTestTargets: asArray(record.selected_test_targets).map(asString).filter(Boolean),
     executionRunId: asString(record.execution_run_id),
     runtimeGroundingStatus: asString(record.runtime_grounding_status),
+    runtimeContext: asRecord(record.runtime_context),
+    groundingBlockers: parseBlockers(record.grounding_blockers),
+    groundingSummary: {
+      selectedTargetCount: Number(groundingSummary.selected_target_count || 0),
+      runtimeBoundTargetCount: Number(groundingSummary.runtime_bound_target_count || 0),
+      preflightReady: groundingSummary.preflight_ready === true,
+    },
+    groundingEvaluatedAt: asString(record.grounding_evaluated_at),
     createdAt: asString(record.created_at),
     updatedAt: asString(record.updated_at),
     completedAt: asString(record.completed_at),
@@ -131,6 +166,25 @@ export async function createAgentTask(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(input),
   }));
+  return parseTask(payload.data);
+}
+
+export async function groundAgentTask(
+  project: string,
+  taskId: string,
+  input?: { testTargetIds?: string[]; preflight?: Record<string, unknown> },
+): Promise<AgentTask> {
+  const payload = asRecord(await fetchJSON<unknown>(
+    `${basePath(project)}/${encodeURIComponent(taskId)}/ground`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        test_target_ids: input?.testTargetIds || [],
+        preflight: input?.preflight || {},
+      }),
+    },
+  ));
   return parseTask(payload.data);
 }
 
