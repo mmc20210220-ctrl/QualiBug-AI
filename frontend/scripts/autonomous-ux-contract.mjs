@@ -25,7 +25,7 @@ function requireAll(content, expected, label) {
 }
 
 function forbidAll(content, forbidden, label) {
-  for (const value of forbidden) forbidText(content, forbidden, label);
+  for (const value of forbidden) forbidText(content, value, label);
 }
 
 const [
@@ -207,7 +207,7 @@ requireAll(commandCenterUnderstanding, [
   'EXISTING_KNOWLEDGE_ASSET_GATE_PROJECTION_NOT_SECOND_AUTHORITY',
   'super()._build_command_center(project_id, root)',
 ], 'command center understanding projection');
-forbidText(commandCenterUnderstanding, 'build_enterprise_business_knowledge_asset', 'command center understanding projection');
+forbidText(commandCenterUnderstanding, 'build_enterprise_business_knowledge_asset', 'understanding preflight projection');
 
 requireAll(serviceComposition, [
   'from .private_pilot_understanding_preflight import (',
