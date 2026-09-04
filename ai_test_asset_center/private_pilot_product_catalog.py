@@ -22,6 +22,8 @@ _INTELLIGENCE_CACHE: dict[
 _INTELLIGENCE_CACHE_LOCK = threading.Lock()
 _INTELLIGENCE_CACHE_MAX_ENTRIES = 64
 _INTELLIGENCE_CACHE_TTL_SECONDS = 30.0
+_INTELLIGENCE_BUILD_LOCKS: dict[str, threading.Lock] = {}
+_INTELLIGENCE_BUILD_LOCKS_GUARD = threading.Lock()
 
 
 def _text(value: Any) -> str:
@@ -53,7 +55,7 @@ def _intelligence_source_fingerprint(root: Path, project: str) -> str:
     """Cheap invalidation key for the persisted understanding consumed here.
 
     The product projections are derived from the enterprise knowledge asset and
-    its source registry.  Stat only those explicit artifacts instead of walking
+    its source registry. Stat only those explicit artifacts instead of walking
     the project workspace: a cache hit must stay cheaper than parsing the large
     knowledge JSON it is meant to avoid.
     """
@@ -130,6 +132,16 @@ def _store_analysis(cache_key: str, fingerprint: str, payload: dict[str, Any]) -
         )
 
 
+def _build_lock(cache_key: str) -> threading.Lock:
+    """Return the per-analysis single-flight lock for one ACL-scoped cache key."""
+    with _INTELLIGENCE_BUILD_LOCKS_GUARD:
+        lock = _INTELLIGENCE_BUILD_LOCKS.get(cache_key)
+        if lock is None:
+            lock = threading.Lock()
+            _INTELLIGENCE_BUILD_LOCKS[cache_key] = lock
+        return lock
+
+
 class ProductCatalogHttpMixin:
     """Expose product catalog and analysis products before legacy routing."""
 
@@ -175,17 +187,26 @@ class ProductCatalogHttpMixin:
         if cached is not None:
             return self._json({"ok": True, "data": cached})
 
-        asset = self._load_merged_knowledge_asset(project, root, actor)
-        if product_route == "requirement-intelligence":
-            analysis = analyze_knowledge_asset(asset)
-        elif product_route == "test-intelligence":
-            requirement_analysis = analyze_knowledge_asset(asset)
-            analysis = compose_requirement_test_linkage(
-                requirement_analysis,
-                analyze_test_intelligence(asset),
-            )
-        else:  # Defensive fail-closed guard; route parser currently makes this unreachable.
-            return self._json({"ok": False, "error": "PRODUCT_NOT_FOUND"}, 404)
-        analysis["project_id"] = project
-        _store_analysis(cache_key, fingerprint, analysis)
-        return self._json({"ok": True, "data": analysis})
+        # Cold miss single-flight: the UI can issue overlapping mounts/refreshes
+        # and the server is threaded. Without this lock every concurrent miss
+        # reparses the same large asset and reruns the same deterministic product
+        # projections. The first request builds; followers recheck and reuse it.
+        with _build_lock(cache_key):
+            cached = _cached_analysis(cache_key, fingerprint)
+            if cached is not None:
+                return self._json({"ok": True, "data": cached})
+
+            asset = self._load_merged_knowledge_asset(project, root, actor)
+            if product_route == "requirement-intelligence":
+                analysis = analyze_knowledge_asset(asset)
+            elif product_route == "test-intelligence":
+                requirement_analysis = analyze_knowledge_asset(asset)
+                analysis = compose_requirement_test_linkage(
+                    requirement_analysis,
+                    analyze_test_intelligence(asset),
+                )
+            else:  # Defensive fail-closed guard; route parser currently makes this unreachable.
+                return self._json({"ok": False, "error": "PRODUCT_NOT_FOUND"}, 404)
+            analysis["project_id"] = project
+            _store_analysis(cache_key, fingerprint, analysis)
+            return self._json({"ok": True, "data": analysis})
