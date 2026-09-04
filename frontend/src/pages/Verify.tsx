@@ -123,7 +123,7 @@ export function Verify() {
   const activeView: VerifyView = params.get('view') === 'run-control' ? 'run-control' : 'workspace';
   const { data, loading, error, refetch } = usePipelineData(project);
   const [intelligence, setIntelligence] = useState<TestIntelligenceAnalysis | null>(null);
-  const [intelligenceLoading, setIntelligenceLoading] = useState(Boolean(project));
+  const [intelligenceLoading, setIntelligenceLoading] = useState(Boolean(project && !taskId));
   const [intelligenceError, setIntelligenceError] = useState('');
   const [agentTask, setAgentTask] = useState<AgentTask | null>(null);
   const [agentEvents, setAgentEvents] = useState<AgentTaskEvent[]>([]);
@@ -139,7 +139,7 @@ export function Verify() {
   };
 
   const loadIntelligence = useCallback(async () => {
-    if (!project) {
+    if (!project || taskId) {
       setIntelligence(null);
       setIntelligenceError('');
       setIntelligenceLoading(false);
@@ -155,7 +155,7 @@ export function Verify() {
     } finally {
       setIntelligenceLoading(false);
     }
-  }, [project]);
+  }, [project, taskId]);
 
   const loadAgentTask = useCallback(async () => {
     if (!project || !taskId) {
@@ -278,7 +278,7 @@ export function Verify() {
               ? '已读取持久化 Test Intelligence；当前未绑定 Agent Task Snapshot'
               : '尚未形成可读取的验证上下文',
       state: agentTask
-        ? agentTask.sourceSnapshotStatus === 'PINNED' ? 'done' : agentTask.sourceSnapshotStatus === 'PINNED_STALE' ? 'attention' : 'attention'
+        ? agentTask.sourceSnapshotStatus === 'PINNED' ? 'done' : 'attention'
         : intelligenceLoading ? 'active' : intelligenceError ? 'attention' : intelligence ? 'done' : 'pending',
     },
     {
