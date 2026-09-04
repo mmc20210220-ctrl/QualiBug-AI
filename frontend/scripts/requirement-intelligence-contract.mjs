@@ -56,13 +56,16 @@ for (const expected of [
 ]) requireText(page, expected, 'Requirement Intelligence workspace');
 
 for (const expected of [
+  "const RUN_CONTEXT_PATHS = new Set(['/campaigns', '/coverage', '/jobs']);",
   "const isFocusedWorkspace = location.pathname === '/analyze'",
   "location.pathname === '/verify'",
   "location.pathname === '/requirements'",
   "location.pathname === '/test-intelligence'",
-  '{!isFocusedWorkspace && <RunCustomerResultSummary />}',
-  '{!isFocusedWorkspace && <RunLifecycleBanner />}',
-]) requireText(layout, expected, 'Analyze / Verify runtime isolation');
+  'const showRunContext = !isFocusedWorkspace && RUN_CONTEXT_PATHS.has(location.pathname);',
+  "const showOnboardingHandoff = location.pathname === '/integration';",
+  '{showRunContext && <RunCustomerResultSummary />}',
+  '{showRunContext && <RunLifecycleBanner />}',
+]) requireText(layout, expected, 'Focused customer journey shell');
 
 for (const expected of [
   "{ to: 'analyze', icon: 'analyze', label: '分析' }",
