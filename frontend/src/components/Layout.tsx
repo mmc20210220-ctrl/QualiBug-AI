@@ -44,7 +44,7 @@ export function Layout() {
         <div className="content">
           {!isFocusedWorkspace && <RunCustomerResultSummary />}
           {!isFocusedWorkspace && <RunLifecycleBanner />}
-          <MaterialsOnboardingHandoff />
+          {!isFocusedWorkspace && <MaterialsOnboardingHandoff />}
           <Outlet />
         </div>
       </main>
