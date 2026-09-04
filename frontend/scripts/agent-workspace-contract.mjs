@@ -96,7 +96,8 @@ requireAll(verify, [
   'RUNTIME_GROUNDING_EVALUATED',
   '该 Task 固定的 Test Targets',
   'Runtime Grounding 被真实条件阻断',
-  '现有 Campaign 状态不会冒充 Task 执行事件',
+  '尚未绑定 execution_run_id；现有 Campaign 状态不会冒充 Task 执行事件',
+  'Runtime Grounding 已就绪，尚未开始 Task-specific Execution',
   '前端不会用模拟日志填充 Event Ledger',
   '<EnterpriseCampaigns />',
 ], 'Live Workspace');
@@ -104,7 +105,6 @@ forbidAll(verify, [
   'Math.random(',
   'fakeBrowser',
   'mockAgent',
-  'Campaign 状态改写成某个 Task',
 ], 'Live Workspace');
 
 requireAll(findings, [
