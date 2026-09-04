@@ -1,5 +1,5 @@
 import { asArray, asRecord, asString } from '../lib/value-guards';
-import { API_V1_BASE, fetchJSON, resolveProjectId } from './session';
+import { API_V1_BASE, fetchJSON } from './session';
 
 export type RequirementFindingType =
   | 'requirement_conflict'
@@ -207,7 +207,7 @@ export function parseRequirementIntelligenceAnalysis(value: unknown): Requiremen
 }
 
 export async function getRequirementIntelligence(projectId: string): Promise<RequirementIntelligenceAnalysis | null> {
-  const project = await resolveProjectId(projectId);
+  const project = projectId.trim();
   if (!project) return null;
   const payload = await fetchJSON<unknown>(
     `${API_V1_BASE}/projects/${encodeURIComponent(project)}/requirement-intelligence`,

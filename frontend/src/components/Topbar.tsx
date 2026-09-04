@@ -20,21 +20,38 @@ const pageLabels: Record<string, string> = {
   '/jobs': '后台任务',
 };
 
+// 这些页面本身就消费 command-center；Topbar 只复用它们的共享快照。
+// 其他页面（尤其 /findings/:id、资料、接入、智能分析）不得为了顶部状态
+// 主动触发整包 command-center，避免轻页面被重数据拖慢。
+const COMMAND_CENTER_STATUS_PATHS = new Set([
+  '/dashboard',
+  '/findings',
+  '/evidence',
+  '/release',
+  '/campaigns',
+  '/coverage',
+  '/settings',
+]);
+
 type TopbarProps = { navOpen?: boolean; onToggleNav?: () => void };
 
 export function Topbar({ navOpen = false, onToggleNav }: TopbarProps) {
   const [params] = useSearchParams(); const location = useLocation(); const navigate = useNavigate();
   const project = params.get('project')?.trim() || '';
-  const { switchProject, navigateToProjectPath } = useProjectNavigation(); const { workspaceOptions } = useWorkspaceDirectory(); const { projectName } = useProjectSummary(project);
+  const statusDataEnabled = COMMAND_CENTER_STATUS_PATHS.has(location.pathname);
+  const statusProject = statusDataEnabled ? project : '';
+  const { switchProject, navigateToProjectPath } = useProjectNavigation(); const { workspaceOptions } = useWorkspaceDirectory(); const { projectName } = useProjectSummary(statusProject);
   const [showTenantMenu, setShowTenantMenu] = useState(false); const tenantMenuRef = useRef<HTMLDivElement | null>(null);
-  const { lastScanMinutes, scanActive, hasMaterializedMetrics, hasResolvedProject, continuousActive } = useLiveStatus(project, 15000);
+  const { lastScanMinutes, scanActive, hasMaterializedMetrics, hasResolvedProject, continuousActive } = useLiveStatus(statusProject, 15000);
   const currentPage = pageLabels[location.pathname] || '总览';
   const isProductsPage = location.pathname === '/products';
   const isRequirementsPage = location.pathname === '/requirements';
   const isTestIntelligencePage = location.pathname === '/test-intelligence';
   const isIntelligencePage = isRequirementsPage || isTestIntelligencePage;
   const resolvedWorkspaceName = workspaceOptions.find((item) => item.id === project)?.label || '';
-  const customerButtonName = project ? resolvedWorkspaceName || formatCustomerName(projectName) || formatCustomerName(project) : workspaceOptions.length === 1 ? workspaceOptions[0].label : '待选择';
+  const customerButtonName = project
+    ? resolvedWorkspaceName || (statusDataEnabled ? formatCustomerName(projectName) : '') || formatCustomerName(project)
+    : workspaceOptions.length === 1 ? workspaceOptions[0].label : '待选择';
   const hasSelectedCustomer = Boolean(project); const minutesDisplay = lastScanMinutes !== null ? (lastScanMinutes < 1 ? '刚刚' : `${lastScanMinutes} 分钟前`) : '--';
   const statusText = isProductsPage
     ? '版本已同步'
@@ -44,14 +61,16 @@ export function Topbar({ navOpen = false, onToggleNav }: TopbarProps) {
         ? (hasSelectedCustomer ? '需求审查模式' : '待选择客户')
         : !hasSelectedCustomer
           ? '待选择客户'
-          : scanActive
-            ? '检测进行中'
-            : hasMaterializedMetrics
-              ? (continuousActive ? '持续守护中' : `结果已同步 · ${minutesDisplay}`)
-              : '暂无结果';
+          : !statusDataEnabled
+            ? '客户已选择'
+            : scanActive
+              ? '检测进行中'
+              : hasMaterializedMetrics
+                ? (continuousActive ? '持续守护中' : `结果已同步 · ${minutesDisplay}`)
+                : '暂无结果';
   const dotTone = isProductsPage
     ? 'success'
-    : isIntelligencePage
+    : isIntelligencePage || !statusDataEnabled
       ? 'muted'
       : !hasSelectedCustomer
         ? 'muted'
@@ -89,7 +108,7 @@ export function Topbar({ navOpen = false, onToggleNav }: TopbarProps) {
         <div className="topbar-title-group"><span className="breadcrumb">QualiBug AI <b>/ {currentPage}</b></span><span className="topbar-subtitle">{topbarSubtitle}</span></div>
       </div>
       <div className="topbar-right">
-        <span className={`system-status ${isProductsPage || (!isIntelligencePage && project && hasResolvedProject && !scanActive && hasMaterializedMetrics) ? 'online' : ''}`}><span className={`system-status-dot tone-${dotTone}`} />{statusText}</span>
+        <span className={`system-status ${isProductsPage || (statusDataEnabled && !isIntelligencePage && project && hasResolvedProject && !scanActive && hasMaterializedMetrics) ? 'online' : ''}`}><span className={`system-status-dot tone-${dotTone}`} />{statusText}</span>
         {hasSelectedCustomer && (
           <button type="button" className="btn btn-primary topbar-run-btn" onClick={() => navigateToProjectPath(isIntelligencePage ? '/materials' : '/integration', project)}>
             <span className="topbar-run-btn-icon" aria-hidden="true">&gt;</span>

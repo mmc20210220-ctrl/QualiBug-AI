@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
-import { useFindingsData } from '../api/data';
+import { useFindingDetail } from '../api/finding-detail';
 import { FindingDecisionSnapshot } from '../components/findings/FindingDecisionSnapshot';
 import { FindingVerificationPanel } from '../components/findings/FindingVerificationPanel';
 import { AssertionDiff } from '../components/evidence/AssertionDiff';
@@ -29,11 +29,9 @@ export function FindingDetail() {
   const { id = '' } = useParams();
   const [params] = useSearchParams();
   const project = params.get('project')?.trim() || '';
-  const { findings, loading, error, refetch } = useFindingsData(project);
+  const { finding, loading, error, refetch } = useFindingDetail(project, id);
   const [replayOpen, setReplayOpen] = useState(false);
   const [copyStatus, setCopyStatus] = useState('');
-
-  const finding = findings.find((item) => item.id === id) || null;
 
   usePageTitle(finding ? finding.title : '问题详情');
 
@@ -65,7 +63,7 @@ export function FindingDetail() {
         <div className="state-panel-badge">连接异常</div>
         <h2>问题数据暂时不可用</h2>
         <p>{error}</p>
-        <button type="button" className="btn btn-primary" onClick={refetch}>重新连接</button>
+        <button type="button" className="btn btn-primary" onClick={() => void refetch()}>重新连接</button>
       </section>
     );
   }
@@ -199,7 +197,14 @@ export function FindingDetail() {
       <EvidenceDistributionTools finding={finding} project={project} />
 
       {replayOpen && (
-        <ReplayViewer projectId={project} finding={finding} onClose={() => setReplayOpen(false)} />
+        <ReplayViewer
+          projectId={project}
+          finding={finding}
+          onClose={() => {
+            setReplayOpen(false);
+            void refetch();
+          }}
+        />
       )}
     </div>
   );
