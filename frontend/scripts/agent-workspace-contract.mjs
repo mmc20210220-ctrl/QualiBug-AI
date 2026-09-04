@@ -58,10 +58,15 @@ requireAll(sidebar, [
 requireAll(agentTasks, [
   'export type AgentTaskIntent =',
   'export type AgentTaskStatus =',
+  'export type AgentGroundingBlocker =',
+  'export type AgentPinnedTestTarget =',
   'export async function createAgentTask(',
+  'export async function groundAgentTask(',
   'export async function getAgentTaskBundle(',
   'export async function cancelAgentTask(',
   '/projects/${encodeURIComponent(project)}/agent-tasks',
+  '/${encodeURIComponent(taskId)}/ground',
+  'selected_test_target_snapshot',
 ], 'Agent Task API');
 
 requireAll(home, [
@@ -79,18 +84,28 @@ requireAll(verify, [
   "label: 'Task'",
   "label: 'Understanding'",
   "label: 'Planning'",
+  "label: 'Grounding'",
   "label: 'Acting'",
   "label: 'Observing'",
   "label: 'Evaluating'",
   "label: 'Finding'",
   'getAgentTaskBundle(project, taskId)',
+  'groundAgentTask(project, taskId)',
   'Agent Event Ledger',
-  'Event Ledger 只记录后端真正发生的工作事件',
-  '`execution_run_id` 和 Runtime Grounding 仍未接入 Agent Task',
+  'UNDERSTANDING_SNAPSHOT_PINNED',
+  'RUNTIME_GROUNDING_EVALUATED',
+  '该 Task 固定的 Test Targets',
+  'Runtime Grounding 被真实条件阻断',
+  '现有 Campaign 状态不会冒充 Task 执行事件',
   '前端不会用模拟日志填充 Event Ledger',
   '<EnterpriseCampaigns />',
 ], 'Live Workspace');
-forbidAll(verify, ['Math.random(', 'fakeBrowser', 'mockAgent'], 'Live Workspace');
+forbidAll(verify, [
+  'Math.random(',
+  'fakeBrowser',
+  'mockAgent',
+  'Campaign 状态改写成某个 Task',
+], 'Live Workspace');
 
 requireAll(findings, [
   'isCustomerReadyFinding',
@@ -120,8 +135,10 @@ requireAll(analyze, [
 requireAll(frontendAgents, [
   '**Agent-first**',
   'creates a real project-scoped backend Agent Task',
+  'read-only grounding evaluation',
   'Task events are observable work events, not hidden chain-of-thought',
   'frontend must never synthesize missing Agent events',
+  'Agent Task grounding is not execution',
   'cancels only the orchestration record',
 ], 'Frontend SSOT');
 
