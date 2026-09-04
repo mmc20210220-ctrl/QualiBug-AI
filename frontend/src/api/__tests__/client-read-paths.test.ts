@@ -54,8 +54,8 @@ describe('frontend display read paths', () => {
       if (path === '/api/v1/projects/acme/command-center') {
         return Promise.resolve({ data: { project_name: 'Acme' } });
       }
-      if (path === '/api/knowledge/asset?project=acme') {
-        return Promise.resolve({ knowledge_asset: { project_id: 'acme', sources: [] } });
+      if (path === '/api/knowledge/summary?project=acme') {
+        return Promise.resolve({ project_id: 'acme', summary: { active_source_count: 0 }, sources: [] });
       }
       if (path === '/api/connectors/list?project=acme') {
         return Promise.resolve({ connectors: [] });
@@ -83,7 +83,7 @@ describe('frontend display read paths', () => {
     ]);
 
     expect(fetchJSONMock.mock.calls.map((call) => call[0])).toEqual([
-      '/api/knowledge/asset?project=acme',
+      '/api/knowledge/summary?project=acme',
       '/api/connectors/list?project=acme',
       '/api/v1/scan/preflight?project=acme',
     ]);
