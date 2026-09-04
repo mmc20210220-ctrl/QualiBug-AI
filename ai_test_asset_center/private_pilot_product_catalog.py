@@ -2,6 +2,8 @@ from __future__ import annotations
 
 """HTTP product composition and lightweight read routes before legacy routing."""
 
+import copy
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -13,6 +15,45 @@ from products.test_intelligence import analyze_test_intelligence
 
 from .product_intelligence_linkage import compose_requirement_test_linkage
 from .real_project_onboarding import _safe_project_id
+
+
+_TEST_INTELLIGENCE_CACHE: dict[str, tuple[str, dict[str, Any]]] = {}
+_TEST_INTELLIGENCE_CACHE_LOCK = threading.Lock()
+_TEST_INTELLIGENCE_CACHE_MAX_ENTRIES = 64
+_TEST_INTELLIGENCE_BUILD_LOCKS: dict[str, threading.Lock] = {}
+_TEST_INTELLIGENCE_BUILD_LOCKS_GUARD = threading.Lock()
+
+
+def _test_intelligence_build_lock(cache_key: str) -> threading.Lock:
+    with _TEST_INTELLIGENCE_BUILD_LOCKS_GUARD:
+        lock = _TEST_INTELLIGENCE_BUILD_LOCKS.get(cache_key)
+        if lock is None:
+            lock = threading.Lock()
+            _TEST_INTELLIGENCE_BUILD_LOCKS[cache_key] = lock
+        return lock
+
+
+def _test_intelligence_source_fingerprint(root: Path, project: str) -> str:
+    """Fingerprint every persisted source that can change Test Intelligence output.
+
+    The shared project fingerprint covers knowledge assets, source registries and
+    other file-backed projections. The merged knowledge loader can also consume
+    SQLite knowledge_docs, whose latest writes may still live in the WAL, so both
+    DB files participate as well. This lets hot GETs skip both asset loading and
+    analysis while still invalidating as soon as source data changes.
+    """
+    from . import private_pilot_http_routing as routing
+
+    parts = [routing._project_data_fingerprint(root, project)]
+    for filename in ("qualibug.db", "qualibug.db-wal"):
+        path = root / filename
+        try:
+            stat = path.stat()
+        except OSError:
+            parts.append(f"{filename}:missing")
+            continue
+        parts.append(f"{filename}:{stat.st_mtime_ns}:{stat.st_size}")
+    return "|".join(parts)
 
 
 def _project_analysis_request(path: str) -> tuple[str, str]:
@@ -162,6 +203,61 @@ class ProductCatalogHttpMixin:
                 )
             return render(entry, stale=False)
 
+    def _get_test_intelligence_analysis(
+        self,
+        project: str,
+        root: Path,
+        actor: Any,
+    ) -> dict[str, Any]:
+        """Return a source-fingerprint cached Test Intelligence projection.
+
+        A cache hit does not load the merged knowledge asset and does not execute
+        either analysis product. A source fingerprint change causes exactly one
+        request per tenant/project to rebuild while concurrent readers wait for and
+        then reuse that result.
+        """
+        tenant_id = self._request_tenant()
+        cache_key = f"{tenant_id}:{project}"
+        fingerprint = _test_intelligence_source_fingerprint(root, project)
+
+        def cached_analysis() -> dict[str, Any] | None:
+            with _TEST_INTELLIGENCE_CACHE_LOCK:
+                entry = _TEST_INTELLIGENCE_CACHE.get(cache_key)
+                if entry is None or entry[0] != fingerprint:
+                    return None
+                return copy.deepcopy(entry[1])
+
+        cached = cached_analysis()
+        if cached is not None:
+            return cached
+
+        build_lock = _test_intelligence_build_lock(cache_key)
+        with build_lock:
+            cached = cached_analysis()
+            if cached is not None:
+                return cached
+
+            asset = self._load_merged_knowledge_asset(project, root, actor)
+            requirement_analysis = analyze_knowledge_asset(asset)
+            analysis = compose_requirement_test_linkage(
+                requirement_analysis,
+                analyze_test_intelligence(asset),
+            )
+            analysis["project_id"] = project
+
+            with _TEST_INTELLIGENCE_CACHE_LOCK:
+                if (
+                    cache_key not in _TEST_INTELLIGENCE_CACHE
+                    and len(_TEST_INTELLIGENCE_CACHE) >= _TEST_INTELLIGENCE_CACHE_MAX_ENTRIES
+                ):
+                    oldest_key = next(iter(_TEST_INTELLIGENCE_CACHE))
+                    _TEST_INTELLIGENCE_CACHE.pop(oldest_key, None)
+                _TEST_INTELLIGENCE_CACHE[cache_key] = (
+                    fingerprint,
+                    copy.deepcopy(analysis),
+                )
+            return analysis
+
     def do_GET(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
         product_route, requested_project = _project_analysis_request(parsed.path)
@@ -198,16 +294,12 @@ class ProductCatalogHttpMixin:
                 return self._json({"ok": False, "error": "FINDING_NOT_FOUND"}, 404)
             return self._handle_finding_detail(project, finding_id, root)
 
-        asset = self._load_merged_knowledge_asset(project, root, actor)
         if product_route == "requirement-intelligence":
+            asset = self._load_merged_knowledge_asset(project, root, actor)
             analysis = analyze_knowledge_asset(asset)
+            analysis["project_id"] = project
         elif product_route == "test-intelligence":
-            requirement_analysis = analyze_knowledge_asset(asset)
-            analysis = compose_requirement_test_linkage(
-                requirement_analysis,
-                analyze_test_intelligence(asset),
-            )
+            analysis = self._get_test_intelligence_analysis(project, root, actor)
         else:  # Defensive fail-closed guard; route parser currently makes this unreachable.
             return self._json({"ok": False, "error": "PRODUCT_NOT_FOUND"}, 404)
-        analysis["project_id"] = project
         return self._json({"ok": True, "data": analysis})
