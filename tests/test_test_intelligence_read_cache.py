@@ -33,7 +33,9 @@ class _DummyCatalog(catalog.ProductCatalogHttpMixin):
 
 
 @pytest.fixture(autouse=True)
-def _clear_test_intelligence_cache() -> None:
+def _clear_intelligence_caches() -> None:
+    with catalog._REQUIREMENT_INTELLIGENCE_CACHE_LOCK:
+        catalog._REQUIREMENT_INTELLIGENCE_CACHE.clear()
     with catalog._TEST_INTELLIGENCE_CACHE_LOCK:
         catalog._TEST_INTELLIGENCE_CACHE.clear()
     with catalog._TEST_INTELLIGENCE_BUILD_LOCKS_GUARD:
@@ -41,6 +43,8 @@ def _clear_test_intelligence_cache() -> None:
     with catalog._TEST_INTELLIGENCE_DB_DIGEST_LOCK:
         catalog._TEST_INTELLIGENCE_DB_DIGEST_CACHE.clear()
     yield
+    with catalog._REQUIREMENT_INTELLIGENCE_CACHE_LOCK:
+        catalog._REQUIREMENT_INTELLIGENCE_CACHE.clear()
     with catalog._TEST_INTELLIGENCE_CACHE_LOCK:
         catalog._TEST_INTELLIGENCE_CACHE.clear()
     with catalog._TEST_INTELLIGENCE_BUILD_LOCKS_GUARD:
@@ -75,6 +79,50 @@ def _install_analysis_spies(monkeypatch: pytest.MonkeyPatch) -> dict[str, int]:
     monkeypatch.setattr(catalog, "analyze_test_intelligence", analyze_test)
     monkeypatch.setattr(catalog, "compose_requirement_test_linkage", compose)
     return calls
+
+
+def test_requirement_hot_read_reuses_analysis_without_reloading_asset(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fingerprint = ["fp-1"]
+    monkeypatch.setattr(
+        catalog,
+        "_test_intelligence_source_fingerprint",
+        lambda root, tenant_id, project: fingerprint[0],
+    )
+    calls = _install_analysis_spies(monkeypatch)
+    handler = _DummyCatalog()
+
+    first = handler._get_requirement_intelligence_analysis("acme", tmp_path, "actor")
+    first["mutated"] = True
+    second = handler._get_requirement_intelligence_analysis("acme", tmp_path, "actor")
+
+    assert handler.load_count == 1
+    assert calls == {"requirement": 1, "test": 0, "compose": 0}
+    assert second["project_id"] == "acme"
+    assert "mutated" not in second
+
+
+def test_test_intelligence_reuses_warmed_requirement_analysis(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(
+        catalog,
+        "_test_intelligence_source_fingerprint",
+        lambda root, tenant_id, project: "fp-1",
+    )
+    calls = _install_analysis_spies(monkeypatch)
+    handler = _DummyCatalog()
+
+    requirement = handler._get_requirement_intelligence_analysis("acme", tmp_path, "actor")
+    test_analysis = handler._get_test_intelligence_analysis("acme", tmp_path, "actor")
+
+    assert requirement["project_id"] == "acme"
+    assert test_analysis["project_id"] == "acme"
+    assert handler.load_count == 2
+    assert calls == {"requirement": 1, "test": 1, "compose": 1}
 
 
 def test_hot_read_reuses_analysis_without_reloading_asset(
