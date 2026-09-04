@@ -80,8 +80,7 @@ export function Topbar({ navOpen = false, onToggleNav }: TopbarProps) {
           className={`nav-toggle${navOpen ? ' active' : ''}`}
           onClick={onToggleNav}
           aria-label={navOpen ? '收起导航' : '展开导航'}
-          aria-expanded={navOpen}
-          aria-controls="primary-sidebar"
+          aria-expanded={navOpen} aria-controls="primary-sidebar"
         >
           <span /><span /><span />
         </button>
