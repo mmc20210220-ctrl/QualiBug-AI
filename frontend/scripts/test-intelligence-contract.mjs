@@ -26,8 +26,9 @@ for (const expected of [
 
 for (const expected of [
   "type AnalyzeView = 'requirements' | 'test-targets';",
-  '<TestIntelligence />',
+  '<TestIntelligence',
   '<strong>Test Targets</strong>',
+  "await ingestKnowledge(project, file, 'prd');",
 ]) requireText(analyze, expected, 'Unified Analyze Test Targets surface');
 
 for (const expected of [
