@@ -488,7 +488,7 @@ export function Materials() {
   });
   const observedTypeCount = sourceTypeCounts.size;
   const topSourceTypes = [...sourceTypeCounts.entries()]
-    .sort((left, right) => right[1] - left[0].localeCompare(right[0]))
+    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
     .slice(0, 6);
   const parseHeadline = sources.length === 0
     ? '等待接入资料'
