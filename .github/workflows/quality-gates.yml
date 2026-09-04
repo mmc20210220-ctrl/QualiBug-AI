@@ -79,6 +79,9 @@ jobs:
       - name: Unit tests
         run: npm run test
 
+      - name: Agent Workspace product contract
+        run: npm run test:agent-workspace
+
       - name: Requirement Intelligence product contract
         run: npm run test:requirement-intelligence
 

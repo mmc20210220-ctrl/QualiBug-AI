@@ -1,114 +1,69 @@
 import { useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
-import { useLiveStatus, useProjectSummary, useWorkspaceDirectory } from '../api/data';
+import { useLiveStatus, useWorkspaceDirectory } from '../api/data';
 import { logout } from '../api/client';
-import { formatCustomerName } from '../lib/customer';
 import { useProjectNavigation } from '../lib/project-navigation';
 
-const pageLabels: Record<string, string> = {
-  '/dashboard': '总览',
-  '/analyze': '分析',
-  '/verify': '验证',
-  '/requirements': '需求审查',
-  '/test-intelligence': '测试智能',
-  '/findings': '问题',
-  '/integration': '接入',
-  '/evidence': '证据',
-  '/release': '发布结论',
-  '/materials': '企业资料',
-  '/campaigns': '运行',
-  '/settings': '系统与环境',
-  '/coverage': '覆盖',
-  '/jobs': '后台任务',
+const pageLabels: Record<string, { title: string; subtitle: string }> = {
+  '/dashboard': { title: 'New Task', subtitle: '告诉 QualiBug 你想验证什么' },
+  '/verify': { title: 'Live Workspace', subtitle: '理解、计划、真实执行、证据与判断' },
+  '/findings': { title: 'Findings', subtitle: 'AI 发现并有证据支撑的问题' },
+  '/release': { title: 'Decision', subtitle: '基于真实证据形成发布建议' },
+  '/analyze': { title: 'Knowledge', subtitle: '需求、业务语义、风险与验证目标' },
+  '/integration': { title: 'Sources', subtitle: '连接企业资料、代码与被测系统' },
+  '/settings': { title: 'Settings', subtitle: '环境、安全边界与系统配置' },
+  '/requirements': { title: 'Requirement Intelligence', subtitle: '高级需求审查视图' },
+  '/test-intelligence': { title: 'Test Intelligence', subtitle: '高级验证目标视图' },
+  '/evidence': { title: 'Evidence', subtitle: '高级证据视图' },
+  '/materials': { title: 'Knowledge Sources', subtitle: '企业资料与来源管理' },
+  '/campaigns': { title: 'Run Control', subtitle: '真实运行控制与 Preflight' },
+  '/coverage': { title: 'Coverage', subtitle: '高级覆盖视图' },
+  '/jobs': { title: 'System Jobs', subtitle: '后台运行诊断' },
+  '/advanced-dashboard': { title: 'Advanced Dashboard', subtitle: '高级指标与内部诊断' },
+  '/advanced-findings': { title: 'Advanced Findings', subtitle: '高级筛选、验证历史与证据管理' },
+  '/release/details': { title: 'Decision Details', subtitle: '项目级 Gate、回归与交付守卫详情' },
 };
 
-// 这些页面本身就消费 command-center；Topbar 只复用它们的共享快照。
-// 其他页面（尤其 /findings/:id、资料、接入、Analyze）不得为了顶部状态
-// 主动触发整包 command-center，避免轻页面被重数据拖慢或污染 Intelligence 真值。
-const COMMAND_CENTER_STATUS_PATHS = new Set([
-  '/dashboard',
-  '/verify',
-  '/findings',
-  '/evidence',
-  '/release',
-  '/campaigns',
-  '/coverage',
-  '/settings',
-]);
+const STATUS_PATHS = new Set(['/dashboard', '/verify', '/findings', '/release', '/campaigns', '/coverage']);
 
 type TopbarProps = { navOpen?: boolean; onToggleNav?: () => void };
 
 export function Topbar({ navOpen = false, onToggleNav }: TopbarProps) {
-  const [params] = useSearchParams(); const location = useLocation(); const navigate = useNavigate();
+  const [params] = useSearchParams();
+  const location = useLocation();
+  const navigate = useNavigate();
   const project = params.get('project')?.trim() || '';
-  const statusDataEnabled = COMMAND_CENTER_STATUS_PATHS.has(location.pathname);
-  const statusProject = statusDataEnabled ? project : '';
-  const { switchProject, navigateToProjectPath } = useProjectNavigation(); const { workspaceOptions } = useWorkspaceDirectory(); const { projectName } = useProjectSummary(statusProject);
-  const [showTenantMenu, setShowTenantMenu] = useState(false); const tenantMenuRef = useRef<HTMLDivElement | null>(null);
-  const { lastScanMinutes, scanActive, hasMaterializedMetrics, hasResolvedProject, continuousActive } = useLiveStatus(statusProject, 15000);
-  const currentPage = pageLabels[location.pathname] || (location.pathname.startsWith('/findings/') ? '问题详情' : '总览');
-  const isProductsPage = location.pathname === '/products';
-  const isAnalyzePage = location.pathname === '/analyze';
-  const isVerifyPage = location.pathname === '/verify';
-  const isRequirementsPage = location.pathname === '/requirements';
-  const isTestIntelligencePage = location.pathname === '/test-intelligence';
-  const isIntelligencePage = isAnalyzePage || isRequirementsPage || isTestIntelligencePage;
-  const resolvedWorkspaceName = workspaceOptions.find((item) => item.id === project)?.label || '';
-  const customerButtonName = project
-    ? resolvedWorkspaceName || (statusDataEnabled ? formatCustomerName(projectName) : '') || formatCustomerName(project)
-    : workspaceOptions.length === 1 ? workspaceOptions[0].label : '待选择';
-  const hasSelectedCustomer = Boolean(project); const minutesDisplay = lastScanMinutes !== null ? (lastScanMinutes < 1 ? '刚刚' : `${lastScanMinutes} 分钟前`) : '--';
-  const statusText = isProductsPage
-    ? '版本已同步'
-    : isAnalyzePage
-      ? (hasSelectedCustomer ? '分析模式' : '待选择客户')
-      : isTestIntelligencePage
-        ? (hasSelectedCustomer ? '测试智能模式' : '待选择客户')
-        : isRequirementsPage
-          ? (hasSelectedCustomer ? '需求审查模式' : '待选择客户')
-          : !hasSelectedCustomer
-            ? '待选择客户'
-            : !statusDataEnabled
-              ? '客户已选择'
-              : scanActive
-                ? '检测进行中'
-                : hasMaterializedMetrics
-                  ? (continuousActive ? '持续守护中' : `结果已同步 · ${minutesDisplay}`)
-                  : '暂无结果';
-  const dotTone = isProductsPage
-    ? 'success'
-    : isIntelligencePage || !statusDataEnabled
-      ? 'muted'
-      : !hasSelectedCustomer
-        ? 'muted'
-        : scanActive
-          ? 'warning'
-          : hasMaterializedMetrics
-            ? 'success'
-            : 'muted';
-  const topbarSubtitle = isProductsPage
-    ? '产品策略与版本路径'
-    : isAnalyzePage
-      ? '需求审查、业务语义与验证目标'
-      : isVerifyPage
-        ? '真实运行、证据与验证闭环'
-        : isTestIntelligencePage
-          ? '测试义务、结构化设计与支持语义覆盖'
-          : isRequirementsPage
-            ? '跨资料需求审查与证据追溯'
-            : hasSelectedCustomer
-              ? customerButtonName
-              : '把风险变成可验收结论';
-  const primaryAction = isIntelligencePage
-    ? { path: '/materials', search: '', label: '管理资料' }
-    : isVerifyPage
-      ? { path: '/verify', search: 'view=run-control', label: '运行控制' }
-      : { path: '/verify', search: '', label: '开始验证' };
+  const { switchProject, navigateToProjectPath } = useProjectNavigation();
+  const { workspaceOptions } = useWorkspaceDirectory();
+  const statusEnabled = STATUS_PATHS.has(location.pathname);
+  const { scanActive, hasMaterializedMetrics } = useLiveStatus(statusEnabled ? project : '', 15_000);
+  const [showTenantMenu, setShowTenantMenu] = useState(false);
+  const tenantMenuRef = useRef<HTMLDivElement | null>(null);
+
+  const page = pageLabels[location.pathname]
+    || (location.pathname.startsWith('/findings/')
+      ? { title: 'Finding', subtitle: '证据调查与修复后验证' }
+      : { title: 'QualiBug', subtitle: 'AI Quality Engineer' });
+  const workspaceName = workspaceOptions.find((item) => item.id === project)?.label || project || '待选择';
+  const statusText = !project
+    ? '未选择客户'
+    : !statusEnabled
+      ? 'Context ready'
+      : scanActive
+        ? 'Agent working'
+        : hasMaterializedMetrics
+          ? 'Evidence synced'
+          : 'Ready';
+  const statusTone = scanActive ? 'warning' : hasMaterializedMetrics ? 'success' : 'muted';
 
   useEffect(() => {
     if (!showTenantMenu) return;
-    const closeWhenOutside = (event: MouseEvent) => { if (!tenantMenuRef.current?.contains(event.target as Node)) setShowTenantMenu(false); };
-    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') setShowTenantMenu(false); };
+    const closeWhenOutside = (event: MouseEvent) => {
+      if (!tenantMenuRef.current?.contains(event.target as Node)) setShowTenantMenu(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setShowTenantMenu(false);
+    };
     document.addEventListener('mousedown', closeWhenOutside);
     document.addEventListener('keydown', closeOnEscape);
     return () => {
@@ -117,26 +72,93 @@ export function Topbar({ navOpen = false, onToggleNav }: TopbarProps) {
     };
   }, [showTenantMenu]);
 
-  return <>
-    <header className="topbar">
+  return (
+    <header className="topbar agent-topbar">
       <div className="topbar-left">
-        <button type="button" className={`nav-toggle${navOpen ? ' active' : ''}`} onClick={onToggleNav} aria-label={navOpen ? '收起导航' : '展开导航'} aria-expanded={navOpen} aria-controls="primary-sidebar"><span /><span /><span /></button>
-        <div className="topbar-title-group"><span className="breadcrumb">QualiBug AI <b>/ {currentPage}</b></span><span className="topbar-subtitle">{topbarSubtitle}</span></div>
+        <button
+          type="button"
+          className={`nav-toggle${navOpen ? ' active' : ''}`}
+          onClick={onToggleNav}
+          aria-label={navOpen ? '收起导航' : '展开导航'}
+          aria-expanded={navOpen} aria-controls="primary-sidebar"
+        >
+          <span /><span /><span />
+        </button>
+        <div className="topbar-title-group">
+          <span className="breadcrumb"><b>{page.title}</b></span>
+          <span className="topbar-subtitle">{page.subtitle}</span>
+        </div>
       </div>
+
       <div className="topbar-right">
-        <span className={`system-status ${isProductsPage || (statusDataEnabled && !isIntelligencePage && project && hasResolvedProject && !scanActive && hasMaterializedMetrics) ? 'online' : ''}`}><span className={`system-status-dot tone-${dotTone}`} />{statusText}</span>
-        {hasSelectedCustomer && (
-          <button type="button" className="btn btn-primary topbar-run-btn" onClick={() => navigateToProjectPath(primaryAction.path, project, primaryAction.search)}>
-            <span className="topbar-run-btn-icon" aria-hidden="true">&gt;</span>
-            {primaryAction.label}
+        <span className="system-status">
+          <span className={`system-status-dot tone-${statusTone}`} />
+          {statusText}
+        </span>
+
+        {project && location.pathname !== '/dashboard' && (
+          <button
+            type="button"
+            className="btn btn-primary topbar-run-btn"
+            onClick={() => navigateToProjectPath('/dashboard', project)}
+          >
+            <span className="topbar-run-btn-icon" aria-hidden="true">＋</span>
+            新任务
           </button>
         )}
+
         <div className="tenant-switcher" ref={tenantMenuRef}>
-          <button type="button" className={`tenant-button${showTenantMenu ? ' open' : ''}`} onClick={() => setShowTenantMenu((value) => !value)} aria-haspopup="menu" aria-expanded={showTenantMenu} aria-controls="tenant-switcher-menu"><span className="tenant-button-label">客户</span><strong>{customerButtonName}</strong><span className="tenant-button-caret" aria-hidden="true">▾</span></button>
-          {showTenantMenu && <div id="tenant-switcher-menu" className="tenant-menu" role="menu" aria-label="切换客户工作区">{workspaceOptions.length > 0 ? workspaceOptions.map((workspace) => <button key={workspace.id} type="button" role="menuitem" className={`tenant-option${workspace.id === project ? ' is-active' : ''}`} onClick={() => { switchProject(workspace.id); setShowTenantMenu(false); }}><span className="tenant-option-copy"><span className="tenant-option-label">{workspace.label}</span><span className="tenant-option-meta">切换当前客户工作区</span></span>{workspace.id === project && <span className="tenant-option-check">当前</span>}</button>) : <button type="button" className="tenant-option" disabled><span className="tenant-option-copy"><span className="tenant-option-label">暂无客户</span><span className="tenant-option-meta">请先在设置页新建或导入客户</span></span></button>}</div>}
+          <button
+            type="button"
+            className={`tenant-button${showTenantMenu ? ' open' : ''}`}
+            onClick={() => setShowTenantMenu((value) => !value)}
+            aria-haspopup="menu"
+            aria-expanded={showTenantMenu}
+            aria-controls="tenant-switcher-menu"
+          >
+            <span className="tenant-button-label">Workspace</span>
+            <strong>{workspaceName}</strong>
+            <span className="tenant-button-caret" aria-hidden="true">▾</span>
+          </button>
+          {showTenantMenu && (
+            <div id="tenant-switcher-menu" className="tenant-menu" role="menu" aria-label="切换客户工作区">
+              {workspaceOptions.length > 0 ? workspaceOptions.map((workspace) => (
+                <button
+                  key={workspace.id}
+                  type="button"
+                  role="menuitem"
+                  className={`tenant-option${workspace.id === project ? ' is-active' : ''}`}
+                  onClick={() => { switchProject(workspace.id); setShowTenantMenu(false); }}
+                >
+                  <span className="tenant-option-copy">
+                    <span className="tenant-option-label">{workspace.label}</span>
+                    <span className="tenant-option-meta">切换当前客户工作区</span>
+                  </span>
+                  {workspace.id === project && <span className="tenant-option-check">当前</span>}
+                </button>
+              )) : (
+                <button type="button" className="tenant-option" disabled>
+                  <span className="tenant-option-copy">
+                    <span className="tenant-option-label">暂无客户</span>
+                    <span className="tenant-option-meta">请先在设置页新建或导入客户</span>
+                  </span>
+                </button>
+              )}
+            </div>
+          )}
         </div>
-        <button type="button" className="btn btn-secondary topbar-logout-btn" onClick={() => { logout(); navigate(`/login?next=${encodeURIComponent(`${location.pathname}${location.search}`)}`, { replace: true }); }}>退出</button>
+
+        <button
+          type="button"
+          className="btn btn-secondary topbar-logout-btn"
+          onClick={() => {
+            logout();
+            navigate(`/login?next=${encodeURIComponent(`${location.pathname}${location.search}`)}`, { replace: true });
+          }}
+        >
+          退出
+        </button>
       </div>
     </header>
-  </>;
+  );
 }

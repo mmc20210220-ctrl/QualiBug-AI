@@ -271,8 +271,15 @@ requireAll(advancedToolsSection, [
 ], 'advanced tools and governance section');
 
 requireAll(sidebar, [
-  "label: '主导航'",
-  '少配置 · 自动理解 · 真实验证',
-], 'sidebar');
+  "label: 'Agent'",
+  "label: 'Context'",
+  "label: '新任务'",
+  "label: '工作台'",
+  "label: 'Findings'",
+  "label: 'Decision'",
+  "label: 'Knowledge'",
+  'AI Quality Engineer',
+  '用户给出目标，QualiBug 负责理解、真实验证、收集证据并形成决策。',
+], 'agent-first sidebar');
 
 process.stdout.write('autonomous UX contract: OK\n');

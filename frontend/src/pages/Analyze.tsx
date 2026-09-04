@@ -13,11 +13,12 @@ type AnalyzeView = 'requirements' | 'test-targets';
 const PRD_ACCEPT = '.pdf,.doc,.docx,.md,.txt,.ppt,.pptx';
 
 export function Analyze() {
-  usePageTitle('分析');
+  usePageTitle('Knowledge');
   const [params, setParams] = useSearchParams();
   const { navigateToProjectPath } = useProjectNavigation();
   const toast = useToast();
   const project = params.get('project')?.trim() || '';
+  const goal = params.get('goal')?.trim() || '';
   const activeView: AnalyzeView = params.get('view') === 'test-targets' ? 'test-targets' : 'requirements';
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
   const [uploading, setUploading] = useState(false);
@@ -65,21 +66,23 @@ export function Analyze() {
     <div className="analyze-workspace">
       <header className="analyze-header">
         <div>
-          <span className="panel-kicker">Analyze · 软件理解</span>
-          <h1>先理解软件应该如何工作，再决定需要验证什么</h1>
+          <span className="panel-kicker">Knowledge · Understanding</span>
+          <h1>QualiBug 正在建立“软件应该怎样工作”的上下文</h1>
           <p>
-            只给 QualiBug 一份 PRD 也可以开始：系统先审查需求冲突、定义缺失与业务歧义，
-            再把有来源证据的业务语义转化为验证目标；连接测试环境之后才进入真实 Verify。
+            这里不是需要用户维护的需求管理模块，而是 Agent 的理解表面：企业资料被持久化为可追溯知识，
+            需求冲突、业务语义和 Test Targets 都从真实来源派生。连接运行环境后，Agent 才进入 Live Workspace 做真实验证。
           </p>
         </div>
-        <button
-          type="button"
-          className="btn btn-secondary"
-          onClick={() => navigateToProjectPath('/materials', project)}
-        >
-          管理全部资料
-        </button>
+        <button type="button" className="btn btn-secondary" onClick={() => navigateToProjectPath('/materials', project)}>管理全部资料</button>
       </header>
+
+      {goal && (
+        <section className="analyze-goal-context" aria-label="当前 Agent 任务上下文">
+          <span>Current goal</span>
+          <strong>{goal}</strong>
+          <p>该文本只作为当前工作目标上下文；需求真值与 Test Targets 仍只来自已接入资料和后端 Intelligence API。</p>
+        </section>
+      )}
 
       <section className="analyze-ingest" aria-label="上传 PRD 开始分析">
         <div
@@ -89,43 +92,30 @@ export function Analyze() {
         >
           <div className="analyze-drop-icon" aria-hidden="true">＋</div>
           <div className="analyze-drop-copy">
-            <span>从 PRD 开始</span>
-            <strong>{uploading ? '正在导入 PRD…' : '拖入一份 PRD，立即开始需求分析'}</strong>
-            <p>{project ? '支持 PDF / Word / Markdown / Text / PowerPoint；上传后进入同一企业知识主链。' : '先在右上角选择客户项目，然后即可上传 PRD。'}</p>
+            <span>Give the agent context</span>
+            <strong>{uploading ? '正在导入 PRD…' : '拖入一份 PRD，让 QualiBug 先理解系统'}</strong>
+            <p>{project ? '支持 PDF / Word / Markdown / Text / PowerPoint；上传后进入同一企业知识资产主链。' : '先在右上角选择客户项目，然后即可上传 PRD。'}</p>
           </div>
-          <button
-            type="button"
-            className="btn btn-primary"
-            disabled={!project || uploading}
-            onClick={() => uploadInputRef.current?.click()}
-          >
+          <button type="button" className="btn btn-primary" disabled={!project || uploading} onClick={() => uploadInputRef.current?.click()}>
             {uploading ? '正在上传…' : '选择 PRD'}
           </button>
           <input ref={uploadInputRef} type="file" accept={PRD_ACCEPT} hidden onChange={handleFileChange} />
         </div>
         <div className="analyze-ingest-next">
-          <span>Analyze 到 Verify</span>
-          <strong>PRD 分析本身就有价值，不要求先有可执行环境</strong>
-          <p>需求结论与 Test Targets 可以先交付；只有真实 Runtime Grounding 完成后，Verify 才会显示 Agent Execution 与 Evidence。</p>
+          <span>Understanding before execution</span>
+          <strong>只有 PRD，也可以先交付需求风险和验证目标</strong>
+          <p>没有 Runtime Grounding 时不会声称已经执行测试；Knowledge 与真实 Verify 是连续主链，但不是同一种真值。</p>
         </div>
       </section>
 
-      <nav className="analyze-tabs" aria-label="分析工作区">
-        <button
-          type="button"
-          className={activeView === 'requirements' ? 'active' : ''}
-          onClick={() => selectView('requirements')}
-        >
-          <strong>Requirements</strong>
-          <span>冲突、缺失、歧义与就绪状态</span>
+      <nav className="analyze-tabs" aria-label="Knowledge 工作区">
+        <button type="button" className={activeView === 'requirements' ? 'active' : ''} onClick={() => selectView('requirements')}>
+          <strong>Understanding</strong>
+          <span>冲突、缺失、歧义与需求就绪状态</span>
         </button>
-        <button
-          type="button"
-          className={activeView === 'test-targets' ? 'active' : ''}
-          onClick={() => selectView('test-targets')}
-        >
+        <button type="button" className={activeView === 'test-targets' ? 'active' : ''} onClick={() => selectView('test-targets')}>
           <strong>Test Targets</strong>
-          <span>必须验证什么，以及当前验证设计</span>
+          <span>Agent 需要验证什么，以及当前验证设计</span>
         </button>
       </nav>
 

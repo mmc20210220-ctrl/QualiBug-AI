@@ -4,6 +4,9 @@ import { ToastProvider } from './components/Toast';
 import { ScrollToTop } from './components/ScrollToTop';
 import { AuthProvider } from './components/AuthProvider';
 import { useAuth } from './components/useAuth';
+import { AgentHome } from './pages/AgentHome';
+import { AgentFindings } from './pages/AgentFindings';
+import { AgentDecision } from './pages/AgentDecision';
 import { Dashboard } from './pages/Dashboard';
 import { Analyze } from './pages/Analyze';
 import { Verify } from './pages/Verify';
@@ -26,7 +29,6 @@ function RequireAuth() {
   const location = useLocation();
   const { status, error, refresh } = useAuth();
 
-  // 校验中：先展示可感知的加载态，避免把「还没校验完」误判成未登录并跳登录页。
   if (status === 'checking') {
     return (
       <div className="auth-gate" role="status" aria-live="polite">
@@ -36,7 +38,6 @@ function RequireAuth() {
     );
   }
 
-  // 后端不可用 / 5xx：这是 error，不是未登录，禁止跳登录页吞掉真实故障。
   if (status === 'error') {
     return (
       <div className="auth-gate auth-gate-error" role="alert">
@@ -67,38 +68,43 @@ export default function App() {
         <BrowserRouter>
           <ScrollToTop />
           <Routes>
-          <Route path="/login" element={<Login />} />
-          <Route path="/shared-evidence" element={<SharedEvidence />} />
-          <Route element={<RequireAuth />}>
-            <Route element={<Layout />}>
-              <Route path="/" element={<PreserveSearchRedirect to="/dashboard" />} />
-              {/* AI-native 客户主链：总览 → 分析 → 验证 → 问题 → 发布 */}
-              <Route path="/dashboard" element={<Dashboard />} />
-              <Route path="/analyze" element={<Analyze />} />
-              <Route path="/verify" element={<Verify />} />
-              <Route path="/findings" element={<Findings />} />
-              <Route path="/findings/:id" element={<FindingDetail />} />
-              <Route path="/release" element={<ReleaseGate />} />
-              <Route path="/integration" element={<Integration />} />
-              <Route path="/settings" element={<Settings />} />
-              {/* 兼容与高级页面：保留原能力与 URL，主导航不再按内部流水线暴露。 */}
-              <Route path="/requirements" element={<RequirementIntelligence />} />
-              <Route path="/test-intelligence" element={<TestIntelligence />} />
-              <Route path="/evidence" element={<EvidenceChain />} />
-              <Route path="/materials" element={<Materials />} />
-              <Route path="/jobs" element={<SystemJobs />} />
-              <Route path="/campaigns" element={<EnterpriseCampaigns />} />
-              <Route path="/coverage" element={<CoverageMatrix />} />
-              {/* 向后兼容重定向：必须保留 project 等查询上下文 */}
-              <Route path="/behavior-space" element={<PreserveSearchRedirect to="/coverage" />} />
-              <Route path="/test-tasks" element={<PreserveSearchRedirect to="/campaigns" />} />
-              <Route path="/clues" element={<PreserveSearchRedirect to="/settings" />} />
-              <Route path="/products" element={<PreserveSearchRedirect to="/analyze" />} />
-              {/* 未知旧链接保持 fail-safe：回到质量总览，不伪造页面状态。 */}
-              <Route path="*" element={<PreserveSearchRedirect to="/dashboard" />} />
+            <Route path="/login" element={<Login />} />
+            <Route path="/shared-evidence" element={<SharedEvidence />} />
+            <Route element={<RequireAuth />}>
+              <Route element={<Layout />}>
+                <Route path="/" element={<PreserveSearchRedirect to="/dashboard" />} />
+
+                {/* Agent-first 主链：New Task → Live Workspace → Findings → Decision。 */}
+                <Route path="/dashboard" element={<AgentHome />} />
+                <Route path="/verify" element={<Verify />} />
+                <Route path="/findings" element={<AgentFindings />} />
+                <Route path="/findings/:id" element={<FindingDetail />} />
+                <Route path="/release" element={<AgentDecision />} />
+
+                {/* Knowledge / Understanding 是 Agent 能力，不再作为客户第一层流水线导航。 */}
+                <Route path="/analyze" element={<Analyze />} />
+                <Route path="/integration" element={<Integration />} />
+                <Route path="/settings" element={<Settings />} />
+
+                {/* 兼容与高级页面：保留既有能力和 URL，不复制第二套数据模型。 */}
+                <Route path="/advanced-dashboard" element={<Dashboard />} />
+                <Route path="/advanced-findings" element={<Findings />} />
+                <Route path="/release/details" element={<ReleaseGate />} />
+                <Route path="/requirements" element={<RequirementIntelligence />} />
+                <Route path="/test-intelligence" element={<TestIntelligence />} />
+                <Route path="/evidence" element={<EvidenceChain />} />
+                <Route path="/materials" element={<Materials />} />
+                <Route path="/jobs" element={<SystemJobs />} />
+                <Route path="/campaigns" element={<EnterpriseCampaigns />} />
+                <Route path="/coverage" element={<CoverageMatrix />} />
+                <Route path="/behavior-space" element={<PreserveSearchRedirect to="/coverage" />} />
+                <Route path="/test-tasks" element={<PreserveSearchRedirect to="/campaigns" />} />
+                <Route path="/clues" element={<PreserveSearchRedirect to="/settings" />} />
+                <Route path="/products" element={<PreserveSearchRedirect to="/analyze" />} />
+                <Route path="*" element={<PreserveSearchRedirect to="/dashboard" />} />
+              </Route>
             </Route>
-          </Route>
-        </Routes>
+          </Routes>
         </BrowserRouter>
       </AuthProvider>
     </ToastProvider>

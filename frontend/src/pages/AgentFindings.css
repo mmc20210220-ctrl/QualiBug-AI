@@ -1,0 +1,187 @@
+.agent-findings {
+  display: grid;
+  gap: 18px;
+  max-width: 1480px;
+  margin: 0 auto;
+}
+
+.agent-findings-hero {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 26px;
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--surface) 96%, var(--primary) 4%), var(--surface));
+}
+
+.agent-findings-hero.has-blocker {
+  border-color: color-mix(in srgb, var(--danger) 28%, var(--line));
+  background: linear-gradient(135deg, color-mix(in srgb, var(--danger) 5%, var(--surface)), var(--surface));
+}
+
+.agent-findings-kicker,
+.agent-findings-section-head span {
+  color: var(--primary);
+  font-size: 10px;
+  font-weight: 850;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+}
+
+.agent-findings-hero.has-blocker .agent-findings-kicker {
+  color: var(--danger);
+}
+
+.agent-findings-hero h1 {
+  max-width: 840px;
+  margin: 6px 0 8px;
+  font-size: clamp(28px, 4vw, 44px);
+  line-height: 1.08;
+  letter-spacing: -.03em;
+}
+
+.agent-findings-hero p {
+  max-width: 900px;
+  margin: 0;
+  color: var(--subtle);
+  line-height: 1.7;
+}
+
+.agent-findings-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.agent-findings-priority,
+.agent-findings-list {
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: var(--surface);
+}
+
+.agent-findings-section-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+
+.agent-findings-section-head h2 {
+  margin: 4px 0 0;
+  font-size: 20px;
+}
+
+.agent-findings-section-head small,
+.agent-findings-section-head a {
+  color: var(--subtle);
+  font-size: 11px;
+}
+
+.agent-findings-section-head a {
+  color: var(--primary);
+  font-weight: 750;
+  text-decoration: none;
+}
+
+.agent-findings-priority-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.agent-findings-priority-grid button {
+  appearance: none;
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--surface) 97%, var(--primary) 3%);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.agent-findings-priority-grid button:hover {
+  border-color: color-mix(in srgb, var(--primary) 36%, var(--line));
+  transform: translateY(-1px);
+}
+
+.agent-findings-priority-grid strong {
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.agent-findings-priority-grid p,
+.agent-findings-boundary p,
+.agent-findings-empty p {
+  margin: 0;
+  color: var(--subtle);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.agent-findings-priority-grid small {
+  color: var(--subtle);
+  font-size: 10px;
+}
+
+.agent-findings-boundary {
+  padding: 14px 16px;
+  border: 1px solid color-mix(in srgb, var(--warning) 32%, var(--line));
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--warning) 6%, var(--surface));
+}
+
+.agent-findings-boundary strong {
+  display: block;
+  margin-bottom: 4px;
+}
+
+.agent-findings-empty {
+  display: grid;
+  gap: 9px;
+  padding: 28px 18px;
+  border: 1px dashed var(--line);
+  border-radius: 14px;
+  text-align: center;
+}
+
+.agent-findings-empty > div {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+@media (max-width: 980px) {
+  .agent-findings-priority-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 760px) {
+  .agent-findings-hero,
+  .agent-findings-section-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .agent-findings-actions,
+  .agent-findings-empty > div {
+    flex-direction: column;
+  }
+
+  .agent-findings-actions .btn,
+  .agent-findings-empty .btn {
+    width: 100%;
+  }
+}

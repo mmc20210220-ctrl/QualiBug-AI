@@ -46,6 +46,7 @@ for (const script of [
   "brand:check",
   "test:brand-mark",
   "test:autonomous-ux",
+  "test:agent-workspace",
   "test:frontend-finalization",
   "test:requirement-intelligence",
   "test:test-intelligence",

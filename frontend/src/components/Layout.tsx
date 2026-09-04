@@ -5,6 +5,7 @@ import { RunCustomerResultSummary } from './run/RunCustomerResultSummary';
 import { RunLifecycleBanner } from './run/RunLifecycleBanner';
 import { Sidebar } from './Sidebar';
 import { Topbar } from './Topbar';
+import './AgentShell.css';
 
 const RUN_CONTEXT_PATHS = new Set(['/campaigns', '/coverage', '/jobs']);
 
@@ -41,7 +42,7 @@ export function Layout() {
   }, [mobileNavOpen]);
 
   return (
-    <div className="shell">
+    <div className="shell agent-shell">
       <Sidebar mobileOpen={mobileNavOpen} onClose={() => setMobileNavOpen(false)} />
       <main className="main">
         <Topbar navOpen={mobileNavOpen} onToggleNav={() => setMobileNavOpen((open) => !open)} />
