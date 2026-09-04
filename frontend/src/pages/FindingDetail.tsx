@@ -197,7 +197,14 @@ export function FindingDetail() {
       <EvidenceDistributionTools finding={finding} project={project} />
 
       {replayOpen && (
-        <ReplayViewer projectId={project} finding={finding} onClose={() => setReplayOpen(false)} />
+        <ReplayViewer
+          projectId={project}
+          finding={finding}
+          onClose={() => {
+            setReplayOpen(false);
+            void refetch();
+          }}
+        />
       )}
     </div>
   );
