@@ -84,12 +84,14 @@ for (const expected of ['.ti-design', '.ti-design-grid', '.ti-design-status']) {
 }
 
 for (const expected of [
+  "const RUN_CONTEXT_PATHS = new Set(['/campaigns', '/coverage', '/jobs']);",
   "const isFocusedWorkspace = location.pathname === '/analyze'",
   "location.pathname === '/verify'",
   "location.pathname === '/test-intelligence'",
-  '{!isFocusedWorkspace && <RunCustomerResultSummary />}',
-  '{!isFocusedWorkspace && <RunLifecycleBanner />}',
-]) requireText(layout, expected, 'Analyze / Verify runtime isolation');
+  'const showRunContext = !isFocusedWorkspace && RUN_CONTEXT_PATHS.has(location.pathname);',
+  '{showRunContext && <RunCustomerResultSummary />}',
+  '{showRunContext && <RunLifecycleBanner />}',
+]) requireText(layout, expected, 'Focused Analyze / Verify shell');
 
 for (const expected of [
   "{ to: 'analyze', icon: 'analyze', label: '分析' }",
