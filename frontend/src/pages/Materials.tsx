@@ -139,7 +139,7 @@ export function Materials() {
         }
       });
       return previews;
-    });
+    }).catch((): Record<string, ConnectorResourceInventory> => ({}));
 
     try {
       const [inventory, asset, catalog] = await Promise.all([
@@ -168,9 +168,6 @@ export function Materials() {
         if (generation === refreshGenerationRef.current) {
           setResourcePreviews(previews);
         }
-      }).catch(() => {
-        // Connector resource previews are supplemental; a preview failure must not
-        // turn the whole Materials page into a failed/blocked first paint.
       });
     } catch (error: unknown) {
       if (generation === refreshGenerationRef.current) {
@@ -491,7 +488,7 @@ export function Materials() {
   });
   const observedTypeCount = sourceTypeCounts.size;
   const topSourceTypes = [...sourceTypeCounts.entries()]
-    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+    .sort((left, right) => right[1] - left[0].localeCompare(right[0]))
     .slice(0, 6);
   const parseHeadline = sources.length === 0
     ? '等待接入资料'
