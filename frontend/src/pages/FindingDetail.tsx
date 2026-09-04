@@ -12,6 +12,7 @@ import { buildProjectPath } from '../lib/project-navigation';
 import { buildFindingEvidencePackageText } from '../lib/finding-evidence-package';
 import { usePageTitle } from '../lib/page-title';
 import type { Finding } from '../types';
+import './FindingDetail.css';
 
 function formatTimestamp(value: string | undefined): string {
   const text = String(value || '').trim();
@@ -51,8 +52,8 @@ export function FindingDetail() {
   if (loading) {
     return (
       <div>
-        <div className="page-header"><div><Skeleton h={14} w={120} br={4} /><div style={{ marginTop: 12 }}><Skeleton h={28} w="55%" br={6} /></div></div></div>
-        <section className="card"><Skeleton h={16} w="80%" br={4} /><div style={{ marginTop: 12 }}><Skeleton h={14} w="60%" br={4} /></div></section>
+        <div className="page-header"><div><Skeleton h={14} w={120} br={4} /><div className="finding-skeleton-title"><Skeleton h={28} w="55%" br={6} /></div></div></div>
+        <section className="card"><Skeleton h={16} w="80%" br={4} /><div className="finding-skeleton-line"><Skeleton h={14} w="60%" br={4} /></div></section>
       </div>
     );
   }
@@ -84,117 +85,121 @@ export function FindingDetail() {
   const reproduction = finding.reproduction;
   const comparison = finding.expected_actual_comparison;
   const hasExpectedSource = Boolean(comparison?.expected || finding.expected);
+  const businessSummary = finding.business_summary || finding.business_impact?.summary || '当前问题未上报业务摘要，请结合预期、实际与证据判断。';
 
   return (
-    <div className="finding-detail">
-      <div className="page-header">
-        <div>
-          <span className="panel-kicker">问题详情</span>
-          <h1>
+    <div className="finding-detail finding-investigation">
+      <header className="finding-investigation-header">
+        <div className="finding-investigation-title">
+          <span className="panel-kicker">Finding · Evidence-backed Investigation</span>
+          <div className="finding-investigation-heading">
             <span className={`severity-badge ${finding.severity.toLowerCase()}`}>{finding.severity}</span>
-            {finding.title}
-          </h1>
-          <p className="muted">
-            模块 {moduleName(finding)} · 发现时间 {formatTimestamp(finding.timestamp)}
-            {finding.regression?.last_run_at ? ` · 最近回归 ${formatTimestamp(finding.regression.last_run_at)}` : ''}
-          </p>
+            <h1>{finding.title}</h1>
+          </div>
+          <p>{businessSummary}</p>
+          <div className="finding-investigation-meta">
+            <span>模块 <strong>{moduleName(finding)}</strong></span>
+            <span>发现 <strong>{formatTimestamp(finding.timestamp)}</strong></span>
+            <span>证据 <strong>{chain.length} 条</strong></span>
+            {finding.regression?.last_run_at && <span>最近验证 <strong>{formatTimestamp(finding.regression.last_run_at)}</strong></span>}
+          </div>
         </div>
-        <div className="settings-actions">
-          <button type="button" className="btn btn-primary" onClick={() => void copyProblem()}>复制问题</button>
-          <button type="button" className="btn btn-secondary" onClick={() => setReplayOpen(true)}>重新验证</button>
+        <div className="finding-investigation-actions">
+          <button type="button" className="btn btn-primary" onClick={() => setReplayOpen(true)}>重新验证</button>
+          <button type="button" className="btn btn-secondary" onClick={() => void copyProblem()}>复制证据包</button>
           <Link className="btn btn-secondary" to={backHref}>返回问题列表</Link>
         </div>
-      </div>
+      </header>
 
       {copyStatus && <div className="settings-inline-feedback" role="status">{copyStatus}</div>}
 
       <FindingDecisionSnapshot finding={finding} />
 
-      <section className="card mt-3" aria-label="发生了什么">
-        <div className="settings-card-head">
-          <div>
-            <span className="panel-kicker">发生了什么</span>
-            <h3>用业务语言复述已捕获的异常</h3>
-          </div>
-        </div>
-        <p>{finding.business_summary || finding.business_impact?.summary || '当前问题未上报业务摘要，请结合下方预期与实际判断。'}</p>
-      </section>
-
-      <section className="card mt-3" aria-label="预期与实际">
-        <div className="settings-card-head">
-          <div>
-            <span className="panel-kicker">预期 vs 实际</span>
-            <h3>判断问题为什么成立</h3>
-          </div>
-        </div>
-        {hasExpectedSource ? (
-          <AssertionDiff comparison={comparison} expected={finding.expected} actual={finding.actual} />
-        ) : (
-          <p className="settings-inline-feedback">预期行为：当前没有可靠业务规则来源，QualiBug 不会根据前端猜测补全预期。</p>
-        )}
-      </section>
-
-      <section className="card mt-3" aria-label="复现步骤">
-        <div className="settings-card-head">
-          <div>
-            <span className="panel-kicker">复现</span>
-            <h3>真实执行轨迹中的复现步骤</h3>
-          </div>
-        </div>
-        {reproduction?.steps?.length ? (
-          <ol style={{ paddingLeft: 18, margin: 0, fontSize: 13, lineHeight: 1.9 }}>
-            {reproduction.steps.map((step, index) => <li key={index}>{step}</li>)}
-          </ol>
-        ) : (
-          <p className="settings-inline-feedback">复现步骤：未上报。复现步骤必须来自真实执行轨迹，QualiBug 不会生成不存在的步骤。</p>
-        )}
-      </section>
-
-      <section className="card mt-3" aria-label="证据链">
-        <div className="settings-card-head">
-          <div>
-            <span className="panel-kicker">证据</span>
-            <h3>证据链与原始证据</h3>
-          </div>
-        </div>
-
-        {chain.length > 0 ? (
-          <EvidenceTimeline steps={chain} />
-        ) : (
-          <p className="settings-inline-feedback">当前问题没有可展示的 evidence_chain；不会用摘要替代缺失的真实证据链。</p>
-        )}
-
-        {raw && (
-          <details className="settings-auth-section mt-3">
-            <summary><strong>原始证据</strong> <span className="muted">Request / Response / DB / 日志 / 轨迹</span></summary>
-            <div className="settings-grid mt-3">
-              <div>
-                <span className="muted">请求</span>
-                <p>{raw.request_raw?.method && raw.request_raw?.path ? `${raw.request_raw.method} ${raw.request_raw.path}` : '未上报'}</p>
-              </div>
-              <div>
-                <span className="muted">响应</span>
-                <p>{raw.response_raw?.status_code ? `HTTP ${raw.response_raw.status_code}` : '未上报'}</p>
-              </div>
-              <div>
-                <span className="muted">数据库</span>
-                <p>{raw.db_snapshot?.table ? `${raw.db_snapshot.table}.${raw.db_snapshot.column || ''}` : '未上报'}</p>
-              </div>
-              <div>
-                <span className="muted">Trace</span>
-                <p>{raw.logs?.trace_id || raw.execution_trace?.evidence_hash || '未上报'}</p>
-              </div>
+      <div className="finding-investigation-grid">
+        <main className="finding-investigation-main">
+          <section className="finding-investigation-card" aria-label="预期与实际">
+            <div className="finding-investigation-card-head">
+              <span className="panel-kicker">Expected vs Actual</span>
+              <h2>为什么这是一个问题</h2>
+              <p>只使用已有业务规则来源与真实运行结果；缺少可靠预期时不会由前端猜测补齐。</p>
             </div>
-            {raw.has_real_evidence === false && (
-              <p className="settings-inline-feedback">后端明确标记该问题当前没有真实运行证据；这里如实展示，不构造证据。</p>
+            {hasExpectedSource ? (
+              <AssertionDiff comparison={comparison} expected={finding.expected} actual={finding.actual} />
+            ) : (
+              <p className="settings-inline-feedback">预期行为：当前没有可靠业务规则来源，QualiBug 不会根据前端猜测补全预期。</p>
             )}
-          </details>
-        )}
+          </section>
+
+          <section className="finding-investigation-card" aria-label="复现步骤">
+            <div className="finding-investigation-card-head">
+              <span className="panel-kicker">Reproduction</span>
+              <h2>真实执行轨迹中的复现步骤</h2>
+            </div>
+            {reproduction?.steps?.length ? (
+              <ol className="finding-reproduction-list">
+                {reproduction.steps.map((step, index) => <li key={index}><span>{index + 1}</span><p>{step}</p></li>)}
+              </ol>
+            ) : (
+              <p className="settings-inline-feedback">复现步骤：未上报。复现步骤必须来自真实执行轨迹，QualiBug 不会生成不存在的步骤。</p>
+            )}
+          </section>
+
+          <section className="finding-investigation-card evidence-card" aria-label="证据链">
+            <div className="finding-investigation-card-head evidence-heading">
+              <div>
+                <span className="panel-kicker">Evidence</span>
+                <h2>完整证据链</h2>
+              </div>
+              <span className="finding-evidence-count">{chain.length} 条真实证据</span>
+            </div>
+            {chain.length > 0 ? (
+              <EvidenceTimeline steps={chain} />
+            ) : (
+              <p className="settings-inline-feedback">当前问题没有可展示的 evidence_chain；不会用摘要替代缺失的真实证据链。</p>
+            )}
+          </section>
+        </main>
+
+        <aside className="finding-investigation-side">
+          <section className="finding-side-card">
+            <span className="panel-kicker">Business Impact</span>
+            <h3>业务影响</h3>
+            <p>{finding.business_impact?.summary || finding.business_summary || '后端未上报业务影响摘要。'}</p>
+            <div className="finding-side-facts">
+              <div><span>影响模块</span><strong>{moduleName(finding)}</strong></div>
+              <div><span>紧急程度</span><strong>{finding.business_impact?.urgency || '未上报'}</strong></div>
+              <div><span>证据质量</span><strong>{finding.evidence_quality?.label || '未上报'}</strong></div>
+              <div><span>置信度</span><strong>{typeof finding.confidence === 'number' ? `${finding.confidence}%` : '未上报'}</strong></div>
+            </div>
+          </section>
+
+          <section className="finding-side-card">
+            <span className="panel-kicker">Raw Evidence</span>
+            <h3>运行时观测</h3>
+            {raw ? (
+              <div className="finding-raw-evidence">
+                <div><span>Request</span><strong>{raw.request_raw?.method && raw.request_raw?.path ? `${raw.request_raw.method} ${raw.request_raw.path}` : '未上报'}</strong></div>
+                <div><span>Response</span><strong>{raw.response_raw?.status_code ? `HTTP ${raw.response_raw.status_code}` : '未上报'}</strong></div>
+                <div><span>Database</span><strong>{raw.db_snapshot?.table ? `${raw.db_snapshot.table}.${raw.db_snapshot.column || ''}` : '未上报'}</strong></div>
+                <div><span>Trace</span><strong>{raw.logs?.trace_id || raw.execution_trace?.evidence_hash || '未上报'}</strong></div>
+                {raw.has_real_evidence === false && <p className="settings-inline-feedback">后端明确标记当前没有真实运行证据；这里如实展示，不构造证据。</p>}
+              </div>
+            ) : (
+              <p className="settings-inline-feedback">原始运行证据未上报。</p>
+            )}
+          </section>
+
+          <section className="finding-side-card verification-card">
+            <span className="panel-kicker">Verification</span>
+            <h3>修复后验证状态</h3>
+            <FindingVerificationPanel finding={finding} />
+          </section>
+        </aside>
+      </div>
+
+      <section className="finding-evidence-tools">
+        <EvidenceDistributionTools finding={finding} project={project} />
       </section>
-
-      <FindingVerificationPanel finding={finding} />
-
-      <EvidenceDistributionTools finding={finding} project={project} />
 
       {replayOpen && (
         <ReplayViewer

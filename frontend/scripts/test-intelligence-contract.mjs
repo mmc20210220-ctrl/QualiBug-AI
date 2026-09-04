@@ -7,6 +7,8 @@ const assert = (condition, message) => { if (!condition) throw new Error(message
 const requireText = (content, expected, label) => assert(content.includes(expected), `${label}: missing ${expected}`);
 
 const app = read('src/App.tsx');
+const analyze = read('src/pages/Analyze.tsx');
+const verify = read('src/pages/Verify.tsx');
 const api = read('src/api/test-intelligence.ts');
 const page = read('src/pages/TestIntelligence.tsx');
 const designCss = read('src/pages/TestDesign.css');
@@ -15,9 +17,29 @@ const sidebar = read('src/components/Sidebar.tsx');
 const topbar = read('src/components/Topbar.tsx');
 
 for (const expected of [
-  "import { TestIntelligence } from './pages/TestIntelligence';",
+  "import { Analyze } from './pages/Analyze';",
+  "import { Verify } from './pages/Verify';",
+  'path="/analyze" element={<Analyze />}',
+  'path="/verify" element={<Verify />}',
   'path="/test-intelligence" element={<TestIntelligence />}',
-]) requireText(app, expected, 'Test Intelligence routing');
+]) requireText(app, expected, 'Analyze / Verify / Test Intelligence routing');
+
+for (const expected of [
+  "type AnalyzeView = 'requirements' | 'test-targets';",
+  '<TestIntelligence',
+  '<strong>Test Targets</strong>',
+  "await ingestKnowledge(project, file, 'prd');",
+]) requireText(analyze, expected, 'Unified Analyze Test Targets surface');
+
+for (const expected of [
+  'getTestIntelligence',
+  '<strong>Test Targets</strong>',
+  '<strong>Agent Execution</strong>',
+  '<strong>Execution Surface</strong>',
+  '逐步骤 Agent Run 事件流尚未接入这个统一工作台',
+  '不会拿静态示意图冒充 Live View',
+  '<EnterpriseCampaigns />',
+]) requireText(verify, expected, 'Verify honesty and run-control boundary');
 
 for (const expected of [
   '${API_V1_BASE}/projects/${encodeURIComponent(project)}/test-intelligence',
@@ -62,17 +84,27 @@ for (const expected of ['.ti-design', '.ti-design-grid', '.ti-design-status']) {
 }
 
 for (const expected of [
+  "const RUN_CONTEXT_PATHS = new Set(['/campaigns', '/coverage', '/jobs']);",
+  "const isFocusedWorkspace = location.pathname === '/analyze'",
+  "location.pathname === '/verify'",
   "location.pathname === '/test-intelligence'",
-  '{!isIntelligenceWorkspace && <RunCustomerResultSummary />}',
-  '{!isIntelligenceWorkspace && <RunLifecycleBanner />}',
-]) requireText(layout, expected, 'Test Intelligence runtime isolation');
+  'const showRunContext = !isFocusedWorkspace && RUN_CONTEXT_PATHS.has(location.pathname);',
+  '{showRunContext && <RunCustomerResultSummary />}',
+  '{showRunContext && <RunLifecycleBanner />}',
+]) requireText(layout, expected, 'Focused Analyze / Verify shell');
 
-requireText(sidebar, "{ to: 'test-intelligence', icon: 'test-intelligence', label: '测试智能' }", 'Test Intelligence primary navigation');
 for (const expected of [
-  "'/test-intelligence': '测试智能'",
-  "const isTestIntelligencePage = location.pathname === '/test-intelligence';",
-  "? '测试智能模式'",
-  "? '测试义务、结构化设计与支持语义覆盖'",
-]) requireText(topbar, expected, 'Test Intelligence topbar mode');
+  "{ to: 'analyze', icon: 'analyze', label: '分析' }",
+  "{ to: 'verify', icon: 'verify', label: '验证' }",
+]) requireText(sidebar, expected, 'AI-native primary navigation');
+
+for (const expected of [
+  "'/analyze': '分析'",
+  "'/verify': '验证'",
+  "const isAnalyzePage = location.pathname === '/analyze';",
+  "const isVerifyPage = location.pathname === '/verify';",
+  "? '需求审查、业务语义与验证目标'",
+  "? '真实运行、证据与验证闭环'",
+]) requireText(topbar, expected, 'Analyze / Verify topbar mode');
 
 console.log('test intelligence frontend contract passed');

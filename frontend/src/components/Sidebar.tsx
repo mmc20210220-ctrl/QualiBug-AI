@@ -8,21 +8,29 @@ type NavItem = { to: string; icon: string; label: string; badgeKey?: 'findings' 
 
 const sections: NavSection[] = [
   {
-    label: '主导航',
+    label: '质量验证',
     items: [
-      { to: 'requirements', icon: 'requirements', label: '需求审查' },
-      { to: 'test-intelligence', icon: 'test-intelligence', label: '测试智能' },
       { to: 'dashboard', icon: 'overview', label: '总览' },
+      { to: 'analyze', icon: 'analyze', label: '分析' },
+      { to: 'verify', icon: 'verify', label: '验证' },
       { to: 'findings', icon: 'bug', label: '问题', badgeKey: 'findings' },
+      { to: 'release', icon: 'release', label: '发布' },
+    ],
+  },
+  {
+    label: '系统',
+    items: [
       { to: 'integration', icon: 'materials', label: '接入' },
+      { to: 'settings', icon: 'settings', label: '设置' },
     ],
   },
 ];
 
 // 仅在页面自身本来就读取 command-center 时展示实时结果计数。
-// /findings/:id 等轻量页面不能因为侧栏数字反向触发整包项目数据。
+// Analyze 保持只消费 Intelligence API，不能因为侧栏状态把 Bug Discovery 结果混成分析真值。
 const COMMAND_CENTER_STATUS_PATHS = new Set([
   '/dashboard',
+  '/verify',
   '/findings',
   '/evidence',
   '/release',
@@ -32,6 +40,8 @@ const COMMAND_CENTER_STATUS_PATHS = new Set([
 ]);
 
 const icons: Record<string, string> = {
+  analyze: 'M4 5h7v7H4V5Zm9 0h7v7h-7V5ZM4 14h7v5H4v-5Zm10 1 2 2 4-4m-7 6h7',
+  verify: 'M5 4h14v16H5V4Zm3 4h8M8 12h5m-5 4 2 2 5-5',
   requirements: 'M5 4h14v16H5V4Zm3 4h8M8 12h5M8 16h7M3 7h2M3 11h2M3 15h2',
   'test-intelligence': 'M8 3h8v3h3v15H5V6h3V3Zm1 0v4h6V3H9Zm0 9 2 2 4-4m-6 8h6',
   overview: 'M4 4h6v6H4V4Zm10 0h6v6h-6V4ZM4 14h6v6H4v-6Zm10 0h6v6h-6v-6Z',
@@ -41,7 +51,7 @@ const icons: Record<string, string> = {
   release: 'M6 4h12v16H6z M9 8h6M9 12h6M9 16h3',
   workflow: 'M4 5h5v4H4V5Zm11 0h5v4h-5V5ZM9 7h6M6.5 9v4m0 0h11m0 0V9M10 15h4v4h-4v-4Z',
   materials: 'M5 4h14v4H5V4Zm0 6h14v10H5V10Zm3 3h8M8 16h5',
-  settings: 'M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8Zm8.2 4a7.6 7.6 0 0 0-.13-1.4l2.04-1.58-2-3.46-2.4.97a7.4 7.4 0 0 0-2.42-1.4L14.93 2h-4l-.37 3.13a7.4 7.4 0 0 0-2.42 1.4l-2.4-.97-2 3.46 2.04 1.58A7.6 7.6 0 0 0 5.8 12c0 .48.05.95.13 1.4l-2.04 1.58 2 3.46 2.4-.97a7.4 7.4 0 0 0 2.42 1.4l.37 3.13h4l.37-3.13a7.4 7.4 0 0 0 2.42-1.4l2.4.97 2-3.46-2.04-1.58c.08-.45.13-.92.13-1.4Z',
+  settings: 'M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8Zm8.2 4a7.6 7.6 0 0 0-.13-1.4l2.04-1.58-2-3.46-2.4.97a7.4 7.4 0 0 0-2.42-1.4L14.93 2h-4l-.37 3.13a7.4 7.4 0 0 0-2.42 1.4l-2.4-.97-2 3.46 2.04 1.58A7.6 7.6 0 0 0 5.8 12c0 .48.05.95.13 1.4l-2.04 1.58 2 3.46 2.4-.97a7.4 7.4 0 0 0 2.42 1.4l.37 3.13h4l.37-3.13a7.4 7.4 0 0 0 2.42-1.4l2.4.97 2 3.46-2.04-1.58c.08-.45.13-.92.13-1.4Z',
   matrix: 'M4 4h16v16H4V4Zm4 0v16M4 9h16M4 14h16M12 4v16',
 };
 
@@ -106,7 +116,7 @@ export function Sidebar({ mobileOpen = false, onClose }: SidebarProps) {
           <button type="button" className="side-close" onClick={onClose} aria-label="关闭导航">
             ×
           </button>
-          <BrandLogo variant="full" detail="compact" tone="dark" size={38} subtitle="企业软件智能审查" />
+          <BrandLogo variant="full" detail="compact" tone="dark" size={38} subtitle="AI 原生质量验证" />
         </div>
 
         <div className="side-project">
@@ -167,7 +177,7 @@ export function Sidebar({ mobileOpen = false, onClose }: SidebarProps) {
 
         <div className="side-bottom">
           <b>QualiBug AI</b>
-          少配置 · 自动理解 · 真实验证 · 需求审查 · 测试智能
+          理解应该怎样工作 → 验证实际怎样工作 → 用证据做发布决策
         </div>
       </aside>
     </>

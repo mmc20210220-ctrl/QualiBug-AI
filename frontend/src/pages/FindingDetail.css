@@ -1,0 +1,268 @@
+.finding-investigation {
+  display: grid;
+  gap: 18px;
+}
+
+.finding-investigation-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 24px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: linear-gradient(135deg, var(--surface) 0%, color-mix(in srgb, var(--surface) 92%, var(--danger) 8%) 100%);
+  box-shadow: var(--shadow-soft);
+}
+
+.finding-investigation-title {
+  min-width: 0;
+}
+
+.finding-investigation-heading {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-top: 6px;
+}
+
+.finding-investigation-heading h1 {
+  margin: 0;
+  max-width: 920px;
+  font-size: clamp(24px, 3vw, 36px);
+  line-height: 1.16;
+}
+
+.finding-investigation-title > p {
+  max-width: 920px;
+  margin: 12px 0 0;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.finding-investigation-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.finding-investigation-meta span {
+  padding: 6px 9px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(255,255,255,.72);
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.finding-investigation-meta strong {
+  color: var(--ink);
+}
+
+.finding-investigation-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.finding-investigation-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.7fr) minmax(300px, .8fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.finding-investigation-main,
+.finding-investigation-side {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+
+.finding-investigation-side {
+  position: sticky;
+  top: 84px;
+}
+
+.finding-investigation-card,
+.finding-side-card {
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--surface);
+  box-shadow: var(--shadow-soft);
+}
+
+.finding-investigation-card {
+  padding: 20px;
+}
+
+.finding-side-card {
+  padding: 16px;
+}
+
+.finding-investigation-card-head {
+  margin-bottom: 16px;
+}
+
+.finding-investigation-card-head h2,
+.finding-side-card h3 {
+  margin: 5px 0 0;
+}
+
+.finding-investigation-card-head > p,
+.finding-side-card > p {
+  margin: 7px 0 0;
+  color: var(--muted);
+  line-height: 1.65;
+}
+
+.finding-investigation-card-head.evidence-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.finding-evidence-count {
+  padding: 5px 8px;
+  border-radius: 999px;
+  background: var(--primary-muted);
+  color: var(--primary);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.finding-reproduction-list {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.finding-reproduction-list li {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.finding-reproduction-list li:last-child {
+  border-bottom: 0;
+}
+
+.finding-reproduction-list li > span {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--primary);
+  font-weight: 800;
+  font-size: 11px;
+}
+
+.finding-reproduction-list p {
+  margin: 3px 0 0;
+  line-height: 1.65;
+}
+
+.finding-side-facts,
+.finding-raw-evidence {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.finding-side-facts > div,
+.finding-raw-evidence > div {
+  display: grid;
+  grid-template-columns: minmax(88px, auto) minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.finding-side-facts > div:last-child,
+.finding-raw-evidence > div:last-of-type {
+  border-bottom: 0;
+}
+
+.finding-side-facts span,
+.finding-raw-evidence span {
+  color: var(--subtle);
+  font-size: 11px;
+}
+
+.finding-side-facts strong,
+.finding-raw-evidence strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  text-align: right;
+  font-size: 12px;
+}
+
+.verification-card .card,
+.verification-card > section {
+  margin: 12px 0 0 !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+}
+
+.finding-evidence-tools {
+  min-width: 0;
+}
+
+.finding-skeleton-title {
+  margin-top: 12px;
+}
+
+.finding-skeleton-line {
+  margin-top: 12px;
+}
+
+@media (max-width: 1100px) {
+  .finding-investigation-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .finding-investigation-side {
+    position: static;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .verification-card {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 760px) {
+  .finding-investigation-header {
+    flex-direction: column;
+  }
+
+  .finding-investigation-actions {
+    justify-content: flex-start;
+  }
+
+  .finding-investigation-side {
+    grid-template-columns: 1fr;
+  }
+
+  .verification-card {
+    grid-column: auto;
+  }
+
+  .finding-investigation-card-head.evidence-heading {
+    flex-direction: column;
+  }
+}
