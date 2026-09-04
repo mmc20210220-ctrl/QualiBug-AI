@@ -129,6 +129,39 @@ class AgentTaskHandlersMixin:
             )
             return None
 
+    def _ground_agent_task(
+        self,
+        *,
+        project: str,
+        tenant_id: str,
+        task: dict[str, Any],
+        correlation_id: str,
+        body: dict[str, Any] | None = None,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        request = dict(body or {})
+        preflight_request = (
+            dict(request.get("preflight"))
+            if isinstance(request.get("preflight"), dict)
+            else {}
+        )
+        grounding = build_agent_task_grounding(
+            self._root(),
+            tenant_id=tenant_id,
+            project_id=project,
+            task=task,
+            requested_target_ids=_string_list(request.get("test_target_ids")),
+            preflight_request=preflight_request,
+        )
+        grounded = apply_agent_task_grounding(
+            self._root(),
+            tenant_id=tenant_id,
+            project_id=project,
+            task_id=_text(task.get("task_id")),
+            grounding=grounding,
+            correlation_id=correlation_id,
+        )
+        return grounded, grounding
+
     def do_GET(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
         route = _parse_agent_task_route(parsed.path)
@@ -206,26 +239,12 @@ class AgentTaskHandlersMixin:
                     project_id=project,
                     task_id=route[2],
                 )
-                preflight_request = (
-                    dict(body.get("preflight"))
-                    if isinstance(body.get("preflight"), dict)
-                    else {}
-                )
-                grounding = build_agent_task_grounding(
-                    self._root(),
+                task, grounding = self._ground_agent_task(
+                    project=project,
                     tenant_id=tenant_id,
-                    project_id=project,
                     task=existing,
-                    requested_target_ids=_string_list(body.get("test_target_ids")),
-                    preflight_request=preflight_request,
-                )
-                task = apply_agent_task_grounding(
-                    self._root(),
-                    tenant_id=tenant_id,
-                    project_id=project,
-                    task_id=route[2],
-                    grounding=grounding,
                     correlation_id=correlation_id,
+                    body=body,
                 )
                 return self._json(
                     {
@@ -236,7 +255,7 @@ class AgentTaskHandlersMixin:
                     }
                 )
 
-            task = create_agent_task(
+            created = create_agent_task(
                 self._root(),
                 tenant_id=tenant_id,
                 project_id=project,
@@ -245,6 +264,20 @@ class AgentTaskHandlersMixin:
                 actor_role=_text(actor.get("role")) if isinstance(actor, dict) else "",
                 correlation_id=correlation_id,
             )
-            return self._json({"ok": True, "data": task}, 201)
+            task, grounding = self._ground_agent_task(
+                project=project,
+                tenant_id=tenant_id,
+                task=created,
+                correlation_id=correlation_id,
+            )
+            return self._json(
+                {
+                    "ok": True,
+                    "schema_version": "qualibug.agent-task-create.v2",
+                    "data": task,
+                    "grounding": grounding,
+                },
+                201,
+            )
         except Exception as exc:
             return self._agent_task_error(exc)
