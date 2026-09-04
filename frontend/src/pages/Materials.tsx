@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ChangeEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { getKnowledgeAsset, ingestKnowledge } from '../api/client';
 import {
@@ -72,6 +72,7 @@ export function Materials() {
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState('');
   const [operation, setOperation] = useState<Record<string, string>>({});
+  const refreshGenerationRef = useRef(0);
 
   const [formOpen, setFormOpen] = useState(false);
   const [editingId, setEditingId] = useState('');
@@ -107,21 +108,47 @@ export function Materials() {
   );
 
   const refresh = useCallback(async () => {
+    const generation = ++refreshGenerationRef.current;
     if (!project) {
       setConnectors([]);
       setManifests([]);
       setResourcePreviews({});
       setSources([]);
+      setLoading(false);
+      setLoadError('');
       return;
     }
     setLoading(true);
     setLoadError('');
+    setResourcePreviews({});
+
+    const inventoryPromise = listKnowledgeConnectors(project);
+    const assetPromise = getKnowledgeAsset(project);
+    const catalogPromise = listConnectorTypes();
+    const previewsPromise = inventoryPromise.then(async (inventory) => {
+      const settled = await Promise.allSettled(
+        inventory.connectors.map(async (connector) => [
+          connector.connector_instance_id,
+          await listConnectorResources(project, connector.connector_instance_id),
+        ] as const),
+      );
+      const previews: Record<string, ConnectorResourceInventory> = {};
+      settled.forEach((result) => {
+        if (result.status === 'fulfilled') {
+          previews[result.value[0]] = result.value[1];
+        }
+      });
+      return previews;
+    }).catch((): Record<string, ConnectorResourceInventory> => ({}));
+
     try {
       const [inventory, asset, catalog] = await Promise.all([
-        listKnowledgeConnectors(project),
-        getKnowledgeAsset(project),
-        listConnectorTypes(),
+        inventoryPromise,
+        assetPromise,
+        catalogPromise,
       ]);
+      if (generation !== refreshGenerationRef.current) return;
+
       setConnectors(inventory.connectors);
       setManifests(catalog.connector_types);
       const quickOptions = quickConnectManifests(catalog.connector_types);
@@ -135,18 +162,21 @@ export function Materials() {
           ? current
           : quickOptions[0]?.connector_type || ''
       ));
-      const previews = await Promise.all(
-        inventory.connectors.map(async (connector) => [
-          connector.connector_instance_id,
-          await listConnectorResources(project, connector.connector_instance_id),
-        ] as const),
-      );
-      setResourcePreviews(Object.fromEntries(previews));
       setSources(sourceRows(asset));
+
+      void previewsPromise.then((previews) => {
+        if (generation === refreshGenerationRef.current) {
+          setResourcePreviews(previews);
+        }
+      });
     } catch (error: unknown) {
-      setLoadError(error instanceof Error ? error.message : '企业资料加载失败');
+      if (generation === refreshGenerationRef.current) {
+        setLoadError(error instanceof Error ? error.message : '企业资料加载失败');
+      }
     } finally {
-      setLoading(false);
+      if (generation === refreshGenerationRef.current) {
+        setLoading(false);
+      }
     }
   }, [project]);
 
@@ -744,9 +774,9 @@ export function Materials() {
                           ? '入口需要授权后才能确认'
                           : sourcePreflight.status === 'REMOTE_ERROR'
                             ? '入口暂时无法读取'
-                          : sourcePreflight.status === 'NO_QUICK_CONNECTOR'
-                            ? '没有可用的 URL 连接器'
-                            : '请确认要使用的资料能力'}
+                            : sourcePreflight.status === 'NO_QUICK_CONNECTOR'
+                              ? '没有可用的 URL 连接器'
+                              : '请确认要使用的资料能力'}
                     </strong>
                     <span>
                       只读预检 · HTTP {sourcePreflight.observation.http_status}
