@@ -1,62 +1,54 @@
 import { NavLink, useLocation, useSearchParams } from 'react-router-dom';
-import { useLiveStatus, useProjectSummary, useWorkspaceDirectory } from '../api/data';
+import { useProjectSummary, useWorkspaceDirectory } from '../api/data';
 import { BrandLogo } from './BrandLogo';
 import { buildProjectPath } from '../lib/project-navigation';
 
+type NavItem = { to: string; icon: string; label: string; badgeKey?: 'findings' };
 type NavSection = { label: string; items: NavItem[] };
-type NavItem = { to: string; icon: string; label: string; badgeKey?: 'findings' | 'clues' };
 
 const sections: NavSection[] = [
   {
-    label: '质量验证',
+    label: 'Agent',
     items: [
-      { to: 'dashboard', icon: 'overview', label: '总览' },
-      { to: 'analyze', icon: 'analyze', label: '分析' },
-      { to: 'verify', icon: 'verify', label: '验证' },
-      { to: 'findings', icon: 'bug', label: '问题', badgeKey: 'findings' },
-      { to: 'release', icon: 'release', label: '发布' },
+      { to: 'dashboard', icon: 'new-task', label: '新任务' },
+      { to: 'verify', icon: 'workspace', label: '工作台' },
+      { to: 'findings', icon: 'bug', label: 'Findings', badgeKey: 'findings' },
+      { to: 'release', icon: 'decision', label: 'Decision' },
     ],
   },
   {
-    label: '系统',
+    label: 'Context',
     items: [
-      { to: 'integration', icon: 'materials', label: '接入' },
-      { to: 'settings', icon: 'settings', label: '设置' },
+      { to: 'analyze', icon: 'knowledge', label: 'Knowledge' },
+      { to: 'integration', icon: 'sources', label: 'Sources' },
+      { to: 'settings', icon: 'settings', label: 'Settings' },
     ],
   },
 ];
 
-// 仅在页面自身本来就读取 command-center 时展示实时结果计数。
-// Analyze 保持只消费 Intelligence API，不能因为侧栏状态把 Bug Discovery 结果混成分析真值。
 const COMMAND_CENTER_STATUS_PATHS = new Set([
   '/dashboard',
   '/verify',
   '/findings',
-  '/evidence',
   '/release',
+  '/evidence',
   '/campaigns',
   '/coverage',
   '/settings',
 ]);
 
 const icons: Record<string, string> = {
-  analyze: 'M4 5h7v7H4V5Zm9 0h7v7h-7V5ZM4 14h7v5H4v-5Zm10 1 2 2 4-4m-7 6h7',
-  verify: 'M5 4h14v16H5V4Zm3 4h8M8 12h5m-5 4 2 2 5-5',
-  requirements: 'M5 4h14v16H5V4Zm3 4h8M8 12h5M8 16h7M3 7h2M3 11h2M3 15h2',
-  'test-intelligence': 'M8 3h8v3h3v15H5V6h3V3Zm1 0v4h6V3H9Zm0 9 2 2 4-4m-6 8h6',
-  overview: 'M4 4h6v6H4V4Zm10 0h6v6h-6V4ZM4 14h6v6H4v-6Zm10 0h6v6h-6v-6Z',
+  'new-task': 'M12 3v18M3 12h18',
+  workspace: 'M5 4h14v16H5V4Zm3 4h8M8 12h5m-5 4h8',
   bug: 'M8 2v3m8-3v3M3 8h18M5.5 5.5l1.5 1.5m10 0 1.5-1.5M10 14l-2 3m6-3 2 3M12 12v3',
-  shield: 'M12 3 20 6v5c0 5-3.3 8.5-8 10-4.7-1.5-8-5-8-10V6l8-3Z',
-  campaign: 'M4 5h16v14H4V5Zm3 3h5v3H7V8Zm0 5h10v3H7v-3Zm7-5h3v3h-3V8Z',
-  release: 'M6 4h12v16H6z M9 8h6M9 12h6M9 16h3',
-  workflow: 'M4 5h5v4H4V5Zm11 0h5v4h-5V5ZM9 7h6M6.5 9v4m0 0h11m0 0V9M10 15h4v4h-4v-4Z',
-  materials: 'M5 4h14v4H5V4Zm0 6h14v10H5V10Zm3 3h8M8 16h5',
+  decision: 'M12 3 20 6v5c0 5-3.3 8.5-8 10-4.7-1.5-8-5-8-10V6l8-3Zm-3 9 2 2 4-4',
+  knowledge: 'M4 5h7v7H4V5Zm9 0h7v7h-7V5ZM4 14h7v5H4v-5Zm10 1 2 2 4-4m-7 6h7',
+  sources: 'M5 4h14v4H5V4Zm0 6h14v10H5V10Zm3 3h8M8 16h5',
   settings: 'M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8Zm8.2 4a7.6 7.6 0 0 0-.13-1.4l2.04-1.58-2-3.46-2.4.97a7.4 7.4 0 0 0-2.42-1.4L14.93 2h-4l-.37 3.13a7.4 7.4 0 0 0-2.42 1.4l-2.4-.97-2 3.46 2.04 1.58A7.6 7.6 0 0 0 5.8 12c0 .48.05.95.13 1.4l-2.04 1.58 2 3.46 2.4-.97a7.4 7.4 0 0 0 2.42 1.4l.37 3.13h4l.37-3.13a7.4 7.4 0 0 0 2.42-1.4l2.4.97 2 3.46-2.04-1.58c.08-.45.13-.92.13-1.4Z',
-  matrix: 'M4 4h16v16H4V4Zm4 0v16M4 9h16M4 14h16M12 4v16',
 };
 
 function SvgIcon({ name }: { name: string }) {
-  const d = icons[name] || icons.overview;
+  const d = icons[name] || icons.workspace;
   return <svg viewBox="0 0 24 24" aria-hidden="true"><path d={d} /></svg>;
 }
 
@@ -72,37 +64,9 @@ export function Sidebar({ mobileOpen = false, onClose }: SidebarProps) {
   const statusDataEnabled = COMMAND_CENTER_STATUS_PATHS.has(location.pathname);
   const statusProject = statusDataEnabled ? project : '';
   const { workspaceOptions } = useWorkspaceDirectory();
-  const { projectName, currentDefectCount, clueCount, p0Count, error: summaryError } = useProjectSummary(statusProject);
-  const { scanActive, hasMaterializedMetrics } = useLiveStatus(statusProject, 15_000);
-  const workspaceName = workspaceOptions.find((item) => item.id === project)?.label || '';
-  const visibleProjectName = statusDataEnabled
-    ? projectName
-    : workspaceName || project || '未选择客户';
-
-  // 后端故障时显式呈现失败状态；绝不把「读不到」渲染成健康的零值结论。
+  const { currentDefectCount, p0Count, error: summaryError } = useProjectSummary(statusProject);
+  const workspaceName = workspaceOptions.find((item) => item.id === project)?.label || project || '未选择客户';
   const summaryFaulted = Boolean(statusDataEnabled && project && summaryError);
-  const countText = (value: number | null | undefined): string => {
-    if (!statusDataEnabled || summaryFaulted) return '—';
-    return String(value ?? 0);
-  };
-
-  const riskStateLabel = !project
-    ? '请选择客户'
-    : !statusDataEnabled
-      ? '结果按需加载'
-      : summaryFaulted
-        ? '状态读取失败'
-        : scanActive
-          ? '检测进行中'
-          : p0Count > 0
-            ? '需先处理阻断'
-            : (currentDefectCount || 0) > 0
-              ? '可进入整改'
-              : (clueCount || 0) > 0
-                ? '后台补证中'
-                : hasMaterializedMetrics
-                  ? '本轮暂无已确认问题'
-                  : '等待首次验证';
 
   return (
     <>
@@ -113,49 +77,33 @@ export function Sidebar({ mobileOpen = false, onClose }: SidebarProps) {
       />
       <aside id="primary-sidebar" className={`sidebar${mobileOpen ? ' mobile-open' : ''}`} aria-label="主导航">
         <div className="side-brand">
-          <button type="button" className="side-close" onClick={onClose} aria-label="关闭导航">
-            ×
-          </button>
-          <BrandLogo variant="full" detail="compact" tone="dark" size={38} subtitle="AI 原生质量验证" />
+          <button type="button" className="side-close" onClick={onClose} aria-label="关闭导航">×</button>
+          <BrandLogo variant="full" detail="compact" tone="dark" size={38} subtitle="AI Quality Engineer" />
         </div>
 
         <div className="side-project">
-          <span className="side-project-label">当前客户</span>
-          <b>{visibleProjectName}</b>
-          {summaryFaulted && (
-            <p className="side-project-error" role="alert" title={summaryError}>
-              项目状态读取失败：{summaryError}
-            </p>
-          )}
-          <div className="side-project-metrics">
-            <div className="side-project-metric">
-              <span>验证状态</span>
-              <strong>{riskStateLabel}</strong>
-            </div>
-            <div className="side-project-metric" title={!statusDataEnabled ? '进入结果页后加载项目结果计数' : summaryFaulted ? '后端状态不可读取，计数未上报' : undefined}>
-              <span>已确认</span>
-              <strong>{countText(currentDefectCount)}</strong>
-            </div>
-            <div className="side-project-metric" title={!statusDataEnabled ? '进入结果页后加载项目结果计数' : summaryFaulted ? '后端状态不可读取，计数未上报' : undefined}>
-              <span>后台补证</span>
-              <strong>{countText(clueCount)}</strong>
-            </div>
-          </div>
+          <span className="side-project-label">Workspace</span>
+          <b>{workspaceName}</b>
+          <p className="side-project-agent-copy">
+            {summaryFaulted
+              ? '项目状态读取失败'
+              : p0Count > 0
+                ? `${p0Count} 个阻断问题需要处理`
+                : statusDataEnabled && currentDefectCount > 0
+                  ? `${currentDefectCount} 个已确认问题`
+                  : 'Agent 将按当前上下文工作'}
+          </p>
         </div>
 
-        <nav className="side-nav" aria-label="客户项目导航">
+        <nav className="side-nav" aria-label="Agent 工作导航">
           {sections.map((section) => (
             <div key={section.label} className="side-section-group">
               <div className="side-section">{section.label}</div>
               {section.items.map((item) => {
-                const badge = !statusDataEnabled
-                  ? undefined
-                  : item.badgeKey === 'findings'
-                    ? (currentDefectCount || 0)
-                    : item.badgeKey === 'clues'
-                      ? (clueCount || 0)
-                      : undefined;
-                const badgeAlert = statusDataEnabled && item.badgeKey === 'findings' && p0Count > 0;
+                const badge = statusDataEnabled && item.badgeKey === 'findings' && !summaryFaulted
+                  ? currentDefectCount || 0
+                  : undefined;
+                const badgeAlert = item.badgeKey === 'findings' && p0Count > 0;
                 return (
                   <NavLink
                     key={item.to}
@@ -176,8 +124,8 @@ export function Sidebar({ mobileOpen = false, onClose }: SidebarProps) {
         </nav>
 
         <div className="side-bottom">
-          <b>QualiBug AI</b>
-          理解应该怎样工作 → 验证实际怎样工作 → 用证据做发布决策
+          <b>Agent-first · Evidence-based</b>
+          用户给出目标，QualiBug 负责理解、真实验证、收集证据并形成决策。
         </div>
       </aside>
     </>
