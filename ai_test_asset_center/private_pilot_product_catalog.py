@@ -48,6 +48,7 @@ def _test_intelligence_project(path: str) -> str:
 
 
 def _find_finding(payload: dict[str, Any], finding_id: str) -> dict[str, Any] | None:
+    """Mirror the existing Findings page semantics: deliverable findings only."""
     data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
     if not isinstance(data, dict):
         return None
@@ -56,25 +57,17 @@ def _find_finding(payload: dict[str, Any], finding_id: str) -> dict[str, Any] | 
         if isinstance(data.get("finding_classification"), dict)
         else {}
     )
-    collections = [
-        classification.get("deliverable"),
-        classification.get("candidate"),
-        classification.get("rejected"),
-        data.get("defects"),
-        data.get("clues"),
-        data.get("rejected_findings"),
-        data.get("risks"),
-    ]
-    for rows in collections:
-        if not isinstance(rows, list):
+    deliverable = classification.get("deliverable")
+    rows = deliverable if isinstance(deliverable, list) else data.get("defects")
+    if not isinstance(rows, list):
+        return None
+    for item in rows:
+        if not isinstance(item, dict):
             continue
-        for item in rows:
-            if not isinstance(item, dict):
-                continue
-            display_id = str(item.get("id") or "").strip()
-            persistence_id = str(item.get("finding_persistence_id") or "").strip()
-            if finding_id in {display_id, persistence_id}:
-                return item
+        display_id = str(item.get("id") or "").strip()
+        persistence_id = str(item.get("finding_persistence_id") or "").strip()
+        if finding_id in {display_id, persistence_id}:
+            return item
     return None
 
 
