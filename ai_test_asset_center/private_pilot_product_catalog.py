@@ -3,6 +3,8 @@ from __future__ import annotations
 """HTTP product composition and lightweight read routes before legacy routing."""
 
 import copy
+import hashlib
+import sqlite3
 import threading
 import time
 from pathlib import Path
@@ -22,6 +24,8 @@ _TEST_INTELLIGENCE_CACHE_LOCK = threading.Lock()
 _TEST_INTELLIGENCE_CACHE_MAX_ENTRIES = 64
 _TEST_INTELLIGENCE_BUILD_LOCKS: dict[str, threading.Lock] = {}
 _TEST_INTELLIGENCE_BUILD_LOCKS_GUARD = threading.Lock()
+_TEST_INTELLIGENCE_DB_DIGEST_CACHE: dict[str, tuple[str, str]] = {}
+_TEST_INTELLIGENCE_DB_DIGEST_LOCK = threading.Lock()
 
 
 def _test_intelligence_build_lock(cache_key: str) -> threading.Lock:
@@ -33,18 +37,8 @@ def _test_intelligence_build_lock(cache_key: str) -> threading.Lock:
         return lock
 
 
-def _test_intelligence_source_fingerprint(root: Path, project: str) -> str:
-    """Fingerprint every persisted source that can change Test Intelligence output.
-
-    The shared project fingerprint covers knowledge assets, source registries and
-    other file-backed projections. The merged knowledge loader can also consume
-    SQLite knowledge_docs, whose latest writes may still live in the WAL, so both
-    DB files participate as well. This lets hot GETs skip both asset loading and
-    analysis while still invalidating as soon as source data changes.
-    """
-    from . import private_pilot_http_routing as routing
-
-    parts = [routing._project_data_fingerprint(root, project)]
+def _test_intelligence_db_identity(root: Path) -> str:
+    parts: list[str] = []
     for filename in ("qualibug.db", "qualibug.db-wal"):
         path = root / filename
         try:
@@ -54,6 +48,90 @@ def _test_intelligence_source_fingerprint(root: Path, project: str) -> str:
             continue
         parts.append(f"{filename}:{stat.st_mtime_ns}:{stat.st_size}")
     return "|".join(parts)
+
+
+def _hash_fingerprint_value(digest: Any, value: Any) -> None:
+    encoded = ("" if value is None else str(value)).encode("utf-8", errors="replace")
+    digest.update(len(encoded).to_bytes(8, "big"))
+    digest.update(encoded)
+
+
+def _test_intelligence_db_knowledge_digest(
+    root: Path,
+    tenant_id: str,
+    project: str,
+) -> str:
+    """Hash only this tenant/project's SQLite knowledge documents.
+
+    File metadata is used only as a cheap change detector. When the SQLite/WAL
+    identity changes, this function recomputes the exact digest for the requested
+    tenant/project. Unrelated database writes therefore cost at most a scoped read;
+    they do not invalidate the expensive Test Intelligence analysis.
+    """
+    db_identity = _test_intelligence_db_identity(root)
+    cache_key = f"{tenant_id}:{project}"
+    with _TEST_INTELLIGENCE_DB_DIGEST_LOCK:
+        cached = _TEST_INTELLIGENCE_DB_DIGEST_CACHE.get(cache_key)
+        if cached is not None and cached[0] == db_identity:
+            return cached[1]
+
+    db_path = root / "qualibug.db"
+    if not db_path.exists():
+        scoped_digest = "knowledge-db:missing"
+    else:
+        digest = hashlib.sha256()
+        try:
+            conn = sqlite3.connect(str(db_path), timeout=5.0)
+            try:
+                conn.execute("PRAGMA query_only=ON")
+                rows = conn.execute(
+                    """
+                    SELECT id, filename, type, content, created_at
+                    FROM knowledge_docs
+                    WHERE tenant_id = ? AND project_id = ?
+                    ORDER BY id
+                    """,
+                    (tenant_id, project),
+                ).fetchall()
+            finally:
+                conn.close()
+            for row in rows:
+                for value in row:
+                    _hash_fingerprint_value(digest, value)
+            scoped_digest = f"knowledge-db:{digest.hexdigest()}"
+        except sqlite3.DatabaseError as exc:
+            # Older/new installations can transiently lack the table or be busy.
+            # Fail safe: never reuse a stale projection across a DB identity change.
+            if "no such table" in str(exc).lower():
+                scoped_digest = "knowledge-db:empty"
+            else:
+                scoped_digest = f"knowledge-db:unavailable:{db_identity}"
+
+    with _TEST_INTELLIGENCE_DB_DIGEST_LOCK:
+        if (
+            cache_key not in _TEST_INTELLIGENCE_DB_DIGEST_CACHE
+            and len(_TEST_INTELLIGENCE_DB_DIGEST_CACHE) >= _TEST_INTELLIGENCE_CACHE_MAX_ENTRIES
+        ):
+            oldest_key = next(iter(_TEST_INTELLIGENCE_DB_DIGEST_CACHE))
+            _TEST_INTELLIGENCE_DB_DIGEST_CACHE.pop(oldest_key, None)
+        _TEST_INTELLIGENCE_DB_DIGEST_CACHE[cache_key] = (db_identity, scoped_digest)
+    return scoped_digest
+
+
+def _test_intelligence_source_fingerprint(
+    root: Path,
+    tenant_id: str,
+    project: str,
+) -> str:
+    """Fingerprint only persisted sources that can change this project's output."""
+    from . import private_pilot_http_routing as routing
+
+    return "|".join(
+        (
+            routing._project_data_fingerprint(root, project),
+            _test_intelligence_db_knowledge_digest(root, tenant_id, project),
+        )
+    )
 
 
 def _project_analysis_request(path: str) -> tuple[str, str]:
@@ -218,7 +296,7 @@ class ProductCatalogHttpMixin:
         """
         tenant_id = self._request_tenant()
         cache_key = f"{tenant_id}:{project}"
-        fingerprint = _test_intelligence_source_fingerprint(root, project)
+        fingerprint = _test_intelligence_source_fingerprint(root, tenant_id, project)
 
         def cached_analysis() -> dict[str, Any] | None:
             with _TEST_INTELLIGENCE_CACHE_LOCK:
