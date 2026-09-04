@@ -3,6 +3,7 @@ import { Link, useSearchParams } from 'react-router-dom';
 import {
   cancelAgentTask,
   getAgentTaskBundle,
+  groundAgentTask,
   type AgentTask,
   type AgentTaskEvent,
 } from '../api/agent-tasks';
@@ -30,8 +31,8 @@ const TERMINAL_TASK_STATUSES = new Set(['COMPLETED', 'FAILED', 'CANCELLED']);
 
 function toneForStatus(value: string): 'success' | 'warning' | 'danger' | 'neutral' {
   const status = value.toLowerCase();
-  if (['passed', 'pass', 'completed', 'executed', 'ready'].includes(status)) return 'success';
-  if (['failed', 'fail', 'blocked', 'error', 'failed_safe', 'hold', 'cancelled'].includes(status)) return 'danger';
+  if (['passed', 'pass', 'completed', 'executed', 'ready', 'pinned'].includes(status)) return 'success';
+  if (['failed', 'fail', 'blocked', 'error', 'failed_safe', 'hold', 'cancelled', 'pinned_stale'].includes(status)) return 'danger';
   if (['running', 'pending', 'partial', 'coverage_deferred', 'not_ready', 'created', 'planning', 'understanding', 'evaluating'].includes(status)) return 'warning';
   return 'neutral';
 }
@@ -52,12 +53,17 @@ function statusLabel(value: string): string {
     pending: '待处理',
     coverage_deferred: '部分范围待后续验证',
     hold: '建议暂缓',
-    ready: '可以发布',
+    ready: '已就绪',
     created: '任务已创建',
     understanding: '正在理解',
     planning: '正在规划',
     evaluating: '正在判断',
     cancelled: '任务已取消',
+    pinned: '已固定',
+    pinned_stale: '已固定但资料有更新',
+    not_pinned: '未固定',
+    not_requested: '未评估',
+    not_required: '无需运行绑定',
   };
   return map[normalized.toLowerCase()] || normalized;
 }
@@ -73,13 +79,11 @@ function eventLabel(eventType: string): string {
   const labels: Record<string, string> = {
     TASK_CREATED: 'Agent Task 已创建',
     TASK_CANCELLED: 'Agent Task 已取消',
-    UNDERSTANDING_STARTED: '开始理解上下文',
-    UNDERSTANDING_COMPLETED: '上下文理解完成',
-    PLANNING_STARTED: '开始规划验证',
-    PLAN_CREATED: '验证计划已形成',
-    PREFLIGHT_STARTED: '开始运行前检查',
-    PREFLIGHT_PASSED: '运行前检查通过',
-    PREFLIGHT_BLOCKED: '运行前检查阻断',
+    UNDERSTANDING_SNAPSHOT_PINNED: '已固定企业理解快照',
+    UNDERSTANDING_SNAPSHOT_UNAVAILABLE: '没有可固定的理解快照',
+    TEST_TARGET_SELECTION_EVALUATED: '已评估 Test Target 选择',
+    ANALYSIS_CONTEXT_EVALUATED: '已评估分析上下文',
+    RUNTIME_GROUNDING_EVALUATED: '已评估 Runtime Grounding',
     EXECUTION_STARTED: '真实执行开始',
     OBSERVATION_RECORDED: '收到真实 Observation',
     ORACLE_EVALUATED: 'Oracle 已判定',
@@ -92,9 +96,22 @@ function eventLabel(eventType: string): string {
 function eventDetail(event: AgentTaskEvent): string {
   const intent = asText(event.detail.intent);
   const previousStatus = asText(event.detail.previous_status);
+  const status = asText(event.detail.status);
+  const blockingCodes = asArray(event.detail.blocking_codes).map(asText).filter(Boolean);
+  const selectedCount = Number(event.detail.selected_target_count || 0);
+  const runtimeBoundCount = Number(event.detail.runtime_bound_target_count || 0);
+  const snapshotRef = asText(event.detail.snapshot_ref);
+  if (blockingCodes.length) return `Blockers · ${blockingCodes.join(' · ')}`;
+  if (snapshotRef) return `Snapshot · ${snapshotRef}`;
+  if (selectedCount || runtimeBoundCount) return `Targets · ${selectedCount} / runtime-bound ${runtimeBoundCount}`;
+  if (status) return `Status · ${status}`;
   if (intent) return `Intent · ${intent}`;
   if (previousStatus) return `Previous status · ${previousStatus}`;
   return '后端事件账本已记录；没有附加可展示详情。';
+}
+
+function hasEvent(events: AgentTaskEvent[], eventType: string): boolean {
+  return events.some((event) => event.eventType === eventType);
 }
 
 export function Verify() {
@@ -113,6 +130,7 @@ export function Verify() {
   const [agentTaskLoading, setAgentTaskLoading] = useState(Boolean(project && taskId));
   const [agentTaskError, setAgentTaskError] = useState('');
   const [cancellingTask, setCancellingTask] = useState(false);
+  const [groundingTask, setGroundingTask] = useState(false);
 
   const selectView = (view: VerifyView) => {
     const next = new URLSearchParams(params);
@@ -188,12 +206,24 @@ export function Verify() {
     }
   };
 
+  const regroundCurrentTask = async () => {
+    if (!project || !taskId || !agentTask || groundingTask || TERMINAL_TASK_STATUSES.has(agentTask.status)) return;
+    setGroundingTask(true);
+    try {
+      await groundAgentTask(project, taskId);
+      await loadAgentTask();
+    } catch (caught: unknown) {
+      setAgentTaskError(caught instanceof Error ? caught.message : 'Runtime Grounding 重新评估失败');
+    } finally {
+      setGroundingTask(false);
+    }
+  };
+
   const record = asRecord(data);
   const campaign = asRecord(record.campaign);
   const scanMeta = asRecord(record.scan_meta);
   const pipelineHealth = asRecord(record.pipeline_health);
   const releaseGate = asRecord(record.release_gate);
-
   const runtimeStatus = asText(campaign.campaign_status)
     || asText(scanMeta.execution_status)
     || asText(pipelineHealth.status);
@@ -207,7 +237,6 @@ export function Verify() {
     [record.defects, record.risks],
   );
   const clues = asArray(record.clues);
-  const visibleTargets = intelligence?.obligations.slice(0, 12) || [];
   const evidenceBackedFindings = findings.filter((finding) => (finding.evidence_chain?.length || 0) > 0).length;
   const targetCount = intelligence?.summary.obligationCount || 0;
   const runtimeNormalized = runtimeStatus.toLowerCase();
@@ -217,6 +246,11 @@ export function Verify() {
   const taskGoal = agentTask?.goal || goal || '验证当前系统并形成证据化质量判断';
   const taskTone = toneForStatus(agentTask?.status || '');
   const taskIsTerminal = Boolean(agentTask && TERMINAL_TASK_STATUSES.has(agentTask.status));
+  const pinnedTargets = agentTask?.selectedTargetSnapshots.slice(0, 12) || [];
+  const fallbackTargets = intelligence?.obligations.slice(0, 12) || [];
+  const taskHasObservation = hasEvent(agentEvents, 'OBSERVATION_RECORDED');
+  const taskHasFinding = hasEvent(agentEvents, 'FINDING_CREATED');
+  const taskHasDecision = hasEvent(agentEvents, 'DECISION_UPDATED');
 
   const milestones: AgentMilestone[] = [
     {
@@ -234,52 +268,82 @@ export function Verify() {
     {
       key: 'understanding',
       label: 'Understanding',
-      detail: intelligenceLoading
-        ? '正在读取已有企业理解与验证目标'
-        : intelligenceError
-          ? '验证目标读取失败'
-          : intelligence
-            ? '已读取持久化 Test Intelligence'
-            : '尚未形成可读取的验证上下文',
-      state: intelligenceLoading ? 'active' : intelligenceError ? 'attention' : intelligence ? 'done' : 'pending',
+      detail: agentTask
+        ? `Understanding Snapshot · ${statusLabel(agentTask.sourceSnapshotStatus)}${agentTask.sourceRevisionState ? ` · ${agentTask.sourceRevisionState}` : ''}`
+        : intelligenceLoading
+          ? '正在读取已有企业理解与验证目标'
+          : intelligenceError
+            ? '验证目标读取失败'
+            : intelligence
+              ? '已读取持久化 Test Intelligence；当前未绑定 Agent Task Snapshot'
+              : '尚未形成可读取的验证上下文',
+      state: agentTask
+        ? agentTask.sourceSnapshotStatus === 'PINNED' ? 'done' : agentTask.sourceSnapshotStatus === 'PINNED_STALE' ? 'attention' : 'attention'
+        : intelligenceLoading ? 'active' : intelligenceError ? 'attention' : intelligence ? 'done' : 'pending',
     },
     {
       key: 'planning',
       label: 'Planning',
-      detail: targetCount > 0 ? `${targetCount} 个 Test Targets 可供验证` : '当前没有已上报 Test Targets',
-      state: targetCount > 0 ? 'done' : 'pending',
+      detail: agentTask
+        ? agentTask.intent === 'analyze_requirements'
+          ? '分析型任务不伪造执行目标选择'
+          : `${agentTask.groundingSummary.selectedTargetCount} 个 Test Targets 已固定到该任务`
+        : targetCount > 0 ? `${targetCount} 个当前 Test Targets 可供后续规划` : '当前没有已上报 Test Targets',
+      state: agentTask
+        ? agentTask.intent === 'analyze_requirements' ? 'done' : agentTask.groundingSummary.selectedTargetCount > 0 ? 'done' : 'attention'
+        : targetCount > 0 ? 'done' : 'pending',
+    },
+    {
+      key: 'grounding',
+      label: 'Grounding',
+      detail: agentTask
+        ? `Runtime Grounding · ${statusLabel(agentTask.runtimeGroundingStatus)} · Preflight ${agentTask.groundingSummary.preflightReady ? 'READY' : 'NOT READY'}`
+        : '当前没有 Task-specific Runtime Grounding',
+      state: agentTask
+        ? agentTask.runtimeGroundingStatus === 'READY' || agentTask.runtimeGroundingStatus === 'NOT_REQUIRED'
+          ? 'done'
+          : agentTask.runtimeGroundingStatus === 'BLOCKED' ? 'attention' : 'pending'
+        : 'pending',
     },
     {
       key: 'acting',
       label: 'Acting',
-      detail: runtimeActive
-        ? '后端报告真实运行正在进行'
-        : runtimeFailed
-          ? `真实运行状态：${statusLabel(runtimeStatus)}`
-          : hasRuntimeReceipt
-            ? `最近运行：${statusLabel(runtimeStatus)}`
-            : '尚无真实运行回执',
-      state: runtimeActive ? 'active' : runtimeFailed ? 'attention' : hasRuntimeReceipt ? 'done' : 'pending',
+      detail: agentTask
+        ? agentTask.executionRunId
+          ? `已绑定真实 execution_run_id · ${agentTask.executionRunId}`
+          : '尚未绑定 execution_run_id；现有 Campaign 状态不会冒充 Task 执行事件'
+        : runtimeActive
+          ? '项目级真实运行正在进行'
+          : runtimeFailed
+            ? `项目级运行状态：${statusLabel(runtimeStatus)}`
+            : hasRuntimeReceipt ? `最近项目运行：${statusLabel(runtimeStatus)}` : '尚无真实运行回执',
+      state: agentTask
+        ? agentTask.executionRunId ? (agentTask.status === 'RUNNING' ? 'active' : 'done') : 'pending'
+        : runtimeActive ? 'active' : runtimeFailed ? 'attention' : hasRuntimeReceipt ? 'done' : 'pending',
     },
     {
       key: 'observing',
       label: 'Observing',
-      detail: evidenceBackedFindings > 0
-        ? `${evidenceBackedFindings} 个 Finding 已携带证据链`
-        : '逐步骤 Observation / Live Surface 尚未由真实执行事件上报',
-      state: evidenceBackedFindings > 0 ? 'done' : 'pending',
+      detail: agentTask
+        ? taskHasObservation ? 'Task Event Ledger 已收到真实 Observation' : 'Task 尚无真实 Observation Event'
+        : evidenceBackedFindings > 0 ? `${evidenceBackedFindings} 个项目 Finding 已携带证据链` : '尚无统一 Observation Event',
+      state: agentTask ? (taskHasObservation ? 'done' : 'pending') : evidenceBackedFindings > 0 ? 'done' : 'pending',
     },
     {
       key: 'evaluating',
       label: 'Evaluating',
-      detail: releaseStatus ? `Release Gate：${statusLabel(releaseStatus)}` : 'Release Gate 尚未形成明确回执',
-      state: releaseStatus ? (releaseTone === 'danger' ? 'attention' : 'done') : 'pending',
+      detail: agentTask
+        ? taskHasDecision ? 'Task Event Ledger 已形成 Decision 更新' : '尚无 Task-specific Decision Event'
+        : releaseStatus ? `项目 Release Gate：${statusLabel(releaseStatus)}` : 'Release Gate 尚未形成明确回执',
+      state: agentTask ? (taskHasDecision ? 'done' : 'pending') : releaseStatus ? (releaseTone === 'danger' ? 'attention' : 'done') : 'pending',
     },
     {
       key: 'finding',
       label: 'Finding',
-      detail: findings.length > 0 ? `${findings.length} 个问题已满足客户可交付证据边界` : '当前没有已确认 Finding；这不是安全结论',
-      state: findings.length > 0 ? 'attention' : 'pending',
+      detail: agentTask
+        ? taskHasFinding ? 'Task Event Ledger 已记录 Finding 创建' : '尚无 Task-specific Finding Event'
+        : findings.length > 0 ? `${findings.length} 个项目问题已满足客户可交付证据边界` : '当前没有已确认 Finding；这不是安全结论',
+      state: agentTask ? (taskHasFinding ? 'attention' : 'pending') : findings.length > 0 ? 'attention' : 'pending',
     },
   ];
 
@@ -288,7 +352,7 @@ export function Verify() {
       <StatePanel
         eyebrow="Live Workspace"
         title="选择项目后，让 QualiBug 开始工作"
-        description="Knowledge 可以只基于企业资料工作；Live Workspace 只展示真实 Agent Task、真实 Test Targets、真实运行回执、真实 Finding 和真实 Release Gate。"
+        description="Knowledge 可以只基于企业资料工作；Live Workspace 只展示真实 Agent Task、固定 Snapshot、真实 Grounding、真实运行回执、真实 Finding 和真实 Release Gate。"
       />
     );
   }
@@ -300,7 +364,7 @@ export function Verify() {
           <div>
             <span className="panel-kicker">Live Workspace · Run Control</span>
             <h1>真实运行控制</h1>
-            <p>继续复用现有 Preflight、服务配置、测试数据与扫描主链。Agent Task 只负责持久化目标和编排状态，不创建第二套执行系统。</p>
+            <p>继续复用现有 Preflight、服务配置、测试数据与扫描主链。Agent Task Grounding 只评估是否具备运行条件，不创建第二套执行系统。</p>
           </div>
           <button type="button" className="btn btn-secondary" onClick={() => selectView('workspace')}>返回 Live Workspace</button>
         </header>
@@ -333,7 +397,7 @@ export function Verify() {
             <strong>{taskGoal}</strong>
             <p>
               {agentTask
-                ? `${agentTask.taskId} · ${statusLabel(agentTask.status)} · Runtime Grounding ${agentTask.runtimeGroundingStatus || '未上报'}`
+                ? `${agentTask.taskId} · ${statusLabel(agentTask.status)} · Snapshot ${statusLabel(agentTask.sourceSnapshotStatus)} · Grounding ${statusLabel(agentTask.runtimeGroundingStatus)}`
                 : taskId
                   ? '正在读取后端 Agent Task。'
                   : '当前未绑定 Agent Task；可从 New Task 创建。'}
@@ -345,8 +409,7 @@ export function Verify() {
             <div>
               <strong>QualiBug</strong>
               <p>
-                Agent Task 已成为后端持久化对象。Event Ledger 只记录后端真正发生的工作事件；
-                Runtime Grounding、Preflight 和 Scan 尚未绑定到该 Task 时，不会补造 Planning / Acting 日志。
+                我只消费已经持久化的企业理解快照，并复用真实 Scan Preflight。Snapshot 过期、环境未就绪或 Test Target 尚未 Runtime Binding 时会明确阻断，不会偷偷重跑理解，也不会伪造执行。
               </p>
             </div>
           </div>
@@ -362,6 +425,11 @@ export function Verify() {
 
           <div className="verify-agent-rail-actions">
             <Link className="btn btn-secondary" to={buildProjectPath('/analyze', project, taskId ? `task=${encodeURIComponent(taskId)}&goal=${encodeURIComponent(taskGoal)}` : '')}>查看 Knowledge</Link>
+            {agentTask && !taskIsTerminal ? (
+              <button type="button" className="btn btn-secondary" onClick={() => void regroundCurrentTask()} disabled={groundingTask}>
+                {groundingTask ? '正在评估…' : '重新评估 Grounding'}
+              </button>
+            ) : null}
             {agentTask && !taskIsTerminal ? (
               <button type="button" className="btn btn-secondary" onClick={() => void cancelCurrentTask()} disabled={cancellingTask}>
                 {cancellingTask ? '正在取消…' : '取消 Agent Task'}
@@ -385,29 +453,47 @@ export function Verify() {
           </header>
 
           <div className="verify-context-chips" aria-label="当前真实上下文">
-            <span>Agent Task · {agentTaskLoading ? '…' : agentTask ? agentTask.status : '未绑定'}</span>
+            <span>Snapshot · {agentTask ? statusLabel(agentTask.sourceSnapshotStatus) : '未绑定'}</span>
+            <span>Selected Targets · {agentTask ? agentTask.groundingSummary.selectedTargetCount : '未绑定'}</span>
+            <span>Runtime-bound · {agentTask ? agentTask.groundingSummary.runtimeBoundTargetCount : '未绑定'}</span>
+            <span>Preflight · {agentTask ? (agentTask.groundingSummary.preflightReady ? 'READY' : 'NOT READY') : '未绑定'}</span>
+            <span>Grounding · {agentTask ? statusLabel(agentTask.runtimeGroundingStatus) : '未绑定'}</span>
             <span>Task Events · {agentTask ? agentEvents.length : '未绑定'}</span>
-            <span>Test Targets · {intelligenceLoading ? '…' : intelligence ? targetCount : '未上报'}</span>
-            <span>Findings · {findings.length}</span>
-            <span>Evidence-backed · {evidenceBackedFindings}</span>
+            <span>Project Findings · {findings.length}</span>
             <span>Background clues · {clues.length}</span>
-            <span>Decision · {statusLabel(releaseStatus)}</span>
           </div>
 
           <section className="verify-work-grid">
             <article className="verify-plan-panel">
               <div className="verify-panel-title">
-                <div><span>Plan</span><strong>需要验证什么</strong></div>
-                <Link to={buildProjectPath('/analyze', project, 'view=test-targets')}>查看全部</Link>
+                <div><span>Plan</span><strong>{agentTask ? '该 Task 固定的 Test Targets' : '当前可用 Test Targets'}</strong></div>
+                <Link to={buildProjectPath('/analyze', project, 'view=test-targets')}>查看 Knowledge</Link>
               </div>
 
-              {intelligenceLoading ? (
+              {agentTask ? (
+                pinnedTargets.length > 0 ? (
+                  <div className="verify-plan-list">
+                    {pinnedTargets.map((target, index) => (
+                      <div className="verify-plan-row" key={target.obligationId}>
+                        <span>{String(index + 1).padStart(2, '0')}</span>
+                        <div><strong>{target.title || target.obligationId}</strong><p>{target.objective || target.operationRef || '来源快照未提供更多展示信息'}</p></div>
+                        <small>{target.executionSurface || 'NOT_SELECTED'} · {target.actionBindingStatus || 'NOT_GROUNDED'}</small>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="verify-empty">
+                    <strong>{agentTask.intent === 'analyze_requirements' ? '分析任务不需要固定执行目标' : '该 Task 尚未固定可执行 Test Targets'}</strong>
+                    <p>{agentTask.groundingBlockers[0]?.message || '查看 Runtime Grounding blocker 了解原因。'}</p>
+                  </div>
+                )
+              ) : intelligenceLoading ? (
                 <div className="verify-empty"><span className="spinner" /><p>正在读取 Test Targets…</p></div>
               ) : intelligenceError ? (
                 <div className="verify-empty danger"><strong>Test Targets 读取失败</strong><p>{intelligenceError}</p><button type="button" className="btn btn-secondary btn-sm" onClick={() => void loadIntelligence()}>重试</button></div>
-              ) : visibleTargets.length > 0 ? (
+              ) : fallbackTargets.length > 0 ? (
                 <div className="verify-plan-list">
-                  {visibleTargets.map((target, index) => (
+                  {fallbackTargets.map((target, index) => (
                     <div className="verify-plan-row" key={target.obligationId}>
                       <span>{String(index + 1).padStart(2, '0')}</span>
                       <div><strong>{target.title}</strong><p>{target.objective}</p></div>
@@ -422,32 +508,48 @@ export function Verify() {
 
             <article className="verify-execution-panel">
               <div className="verify-panel-title">
-                <div><span>Live execution</span><strong>真实运行与证据 Surface</strong></div>
+                <div><span>Runtime Grounding</span><strong>执行前真实条件</strong></div>
                 <button type="button" onClick={() => selectView('run-control')}>打开 Run Control</button>
               </div>
 
               <div className="verify-execution-status">
                 <div>
-                  <span>Runtime</span>
-                  <strong className={`tone-${runtimeTone}`}>{statusLabel(runtimeStatus)}</strong>
-                  <p>{latestRunAt ? `最近回执：${latestRunAt}` : '后端未上报最近运行时间'}</p>
+                  <span>Task Grounding</span>
+                  <strong className={`tone-${toneForStatus(agentTask?.runtimeGroundingStatus || '')}`}>{statusLabel(agentTask?.runtimeGroundingStatus || '')}</strong>
+                  <p>{agentTask?.groundingEvaluatedAt ? `最近评估：${agentTask.groundingEvaluatedAt}` : '当前 Task 尚无 Grounding 回执'}</p>
                 </div>
                 <div>
-                  <span>Release Gate</span>
-                  <strong className={`tone-${releaseTone}`}>{statusLabel(releaseStatus)}</strong>
-                  <p>没有明确 Gate 回执时不会显示“可以发布”。</p>
+                  <span>Project Runtime</span>
+                  <strong className={`tone-${runtimeTone}`}>{statusLabel(runtimeStatus)}</strong>
+                  <p>{latestRunAt ? `最近项目回执：${latestRunAt}` : '项目后端未上报最近运行时间'}</p>
                 </div>
               </div>
 
               <div className="verify-live-surface">
-                <div className="verify-live-surface-tabs"><b>Execution Surface</b><span>Browser</span><span>API</span><span>Network</span><span>DB</span><span>Trace</span></div>
+                <div className="verify-live-surface-tabs"><b>Execution Surface</b><span>Snapshot</span><span>Targets</span><span>Preflight</span><span>Runtime</span><span>Evidence</span></div>
                 <div className="verify-live-surface-body">
                   <div className="verify-surface-pulse" aria-hidden="true"><span /></div>
-                  <strong>Agent Task 已接通，真实 Execution Event Stream 尚未绑定</strong>
-                  <p>
-                    当前已经能看到真实 Task Event Ledger，但 `execution_run_id` 和 Runtime Grounding 仍未接入 Agent Task。
-                    因此这里继续不冒充 Browser Live View，也不会把现有 Campaign 状态改写成某个 Task 的执行事件。
-                  </p>
+                  {agentTask?.runtimeGroundingStatus === 'BLOCKED' ? (
+                    <>
+                      <strong>Runtime Grounding 被真实条件阻断</strong>
+                      <p>{agentTask.groundingBlockers.slice(0, 4).map((blocker) => `${blocker.code}：${blocker.message}`).join('；') || '后端未提供 blocker 详情。'}</p>
+                    </>
+                  ) : agentTask?.runtimeGroundingStatus === 'READY' ? (
+                    <>
+                      <strong>Runtime Grounding 已就绪，尚未开始 Task-specific Execution</strong>
+                      <p>Preflight 和目标绑定已满足当前 Grounding 合同；下一阶段会把该 Task 绑定到现有 Scan，并生成真实 execution_run_id 与执行事件。</p>
+                    </>
+                  ) : agentTask?.runtimeGroundingStatus === 'NOT_REQUIRED' ? (
+                    <>
+                      <strong>这是分析型 Agent Task</strong>
+                      <p>该任务只消费固定企业理解快照，不触发 Runtime Preflight 或 Scan。</p>
+                    </>
+                  ) : (
+                    <>
+                      <strong>当前没有 Task-specific Runtime Grounding</strong>
+                      <p>没有 Grounding 回执时不会拿项目级 Campaign 状态冒充这个 Agent Task 的执行准备度。</p>
+                    </>
+                  )}
                 </div>
               </div>
             </article>
@@ -492,7 +594,7 @@ export function Verify() {
 
           <footer className="verify-evidence-dock">
             <span>Evidence</span>
-            <b>{evidenceBackedFindings} 个证据化 Finding</b>
+            <b>{evidenceBackedFindings} 个项目级证据化 Finding</b>
             <Link to={buildProjectPath('/findings', project)}>Inspect findings</Link>
             <Link to={buildProjectPath('/release', project)}>Open decision</Link>
           </footer>
