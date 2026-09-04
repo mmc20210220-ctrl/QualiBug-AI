@@ -89,6 +89,7 @@ requireAll(verify, [
   "label: 'Observing'",
   "label: 'Evaluating'",
   "label: 'Finding'",
+  'if (!project || taskId)',
   'getAgentTaskBundle(project, taskId)',
   'groundAgentTask(project, taskId)',
   'Agent Event Ledger',
