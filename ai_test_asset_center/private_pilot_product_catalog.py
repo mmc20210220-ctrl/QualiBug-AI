@@ -9,7 +9,7 @@ import threading
 import time
 from pathlib import Path
 from typing import Any
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 from products.catalog import get_product_catalog
 from products.requirement_intelligence import analyze_knowledge_asset
@@ -197,6 +197,80 @@ def _find_finding(payload: dict[str, Any], finding_id: str) -> dict[str, Any] | 
 
 class ProductCatalogHttpMixin:
     """Expose lightweight read products before the legacy routing layer."""
+
+    def _get_knowledge_source_summary(
+        self,
+        project: str,
+        root: Path,
+        actor: Any,
+    ) -> dict[str, Any]:
+        """Return only the source inventory without loading the full knowledge asset.
+
+        Materials/source-list consumers need occurrence metadata, not the 100MB+
+        enterprise business model. Keep the same merge and ACL boundaries as the
+        legacy summary route while reading only the durable source registry and
+        project input inventory.
+        """
+        from .connector_acl_authority import filter_connector_asset_for_actor
+        from .enterprise_knowledge_center import list_enterprise_knowledge_sources
+        from .private_pilot_project_assets import _knowledge_asset_sources
+
+        inventory = list_enterprise_knowledge_sources(
+            project,
+            root=root,
+            include_deleted=False,
+        )
+        registered = _knowledge_asset_sources(
+            {"sources": inventory.get("sources", [])},
+            root,
+        )
+        input_files = self._list_project_inputs(project, root)
+        inputs = (
+            input_files.get("sources", [])
+            if isinstance(input_files, dict)
+            and isinstance(input_files.get("sources"), list)
+            else []
+        )
+        merged: dict[str, dict[str, Any]] = {}
+        for item in [*registered, *inputs]:
+            if not isinstance(item, dict):
+                continue
+            key = str(
+                item.get("source_id")
+                or item.get("id")
+                or item.get("filename")
+                or ""
+            ).strip()
+            if key:
+                merged.setdefault(key, dict(item))
+
+        raw_summary = inventory.get("summary")
+        summary = dict(raw_summary) if isinstance(raw_summary, dict) else {}
+        summary["active_source_count"] = len(merged)
+        projected = filter_connector_asset_for_actor(
+            project,
+            {
+                "project_id": project,
+                "summary": summary,
+                "sources": list(merged.values()),
+            },
+            actor={**actor, "project_id": project} if actor else actor,
+            root=root,
+        )
+        sources = projected.get("sources")
+        visible_sources = sources if isinstance(sources, list) else []
+        projected_summary = projected.get("summary")
+        public_summary = (
+            dict(projected_summary)
+            if isinstance(projected_summary, dict)
+            else {}
+        )
+        public_summary["active_source_count"] = len(visible_sources)
+        return {
+            "project_id": project,
+            "summary": public_summary,
+            "sources": visible_sources,
+        }
 
     def _handle_finding_detail(
         self,
@@ -414,7 +488,18 @@ class ProductCatalogHttpMixin:
         product_route, requested_project = _project_analysis_request(parsed.path)
         finding_project, finding_id = _finding_detail_request(parsed.path)
         is_catalog = parsed.path == "/api/v1/products"
-        if not is_catalog and not requested_project and not finding_project:
+        query = parse_qs(parsed.query)
+        is_source_summary = (
+            parsed.path == "/api/knowledge/summary"
+            and str((query.get("view") or [""])[0]).strip().lower() == "sources"
+        )
+        summary_project = str((query.get("project") or [""])[0]).strip() if is_source_summary else ""
+        if (
+            not is_catalog
+            and not requested_project
+            and not finding_project
+            and not is_source_summary
+        ):
             return super().do_GET()
 
         self._init_request_context()
@@ -432,13 +517,17 @@ class ProductCatalogHttpMixin:
             )
 
         try:
-            project = _safe_project_id(finding_project or requested_project)
+            project = _safe_project_id(summary_project or finding_project or requested_project)
         except ValueError:
             return self._json({"ok": False, "error": "PROJECT_NOT_FOUND"}, 404)
         if not self._require_project_scope(project):
             return None
         if not self._require_known_project(project, root):
             return None
+
+        if is_source_summary:
+            projection = self._get_knowledge_source_summary(project, root, actor)
+            return self._json({"ok": True, **projection})
 
         if finding_project:
             if not finding_id:

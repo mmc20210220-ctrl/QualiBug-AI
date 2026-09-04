@@ -123,7 +123,7 @@ export async function getKnowledgeAsset(projectId: string): Promise<unknown> {
   // Do not ship the 100MB+ full knowledge asset to list/read pages such as Materials.
   const project = projectId.trim();
   if (!project) return { project_id: '', summary: { active_source_count: 0 }, sources: [] };
-  return fetchJSON<unknown>(`${API_BASE}/knowledge/summary?project=${encodeURIComponent(project)}`);
+  return fetchJSON<unknown>(`${API_BASE}/knowledge/summary?project=${encodeURIComponent(project)}&view=sources`);
 }
 
 export function getKnowledgePreview(sourceId: string): Promise<unknown> {
