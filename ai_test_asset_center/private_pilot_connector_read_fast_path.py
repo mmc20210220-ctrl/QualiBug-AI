@@ -1,0 +1,256 @@
+"""Fast read path for one connector's resource preview.
+
+The canonical connector inventory intentionally projects health, OAuth, webhook,
+acceptance and coverage for every connector. A resource-preview read only needs the
+target connector's persisted coverage receipt plus the project knowledge-source
+inventory. Keeping that read separate prevents one ``/resources`` request from
+rebuilding the complete connector inventory.
+"""
+from __future__ import annotations
+
+import logging
+import threading
+from pathlib import Path
+from typing import Any
+from urllib.parse import quote
+
+from .connector_acl_authority import filter_connector_sources_for_actor
+from .connector_sync_authority import ConnectorSyncError, list_connector_instances
+from .enterprise_knowledge_center import list_enterprise_knowledge_sources
+from .private_pilot_connector_handlers import _coverage_projection, _safe_int, _text
+
+_fast_path_logger = logging.getLogger("qualibug.fast-path")
+
+
+def _target_connector_instance(
+    project: str,
+    connector: str,
+    root: Path,
+) -> dict[str, Any]:
+    """Resolve one persisted connector without projecting unrelated connectors."""
+    rows = list_connector_instances(
+        project,
+        root=root,
+        include_disabled=True,
+    ).get("connector_instances") or []
+    for row in rows:
+        if (
+            isinstance(row, dict)
+            and _text(row.get("connector_instance_id"), 160) == connector
+        ):
+            return dict(row)
+    raise KeyError("knowledge_connector_not_found")
+
+
+def project_connector_resources_fast(
+    project: str,
+    connector: str,
+    root: Path,
+    actor: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Project at most 100 resource rows while preserving the public contract.
+
+    Unlike the legacy path this does not call ``_connector_inventory_row``. That
+    helper builds every connector's credential/health/webhook/OAuth/acceptance
+    projection even though resource preview consumes only ``coverage``.
+    """
+    instance = _target_connector_instance(project, connector, root)
+    coverage = _coverage_projection(project, connector, instance, root)
+    prefix = f"connector://{quote(connector, safe='._-')}/"
+    source_inventory = list_enterprise_knowledge_sources(
+        project,
+        root=root,
+        include_deleted=False,
+    )
+
+    # Narrow to the requested connector before ACL evaluation. The endpoint can
+    # never return another connector's source, while ACL filtering remains the
+    # authority for every candidate that may be returned.
+    source_rows = [
+        row
+        for row in source_inventory.get("sources") or []
+        if isinstance(row, dict)
+        and _text(row.get("source_ref"), 2000).startswith(prefix)
+    ]
+    acl_projection: dict[str, Any] = {}
+    if actor is not None:
+        source_rows, acl_projection = filter_connector_sources_for_actor(
+            project,
+            source_rows,
+            actor={**actor, "project_id": project},
+            root=root,
+        )
+
+    resources: list[dict[str, Any]] = []
+    for source in source_rows:
+        raw_permission_scope = source.get("permission_scope")
+        permission_scope = (
+            {
+                key: raw_permission_scope[key]
+                for key in (
+                    "visibility",
+                    "availability",
+                    "evidence_status",
+                    "acl_version",
+                    "complete",
+                    "propagation_allowed",
+                    "raw_remote_principals_returned",
+                )
+                if key in raw_permission_scope
+            }
+            if isinstance(raw_permission_scope, dict)
+            else {}
+        )
+        resources.append(
+            {
+                "resource_index": len(resources),
+                "display_title": _text(source.get("original_name"), 300)
+                or "UNNAMED_RESOURCE",
+                "resource_kind": _text(source.get("source_type"), 120),
+                "state": "MATERIALIZED",
+                "updated_at_utc": _text(source.get("updated_at_utc"), 80),
+                "source_updated_at": _text(source.get("source_updated_at"), 240),
+                "permission_scope": permission_scope,
+            }
+        )
+        if len(resources) >= 100:
+            break
+
+    materialized_count = len(resources)
+    for unsupported in coverage.get("unsupported_resources") or []:
+        if not isinstance(unsupported, dict) or len(resources) >= 100:
+            break
+        resources.append(
+            {
+                "resource_index": len(resources),
+                "display_title": _text(unsupported.get("display_title"), 300),
+                "resource_kind": _text(unsupported.get("resource_kind"), 120),
+                "remote_object_type": _text(
+                    unsupported.get("remote_object_type"), 80
+                ),
+                "state": "UNSUPPORTED",
+                "reason_code": _text(unsupported.get("reason_code"), 160),
+            }
+        )
+
+    return {
+        "schema": "qualibug.knowledge-connector-resources.v1",
+        "project_id": project,
+        "connector_instance_id": connector,
+        "status": _text(coverage.get("status"), 80) or "NOT_AVAILABLE",
+        "discovered_count": _safe_int(coverage.get("discovered_count")),
+        "covered_count": _safe_int(coverage.get("covered_count")),
+        "unsupported_count": _safe_int(coverage.get("unsupported_count")),
+        "materialized_preview_count": materialized_count,
+        "resources": resources,
+        "preview_truncated": len(resources) >= 100,
+        "source_content_returned": False,
+        "raw_cursor_returned": False,
+        "credential_values_returned": False,
+        "remote_resource_identities_returned": False,
+        "source_refs_returned": False,
+        "acl_visibility_projection": {
+            key: value
+            for key, value in acl_projection.items()
+            if key != "denied_source_keys"
+        },
+    }
+
+
+class ConnectorReadFastPathMixin:
+    """Fast-path expensive reads and shift post-scan projection work off first GET."""
+
+    def _schedule_command_center_prewarm(
+        self,
+        project: str,
+        root: Path,
+        tenant_id: str,
+    ) -> None:
+        """Build the new command-center snapshot after scan persistence completes.
+
+        The scan request has already left the write phase when this is called, so
+        unlike polling-triggered rebuilds there is no need to wait for the generic
+        write-settle window. The existing per-project single-flight lock remains the
+        authority: an overlapping GET or rebuild can never create a duplicate build.
+        """
+        cache_key = f"{tenant_id}:{project}"
+
+        def _run() -> None:
+            try:
+                from .private_pilot_http_routing import (
+                    _command_center_build_lock,
+                    _project_data_fingerprint,
+                )
+
+                build_lock = _command_center_build_lock(cache_key)
+                if not build_lock.acquire(blocking=False):
+                    return
+                try:
+                    fingerprint = _project_data_fingerprint(root, project)
+                    self._build_and_cache_command_center(
+                        project,
+                        root,
+                        cache_key,
+                        fingerprint,
+                    )
+                finally:
+                    build_lock.release()
+            except Exception:
+                # Prewarm is an optimization only. Scan success and persistence
+                # semantics must never depend on this background projection.
+                _fast_path_logger.exception(
+                    "command-center post-scan prewarm failed",
+                    extra={"context": {"project": project}},
+                )
+
+        threading.Thread(
+            target=_run,
+            daemon=True,
+            name=f"cc-prewarm-{project}",
+        ).start()
+
+    def _handle_v12_scan(
+        self,
+        project: str,
+        root: Path,
+        actor: dict[str, str],
+        body: dict[str, Any],
+    ) -> Any:
+        """Delegate the canonical scan, then prewarm only when project data changed."""
+        from .private_pilot_http_routing import _project_data_fingerprint
+
+        tenant_id = self._request_tenant()
+        before_fingerprint = _project_data_fingerprint(root, project)
+        response = super()._handle_v12_scan(project, root, actor, body)
+        after_fingerprint = _project_data_fingerprint(root, project)
+        if after_fingerprint != before_fingerprint:
+            self._schedule_command_center_prewarm(project, root, tenant_id)
+        return response
+
+    def _handle_knowledge_connector_get(
+        self,
+        project: str,
+        tail: list[str],
+        root: Path,
+        actor: dict[str, Any] | None = None,
+    ) -> Any:
+        if len(tail) != 2 or tail[1] != "resources":
+            return super()._handle_knowledge_connector_get(project, tail, root, actor)
+
+        connector = _text(tail[0], 160)
+        try:
+            projection = project_connector_resources_fast(
+                project,
+                connector,
+                root,
+                actor,
+            )
+            return self._json({"ok": True, "data": projection})
+        except (ConnectorSyncError, KeyError) as exc:
+            return self._knowledge_connector_error(exc)
+
+
+__all__ = [
+    "ConnectorReadFastPathMixin",
+    "project_connector_resources_fast",
+]

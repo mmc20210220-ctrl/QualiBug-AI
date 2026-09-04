@@ -1,24 +1,35 @@
+import { lazy, Suspense } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, Outlet, useLocation } from 'react-router-dom';
 import { Layout } from './components/Layout';
 import { ToastProvider } from './components/Toast';
 import { ScrollToTop } from './components/ScrollToTop';
 import { AuthProvider } from './components/AuthProvider';
 import { useAuth } from './components/useAuth';
-import { Dashboard } from './pages/Dashboard';
-import { RequirementIntelligence } from './pages/RequirementIntelligence';
-import { TestIntelligence } from './pages/TestIntelligence';
-import { Findings } from './pages/Findings';
-import { EvidenceChain } from './pages/EvidenceChain';
-import { ReleaseGate } from './pages/ReleaseGate';
-import { EnterpriseCampaigns } from './pages/EnterpriseCampaigns';
-import { CoverageMatrix } from './pages/CoverageMatrix';
-import { SystemJobs } from './pages/SystemJobs';
-import { Materials } from './pages/Materials';
-import { Settings } from './pages/Settings';
-import { Integration } from './pages/Integration';
-import { FindingDetail } from './pages/FindingDetail';
-import { Login } from './pages/Login';
-import { SharedEvidence } from './pages/SharedEvidence';
+
+const Dashboard = lazy(() => import('./pages/Dashboard').then((module) => ({ default: module.Dashboard })));
+const RequirementIntelligence = lazy(() => import('./pages/RequirementIntelligence').then((module) => ({ default: module.RequirementIntelligence })));
+const TestIntelligence = lazy(() => import('./pages/TestIntelligence').then((module) => ({ default: module.TestIntelligence })));
+const Findings = lazy(() => import('./pages/Findings').then((module) => ({ default: module.Findings })));
+const EvidenceChain = lazy(() => import('./pages/EvidenceChain').then((module) => ({ default: module.EvidenceChain })));
+const ReleaseGate = lazy(() => import('./pages/ReleaseGate').then((module) => ({ default: module.ReleaseGate })));
+const EnterpriseCampaigns = lazy(() => import('./pages/EnterpriseCampaigns').then((module) => ({ default: module.EnterpriseCampaigns })));
+const CoverageMatrix = lazy(() => import('./pages/CoverageMatrix').then((module) => ({ default: module.CoverageMatrix })));
+const SystemJobs = lazy(() => import('./pages/SystemJobs').then((module) => ({ default: module.SystemJobs })));
+const Materials = lazy(() => import('./pages/Materials').then((module) => ({ default: module.Materials })));
+const Settings = lazy(() => import('./pages/Settings').then((module) => ({ default: module.Settings })));
+const Integration = lazy(() => import('./pages/Integration').then((module) => ({ default: module.Integration })));
+const FindingDetail = lazy(() => import('./pages/FindingDetail').then((module) => ({ default: module.FindingDetail })));
+const Login = lazy(() => import('./pages/Login').then((module) => ({ default: module.Login })));
+const SharedEvidence = lazy(() => import('./pages/SharedEvidence').then((module) => ({ default: module.SharedEvidence })));
+
+function RouteFallback() {
+  return (
+    <div className="auth-gate" role="status" aria-live="polite">
+      <span className="spinner" aria-hidden="true" />
+      <p>正在打开页面…</p>
+    </div>
+  );
+}
 
 function RequireAuth() {
   const location = useLocation();
@@ -64,37 +75,39 @@ export default function App() {
       <AuthProvider>
         <BrowserRouter>
           <ScrollToTop />
-          <Routes>
-          <Route path="/login" element={<Login />} />
-          <Route path="/shared-evidence" element={<SharedEvidence />} />
-          <Route element={<RequireAuth />}>
-            <Route element={<Layout />}>
-              <Route path="/" element={<PreserveSearchRedirect to="/requirements" />} />
-              {/* 客户主链：需求审查 / 测试智能 / 总览 / 问题 / 接入 */}
-              <Route path="/requirements" element={<RequirementIntelligence />} />
-              <Route path="/test-intelligence" element={<TestIntelligence />} />
-              <Route path="/dashboard" element={<Dashboard />} />
-              <Route path="/findings" element={<Findings />} />
-              <Route path="/findings/:id" element={<FindingDetail />} />
-              <Route path="/integration" element={<Integration />} />
-              {/* 技术/内部页面：退出客户一级导航，保留 URL 直访 */}
-              <Route path="/evidence" element={<EvidenceChain />} />
-              <Route path="/release" element={<ReleaseGate />} />
-              <Route path="/materials" element={<Materials />} />
-              <Route path="/jobs" element={<SystemJobs />} />
-              <Route path="/campaigns" element={<EnterpriseCampaigns />} />
-              <Route path="/coverage" element={<CoverageMatrix />} />
-              <Route path="/settings" element={<Settings />} />
-              {/* 向后兼容重定向：必须保留 project 等查询上下文 */}
-              <Route path="/behavior-space" element={<PreserveSearchRedirect to="/coverage" />} />
-              <Route path="/test-tasks" element={<PreserveSearchRedirect to="/campaigns" />} />
-              <Route path="/clues" element={<PreserveSearchRedirect to="/settings" />} />
-              <Route path="/products" element={<PreserveSearchRedirect to="/requirements" />} />
-              {/* 未知旧链接保持原 fail-safe：回到验证总览，不改变历史兼容语义。 */}
-              <Route path="*" element={<PreserveSearchRedirect to="/dashboard" />} />
-            </Route>
-          </Route>
-        </Routes>
+          <Suspense fallback={<RouteFallback />}>
+            <Routes>
+              <Route path="/login" element={<Login />} />
+              <Route path="/shared-evidence" element={<SharedEvidence />} />
+              <Route element={<RequireAuth />}>
+                <Route element={<Layout />}>
+                  <Route path="/" element={<PreserveSearchRedirect to="/requirements" />} />
+                  {/* 客户主链：需求审查 / 测试智能 / 总览 / 问题 / 接入 */}
+                  <Route path="/requirements" element={<RequirementIntelligence />} />
+                  <Route path="/test-intelligence" element={<TestIntelligence />} />
+                  <Route path="/dashboard" element={<Dashboard />} />
+                  <Route path="/findings" element={<Findings />} />
+                  <Route path="/findings/:id" element={<FindingDetail />} />
+                  <Route path="/integration" element={<Integration />} />
+                  {/* 技术/内部页面：退出客户一级导航，保留 URL 直访 */}
+                  <Route path="/evidence" element={<EvidenceChain />} />
+                  <Route path="/release" element={<ReleaseGate />} />
+                  <Route path="/materials" element={<Materials />} />
+                  <Route path="/jobs" element={<SystemJobs />} />
+                  <Route path="/campaigns" element={<EnterpriseCampaigns />} />
+                  <Route path="/coverage" element={<CoverageMatrix />} />
+                  <Route path="/settings" element={<Settings />} />
+                  {/* 向后兼容重定向：必须保留 project 等查询上下文 */}
+                  <Route path="/behavior-space" element={<PreserveSearchRedirect to="/coverage" />} />
+                  <Route path="/test-tasks" element={<PreserveSearchRedirect to="/campaigns" />} />
+                  <Route path="/clues" element={<PreserveSearchRedirect to="/settings" />} />
+                  <Route path="/products" element={<PreserveSearchRedirect to="/requirements" />} />
+                  {/* 未知旧链接保持原 fail-safe：回到验证总览，不改变历史兼容语义。 */}
+                  <Route path="*" element={<PreserveSearchRedirect to="/dashboard" />} />
+                </Route>
+              </Route>
+            </Routes>
+          </Suspense>
         </BrowserRouter>
       </AuthProvider>
     </ToastProvider>

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ChangeEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { getKnowledgeAsset, ingestKnowledge } from '../api/client';
 import {
@@ -68,10 +68,14 @@ export function Materials() {
   const [connectors, setConnectors] = useState<KnowledgeConnectorRecord[]>([]);
   const [manifests, setManifests] = useState<ConnectorManifest[]>([]);
   const [resourcePreviews, setResourcePreviews] = useState<Record<string, ConnectorResourceInventory>>({});
+  const [resourcePreviewLoading, setResourcePreviewLoading] = useState<Record<string, boolean>>({});
+  const [resourcePreviewError, setResourcePreviewError] = useState<Record<string, string>>({});
   const [sources, setSources] = useState<KnowledgeSource[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState('');
   const [operation, setOperation] = useState<Record<string, string>>({});
+  const projectRef = useRef(project);
+  const refreshGenerationRef = useRef(0);
 
   const [formOpen, setFormOpen] = useState(false);
   const [editingId, setEditingId] = useState('');
@@ -93,6 +97,10 @@ export function Materials() {
   const [uploadType, setUploadType] = useState('prd');
   const [uploading, setUploading] = useState(false);
 
+  useEffect(() => {
+    projectRef.current = project;
+  }, [project]);
+
   const selectedManifest = useMemo(
     () => manifests.find((manifest) => manifest.connector_type === connectorType),
     [connectorType, manifests],
@@ -107,11 +115,15 @@ export function Materials() {
   );
 
   const refresh = useCallback(async () => {
+    const generation = ++refreshGenerationRef.current;
     if (!project) {
       setConnectors([]);
       setManifests([]);
       setResourcePreviews({});
+      setResourcePreviewLoading({});
+      setResourcePreviewError({});
       setSources([]);
+      setLoading(false);
       return;
     }
     setLoading(true);
@@ -122,8 +134,12 @@ export function Materials() {
         getKnowledgeAsset(project),
         listConnectorTypes(),
       ]);
+      if (generation !== refreshGenerationRef.current || projectRef.current !== project) return;
       setConnectors(inventory.connectors);
       setManifests(catalog.connector_types);
+      setResourcePreviews({});
+      setResourcePreviewLoading({});
+      setResourcePreviewError({});
       const quickOptions = quickConnectManifests(catalog.connector_types);
       setConnectorType((current) => (
         current && catalog.connector_types.some((manifest) => manifest.connector_type === current)
@@ -135,24 +151,43 @@ export function Materials() {
           ? current
           : quickOptions[0]?.connector_type || ''
       ));
-      const previews = await Promise.all(
-        inventory.connectors.map(async (connector) => [
-          connector.connector_instance_id,
-          await listConnectorResources(project, connector.connector_instance_id),
-        ] as const),
-      );
-      setResourcePreviews(Object.fromEntries(previews));
       setSources(sourceRows(asset));
     } catch (error: unknown) {
+      if (generation !== refreshGenerationRef.current || projectRef.current !== project) return;
       setLoadError(error instanceof Error ? error.message : '企业资料加载失败');
     } finally {
-      setLoading(false);
+      if (generation === refreshGenerationRef.current && projectRef.current === project) {
+        setLoading(false);
+      }
     }
   }, [project]);
 
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  const loadResourcePreview = useCallback(async (connectorId: string) => {
+    const id = connectorId.trim();
+    if (!project || !id || resourcePreviews[id] || resourcePreviewLoading[id]) return;
+    const requestedProject = project;
+    setResourcePreviewLoading((current) => ({ ...current, [id]: true }));
+    setResourcePreviewError((current) => ({ ...current, [id]: '' }));
+    try {
+      const preview = await listConnectorResources(requestedProject, id);
+      if (projectRef.current !== requestedProject) return;
+      setResourcePreviews((current) => ({ ...current, [id]: preview }));
+    } catch (error: unknown) {
+      if (projectRef.current !== requestedProject) return;
+      setResourcePreviewError((current) => ({
+        ...current,
+        [id]: error instanceof Error ? error.message : '资源预览加载失败',
+      }));
+    } finally {
+      if (projectRef.current === requestedProject) {
+        setResourcePreviewLoading((current) => ({ ...current, [id]: false }));
+      }
+    }
+  }, [project, resourcePreviewLoading, resourcePreviews]);
 
   const onlineSources = useMemo(
     () => sources.filter((source) => (
@@ -213,7 +248,7 @@ export function Materials() {
 
   const applyQuickConnectManifest = (manifest: ConnectorManifest, message: string) => {
     if (!manifest) {
-      toast.show('褰撳墠娌℃湁 Manifest 澹版槑 URL 鍏ュ彛鐨勮繛鎺ュ櫒', 'warning');
+      toast.show('当前没有 Manifest 声明 URL 入口的连接器', 'warning');
       return;
     }
     try {
@@ -237,7 +272,7 @@ export function Materials() {
     const manifest = quickConnectOptions.find((item) => item.connector_type === quickConnectType)
       || quickConnectOptions[0];
     if (!manifest) {
-      toast.show('褰撳墠娌℃湁 Manifest 澹版槑 URL 鍏ュ彛鐨勮繛鎺ュ櫒', 'warning');
+      toast.show('当前没有 Manifest 声明 URL 入口的连接器', 'warning');
       return;
     }
     applyQuickConnectManifest(
@@ -550,7 +585,8 @@ export function Materials() {
         ) : (
           <div className="materials-connector-grid">
             {connectors.map((connector) => {
-              const busy = Boolean(operation[connector.connector_instance_id]);
+              const connectorId = connector.connector_instance_id;
+              const busy = Boolean(operation[connectorId]);
               const running = Boolean(connector.active_sync_epoch_id) || connector.auto_sync?.state === 'running';
               const needsHelp = Boolean(
                 connector.auto_sync?.maintenance_required_by_user
@@ -561,7 +597,7 @@ export function Materials() {
                 || !connector.connection_profile?.credentials_configured,
               );
               return (
-                <article className="materials-connector-card" key={connector.connector_instance_id}>
+                <article className="materials-connector-card" key={connectorId}>
                   <div className="materials-connector-top">
                     <div>
                       <span className="materials-source-kind">{connector.connector_type || '在线连接器'}</span>
@@ -629,18 +665,41 @@ export function Materials() {
                   )}
 
                   <ConnectorCoverage coverage={connector.coverage} />
-                  <ConnectorResourcePreview preview={resourcePreviews[connector.connector_instance_id]} />
+                  <details
+                    className="materials-advanced"
+                    onToggle={(event) => {
+                      if (event.currentTarget.open) void loadResourcePreview(connectorId);
+                    }}
+                  >
+                    <summary>资源预览（按需加载）</summary>
+                    <div className="materials-advanced-field">
+                      {resourcePreviewLoading[connectorId] ? (
+                        <p>正在读取该连接器的资源预览…</p>
+                      ) : resourcePreviewError[connectorId] ? (
+                        <div className="materials-alert tone-danger">
+                          <span>{resourcePreviewError[connectorId]}</span>
+                          <button className="btn btn-secondary" type="button" onClick={() => void loadResourcePreview(connectorId)}>
+                            重试
+                          </button>
+                        </div>
+                      ) : resourcePreviews[connectorId] ? (
+                        <ConnectorResourcePreview preview={resourcePreviews[connectorId]} />
+                      ) : (
+                        <p>展开后才读取资源明细，首屏不再为每个连接器并发请求资源接口。</p>
+                      )}
+                    </div>
+                  </details>
 
                   <ConnectorAcceptancePanel
                     projectId={project}
-                    connectorId={connector.connector_instance_id}
+                    connectorId={connectorId}
                     connectorName={connector.display_name || connector.connector_type}
                     disabled={busy || running || needsHelp || connector.status !== 'ACTIVE'}
                   />
 
-                  {(operation[connector.connector_instance_id] || running || connector.auto_sync?.state === 'retrying') && (
+                  {(operation[connectorId] || running || connector.auto_sync?.state === 'retrying') && (
                     <div className="materials-operation-note">
-                      {operation[connector.connector_instance_id] || connector.auto_sync?.message || '系统正在自动更新资料。'}
+                      {operation[connectorId] || connector.auto_sync?.message || '系统正在自动更新资料。'}
                     </div>
                   )}
 

@@ -52,22 +52,38 @@ export function SystemJobs() {
     if (!project) {
       setAsset({});
       setConnectors([]);
+      setStatus('');
       return;
     }
     setLoading(true);
     setStatus('');
-    try {
-      const [knowledge, connectorRows] = await Promise.all([
-        getKnowledgeAsset(project),
-        listConnectors(project),
-      ]);
-      setAsset(asRecord(asRecord(knowledge).knowledge_asset));
-      setConnectors(connectorRows);
-    } catch (error: unknown) {
-      setStatus(error instanceof Error ? `✗ ${error.message}` : '✗ 加载失败');
-    } finally {
-      setLoading(false);
+    const [knowledgeResult, connectorsResult] = await Promise.allSettled([
+      getKnowledgeAsset(project),
+      listConnectors(project),
+    ]);
+    const errors: string[] = [];
+    if (knowledgeResult.status === 'fulfilled') {
+      setAsset(asRecord(asRecord(knowledgeResult.value).knowledge_asset));
+    } else {
+      setAsset({});
+      errors.push(
+        knowledgeResult.reason instanceof Error
+          ? `Job 资产读取失败：${knowledgeResult.reason.message}`
+          : 'Job 资产读取失败',
+      );
     }
+    if (connectorsResult.status === 'fulfilled') {
+      setConnectors(connectorsResult.value);
+    } else {
+      setConnectors([]);
+      errors.push(
+        connectorsResult.reason instanceof Error
+          ? `Job 平台资料源读取失败：${connectorsResult.reason.message}`
+          : 'Job 平台资料源读取失败',
+      );
+    }
+    if (errors.length > 0) setStatus(`⚠ ${errors.join('；')}。其余已成功读取的数据仍可使用。`);
+    setLoading(false);
   };
 
   useEffect(() => {

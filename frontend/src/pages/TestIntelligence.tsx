@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   getTestIntelligence,
@@ -233,8 +233,10 @@ export function TestIntelligence() {
   const [loading, setLoading] = useState(Boolean(project));
   const [error, setError] = useState('');
   const [activeKind, setActiveKind] = useState<TestObligationKind | 'all'>('all');
+  const requestGeneration = useRef(0);
 
   const load = useCallback(async () => {
+    const generation = ++requestGeneration.current;
     if (!project) {
       setAnalysis(null);
       setError('');
@@ -245,34 +247,42 @@ export function TestIntelligence() {
     setError('');
     try {
       const next = await getTestIntelligence(project);
+      if (generation !== requestGeneration.current) return;
       setAnalysis(next);
       if (!next) setError('当前项目不可用，请重新选择项目。');
     } catch (caught: unknown) {
-      setAnalysis(null);
+      if (generation !== requestGeneration.current) return;
       setError(caught instanceof Error ? caught.message : '测试智能数据读取失败');
     } finally {
-      setLoading(false);
+      if (generation === requestGeneration.current) setLoading(false);
     }
   }, [project]);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    void load();
+    return () => {
+      requestGeneration.current += 1;
+    };
+  }, [load]);
+
+  const currentAnalysis = analysis?.projectId === project ? analysis : null;
 
   const obligations = useMemo(() => {
-    if (!analysis) return [];
-    if (activeKind === 'all') return analysis.obligations;
-    return analysis.obligations.filter((item) => item.obligationKind === activeKind);
-  }, [activeKind, analysis]);
+    if (!currentAnalysis) return [];
+    if (activeKind === 'all') return currentAnalysis.obligations;
+    return currentAnalysis.obligations.filter((item) => item.obligationKind === activeKind);
+  }, [activeKind, currentAnalysis]);
 
   const designsByObligation = useMemo<Map<string, TestDesign>>(() => {
-    if (!analysis) return new Map<string, TestDesign>();
+    if (!currentAnalysis) return new Map<string, TestDesign>();
     return new Map<string, TestDesign>(
-      analysis.testDesigns.map((item): [string, TestDesign] => [item.sourceObligationId, item]),
+      currentAnalysis.testDesigns.map((item): [string, TestDesign] => [item.sourceObligationId, item]),
     );
-  }, [analysis]);
+  }, [currentAnalysis]);
 
   if (!project) return <WorkspaceEmpty onMaterials={() => navigateToProjectPath('/materials', '')} />;
 
-  if (loading) {
+  if (!currentAnalysis && loading) {
     return (
       <section className="ti-loading" role="status" aria-live="polite">
         <span className="spinner" aria-hidden="true" />
@@ -281,7 +291,7 @@ export function TestIntelligence() {
     );
   }
 
-  if (error || !analysis) {
+  if (!currentAnalysis) {
     return (
       <section className="ti-error" role="alert">
         <span>Test Intelligence 暂不可用</span>
@@ -292,12 +302,25 @@ export function TestIntelligence() {
     );
   }
 
-  const { coverage, summary, testDesignProjection } = analysis;
+  const { coverage, summary, testDesignProjection } = currentAnalysis;
   const statusMeta = COVERAGE_META[coverage.status];
   const counts = coverage.countsByObligationKind;
 
   return (
     <div className="ti-workspace">
+      {loading && (
+        <section className="ti-diagnostics" role="status" aria-live="polite">
+          <div><span>后台刷新</span><strong>保留当前结果，不阻塞页面操作</strong></div>
+          <p>正在读取最新 Test Intelligence；完成后会原位更新。</p>
+        </section>
+      )}
+      {!loading && error && (
+        <section className="ti-diagnostics" role="alert">
+          <div><span>刷新失败</span><strong>当前仍显示上一次成功结果</strong></div>
+          <p>{error}</p>
+        </section>
+      )}
+
       <header className={`ti-hero status-${coverage.status.toLowerCase()}`}>
         <div className="ti-hero-copy">
           <span className="ti-eyebrow">{statusMeta.eyebrow}</span>
@@ -305,7 +328,7 @@ export function TestIntelligence() {
           <p>{statusMeta.description}</p>
           <div className="ti-hero-actions">
             <button type="button" className="btn btn-primary" onClick={() => navigateToProjectPath('/materials', project)}>管理企业资料</button>
-            <button type="button" className="btn btn-secondary" onClick={() => void load()}>刷新测试智能</button>
+            <button type="button" className="btn btn-secondary" onClick={() => void load()} disabled={loading}>{loading ? '刷新中…' : '刷新测试智能'}</button>
             <button type="button" className="btn btn-secondary" onClick={() => navigateToProjectPath('/requirements', project)}>查看需求审查</button>
           </div>
         </div>
@@ -348,7 +371,7 @@ export function TestIntelligence() {
         <div className="ti-section-heading">
           <div><span>Test Obligations + Test Design</span><h2>从“必须验证什么”到“如何验证”</h2></div>
           <div className="ti-filter" role="group" aria-label="按测试义务类型筛选">
-            <button type="button" className={activeKind === 'all' ? 'active' : ''} onClick={() => setActiveKind('all')}>全部 {analysis.obligations.length}</button>
+            <button type="button" className={activeKind === 'all' ? 'active' : ''} onClick={() => setActiveKind('all')}>全部 {currentAnalysis.obligations.length}</button>
             {(Object.keys(KIND_META) as TestObligationKind[]).map((kind) => (
               <button key={kind} type="button" className={activeKind === kind ? 'active' : ''} onClick={() => setActiveKind(kind)} title={KIND_META[kind].description}>{KIND_META[kind].short} {counts[kind]}</button>
             ))}
