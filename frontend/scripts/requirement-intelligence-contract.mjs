@@ -28,9 +28,11 @@ requireText(app, 'path="*" element={<PreserveSearchRedirect to="/dashboard" />}'
 
 for (const expected of [
   "type AnalyzeView = 'requirements' | 'test-targets';",
-  '<RequirementIntelligence />',
-  '<TestIntelligence />',
-  '管理资料来源',
+  '<RequirementIntelligence',
+  '<TestIntelligence',
+  "await ingestKnowledge(project, file, 'prd');",
+  '拖入一份 PRD，立即开始需求分析',
+  'PRD 分析本身就有价值，不要求先有可执行环境',
   '先理解软件应该如何工作，再决定需要验证什么',
 ]) requireText(analyze, expected, 'Unified Analyze workspace');
 
