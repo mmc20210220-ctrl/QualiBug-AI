@@ -31,6 +31,11 @@ _TEST_INTELLIGENCE_BUILD_LOCKS: dict[str, threading.Lock] = {}
 _TEST_INTELLIGENCE_BUILD_LOCKS_GUARD = threading.Lock()
 _TEST_INTELLIGENCE_DB_DIGEST_CACHE: dict[str, tuple[str, str]] = {}
 _TEST_INTELLIGENCE_DB_DIGEST_LOCK = threading.Lock()
+_TEST_INTELLIGENCE_REVALIDATING: set[str] = set()
+_TEST_INTELLIGENCE_REVALIDATE_LOCK = threading.Lock()
+_TEST_INTELLIGENCE_LAST_REVALIDATE: dict[str, float] = {}
+_TEST_INTELLIGENCE_REVALIDATE_INTERVAL_SECONDS = 15.0
+_TEST_INTELLIGENCE_PROJECTION_SCHEMA = "qualibug.test-intelligence.read-projection.v1"
 
 
 def _test_intelligence_build_lock(cache_key: str) -> threading.Lock:
@@ -123,19 +128,115 @@ def _test_intelligence_db_knowledge_digest(
     return scoped_digest
 
 
+def _test_intelligence_file_source_fingerprint(root: Path, project: str) -> str:
+    """Fingerprint only files that can change Requirement/Test Intelligence inputs.
+
+    Runtime scan/evidence/regression artifacts are intentionally excluded. They do
+    not feed the intelligence analyzers and must not invalidate this read model.
+    """
+    safe_project = _safe_project_id(project)
+    root = root.resolve()
+    explicit = [
+        root / ".qualibug" / "source_registry" / f"{safe_project}.json",
+        root / "platform_workspace" / safe_project / "enterprise_knowledge_center" / "source_registry.json",
+        root / "platform_outputs" / safe_project / "enterprise_knowledge_center" / "enterprise_business_knowledge_asset.json",
+        root / "platform_workspace" / safe_project / "enterprise_knowledge_center" / "enterprise_business_knowledge_asset.json",
+        root / "platform_outputs" / safe_project / "defect_discovery" / "enterprise_business_knowledge_asset.json",
+        root / "platform_workspace" / safe_project / "defect_discovery" / "enterprise_business_knowledge_asset.json",
+    ]
+    inputs_root = root / "platform_inputs" / safe_project
+    if inputs_root.is_dir():
+        explicit.extend(path for path in inputs_root.rglob("*") if path.is_file())
+
+    digest = hashlib.sha256()
+    seen: set[Path] = set()
+    for path in sorted(explicit, key=lambda item: item.as_posix()):
+        try:
+            resolved = path.resolve()
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            stat = resolved.stat()
+        except OSError:
+            continue
+        try:
+            relative = resolved.relative_to(root).as_posix()
+        except ValueError:
+            continue
+        _hash_fingerprint_value(digest, relative)
+        _hash_fingerprint_value(digest, stat.st_mtime_ns)
+        _hash_fingerprint_value(digest, stat.st_size)
+    return f"knowledge-files:{digest.hexdigest()}"
+
+
 def _test_intelligence_source_fingerprint(
     root: Path,
     tenant_id: str,
     project: str,
 ) -> str:
-    """Fingerprint persisted sources consumed by Requirement/Test Intelligence."""
-    from . import private_pilot_http_routing as routing
-
+    """Fingerprint only persisted knowledge inputs consumed by the analyzers."""
     return "|".join(
         (
-            routing._project_data_fingerprint(root, project),
+            _test_intelligence_file_source_fingerprint(root, project),
             _test_intelligence_db_knowledge_digest(root, tenant_id, project),
         )
+    )
+
+
+def _test_intelligence_projection_path(
+    root: Path,
+    tenant_id: str,
+    project: str,
+) -> Path:
+    safe_project = _safe_project_id(project)
+    tenant_key = hashlib.sha256(tenant_id.encode("utf-8", errors="replace")).hexdigest()[:20]
+    return (
+        root.resolve()
+        / "platform_workspace"
+        / safe_project
+        / "read_models"
+        / f"test_intelligence.{tenant_key}.json"
+    )
+
+
+def _load_persisted_test_intelligence(
+    root: Path,
+    tenant_id: str,
+    project: str,
+) -> tuple[str, dict[str, Any]] | None:
+    from .private_pilot_json_io import _read_json_object
+
+    path = _test_intelligence_projection_path(root, tenant_id, project)
+    try:
+        payload = _read_json_object(path)
+    except (OSError, ValueError):
+        return None
+    if payload.get("schema") != _TEST_INTELLIGENCE_PROJECTION_SCHEMA:
+        return None
+    fingerprint = str(payload.get("source_fingerprint") or "").strip()
+    analysis = payload.get("analysis")
+    if not fingerprint or not isinstance(analysis, dict):
+        return None
+    return fingerprint, copy.deepcopy(analysis)
+
+
+def _persist_test_intelligence(
+    root: Path,
+    tenant_id: str,
+    project: str,
+    fingerprint: str,
+    analysis: dict[str, Any],
+) -> None:
+    from .private_pilot_json_io import _write_json_object_atomic
+
+    _write_json_object_atomic(
+        _test_intelligence_projection_path(root, tenant_id, project),
+        {
+            "schema": _TEST_INTELLIGENCE_PROJECTION_SCHEMA,
+            "project_id": project,
+            "source_fingerprint": fingerprint,
+            "analysis": analysis,
+        },
     )
 
 
@@ -407,49 +508,33 @@ class ProductCatalogHttpMixin:
             result["project_id"] = project
             return result
 
-    def _get_test_intelligence_analysis(
+    def _build_test_intelligence_projection(
         self,
         project: str,
         root: Path,
         actor: Any,
+        *,
+        tenant_id: str,
+        cache_key: str,
+        fingerprint: str,
     ) -> dict[str, Any]:
-        """Return a source-fingerprint cached Test Intelligence projection.
-
-        A cache hit does not load the merged knowledge asset and does not execute
-        either analysis product. On a cold build, an already-warmed Requirement
-        Intelligence result is reused; otherwise the requirement result is computed
-        once from the same loaded asset and cached for the Requirement route too.
-        """
-        tenant_id = self._request_tenant()
-        cache_key = f"{tenant_id}:{project}"
-        fingerprint = _test_intelligence_source_fingerprint(root, tenant_id, project)
-
-        def cached_analysis() -> dict[str, Any] | None:
-            with _TEST_INTELLIGENCE_CACHE_LOCK:
-                entry = _TEST_INTELLIGENCE_CACHE.get(cache_key)
-                if entry is None or entry[0] != fingerprint:
-                    return None
-                return copy.deepcopy(entry[1])
-
-        def cached_requirement() -> dict[str, Any] | None:
-            with _REQUIREMENT_INTELLIGENCE_CACHE_LOCK:
-                entry = _REQUIREMENT_INTELLIGENCE_CACHE.get(cache_key)
-                if entry is None or entry[0] != fingerprint:
-                    return None
-                return copy.deepcopy(entry[1])
-
-        cached = cached_analysis()
-        if cached is not None:
-            return cached
-
+        """Build one canonical projection and persist it for restart-safe reads."""
         build_lock = _test_intelligence_build_lock(cache_key)
         with build_lock:
-            cached = cached_analysis()
-            if cached is not None:
-                return cached
+            with _TEST_INTELLIGENCE_CACHE_LOCK:
+                cached = _TEST_INTELLIGENCE_CACHE.get(cache_key)
+                if cached is not None and cached[0] == fingerprint:
+                    return copy.deepcopy(cached[1])
+
+            with _REQUIREMENT_INTELLIGENCE_CACHE_LOCK:
+                requirement_entry = _REQUIREMENT_INTELLIGENCE_CACHE.get(cache_key)
+                requirement_analysis = (
+                    copy.deepcopy(requirement_entry[1])
+                    if requirement_entry is not None and requirement_entry[0] == fingerprint
+                    else None
+                )
 
             asset = self._load_merged_knowledge_asset(project, root, actor)
-            requirement_analysis = cached_requirement()
             if requirement_analysis is None:
                 requirement_analysis = analyze_knowledge_asset(asset)
                 with _REQUIREMENT_INTELLIGENCE_CACHE_LOCK:
@@ -469,7 +554,6 @@ class ProductCatalogHttpMixin:
                 analyze_test_intelligence(asset),
             )
             analysis["project_id"] = project
-
             with _TEST_INTELLIGENCE_CACHE_LOCK:
                 if (
                     cache_key not in _TEST_INTELLIGENCE_CACHE
@@ -481,7 +565,139 @@ class ProductCatalogHttpMixin:
                     fingerprint,
                     copy.deepcopy(analysis),
                 )
+            try:
+                _persist_test_intelligence(
+                    root,
+                    tenant_id,
+                    project,
+                    fingerprint,
+                    analysis,
+                )
+            except OSError:
+                # The request still has a correct in-memory result. Persistence is a
+                # latency optimization and must not turn a successful analysis into 500.
+                pass
+            return copy.deepcopy(analysis)
+
+    def _revalidate_test_intelligence_projection(
+        self,
+        project: str,
+        root: Path,
+        actor: Any,
+        *,
+        tenant_id: str,
+        cache_key: str,
+    ) -> None:
+        fingerprint = _test_intelligence_source_fingerprint(root, tenant_id, project)
+        with _TEST_INTELLIGENCE_CACHE_LOCK:
+            entry = _TEST_INTELLIGENCE_CACHE.get(cache_key)
+            if entry is not None and entry[0] == fingerprint:
+                return
+        self._build_test_intelligence_projection(
+            project,
+            root,
+            actor,
+            tenant_id=tenant_id,
+            cache_key=cache_key,
+            fingerprint=fingerprint,
+        )
+
+    def _spawn_test_intelligence_revalidation(
+        self,
+        project: str,
+        root: Path,
+        actor: Any,
+        *,
+        tenant_id: str,
+        cache_key: str,
+    ) -> None:
+        now = time.monotonic()
+        with _TEST_INTELLIGENCE_REVALIDATE_LOCK:
+            if cache_key in _TEST_INTELLIGENCE_REVALIDATING:
+                return
+            last = _TEST_INTELLIGENCE_LAST_REVALIDATE.get(cache_key, 0.0)
+            if now - last < _TEST_INTELLIGENCE_REVALIDATE_INTERVAL_SECONDS:
+                return
+            _TEST_INTELLIGENCE_LAST_REVALIDATE[cache_key] = now
+            _TEST_INTELLIGENCE_REVALIDATING.add(cache_key)
+
+        def revalidate() -> None:
+            try:
+                self._revalidate_test_intelligence_projection(
+                    project,
+                    root,
+                    actor,
+                    tenant_id=tenant_id,
+                    cache_key=cache_key,
+                )
+            finally:
+                with _TEST_INTELLIGENCE_REVALIDATE_LOCK:
+                    _TEST_INTELLIGENCE_REVALIDATING.discard(cache_key)
+
+        threading.Thread(
+            target=revalidate,
+            name=f"test-intelligence-revalidate-{project}",
+            daemon=True,
+        ).start()
+
+    def _get_test_intelligence_analysis(
+        self,
+        project: str,
+        root: Path,
+        actor: Any,
+    ) -> dict[str, Any]:
+        """Serve the last materialized Test Intelligence projection immediately.
+
+        Hot reads and post-restart reads do not calculate source fingerprints, load
+        the 100MB+ merged knowledge asset, or execute analyzers. Freshness checking
+        and any rebuild happen in a rate-limited background thread. Only the first
+        ever read for a project/tenant blocks to materialize a projection.
+        """
+        tenant_id = self._request_tenant()
+        cache_key = f"{tenant_id}:{project}"
+
+        with _TEST_INTELLIGENCE_CACHE_LOCK:
+            entry = _TEST_INTELLIGENCE_CACHE.get(cache_key)
+            if entry is not None:
+                cached = copy.deepcopy(entry[1])
+            else:
+                cached = None
+        if cached is not None:
+            self._spawn_test_intelligence_revalidation(
+                project,
+                root,
+                actor,
+                tenant_id=tenant_id,
+                cache_key=cache_key,
+            )
+            return cached
+
+        persisted = _load_persisted_test_intelligence(root, tenant_id, project)
+        if persisted is not None:
+            fingerprint, analysis = persisted
+            with _TEST_INTELLIGENCE_CACHE_LOCK:
+                _TEST_INTELLIGENCE_CACHE[cache_key] = (
+                    fingerprint,
+                    copy.deepcopy(analysis),
+                )
+            self._spawn_test_intelligence_revalidation(
+                project,
+                root,
+                actor,
+                tenant_id=tenant_id,
+                cache_key=cache_key,
+            )
             return analysis
+
+        fingerprint = _test_intelligence_source_fingerprint(root, tenant_id, project)
+        return self._build_test_intelligence_projection(
+            project,
+            root,
+            actor,
+            tenant_id=tenant_id,
+            cache_key=cache_key,
+            fingerprint=fingerprint,
+        )
 
     def do_GET(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
