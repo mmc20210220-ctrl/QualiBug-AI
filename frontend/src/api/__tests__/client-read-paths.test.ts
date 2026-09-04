@@ -55,7 +55,11 @@ describe('frontend display read paths', () => {
         return Promise.resolve({ data: { project_name: 'Acme' } });
       }
       if (path === '/api/knowledge/summary?project=acme&view=sources') {
-        return Promise.resolve({ project_id: 'acme', summary: { active_source_count: 0 }, sources: [] });
+        return Promise.resolve({
+          project_id: 'acme',
+          summary: { active_source_count: 1 },
+          sources: [{ source_id: 'prd-1', filename: 'prd.md', status: 'active' }],
+        });
       }
       if (path === '/api/connectors/list?project=acme') {
         return Promise.resolve({ connectors: [] });
@@ -75,8 +79,8 @@ describe('frontend display read paths', () => {
     expect(resolveProjectIdMock).not.toHaveBeenCalled();
   });
 
-  it('starts independent display reads directly from the selected project id', async () => {
-    await Promise.all([
+  it('starts independent display reads directly and preserves the legacy knowledge envelope', async () => {
+    const [knowledge] = await Promise.all([
       getKnowledgeAsset(' acme '),
       listConnectors(' acme '),
       getScanPreflight(' acme '),
@@ -87,6 +91,14 @@ describe('frontend display read paths', () => {
       '/api/connectors/list?project=acme',
       '/api/v1/scan/preflight?project=acme',
     ]);
+    expect(knowledge).toMatchObject({
+      project_id: 'acme',
+      sources: [{ source_id: 'prd-1' }],
+      knowledge_asset: {
+        project_id: 'acme',
+        sources: [{ source_id: 'prd-1' }],
+      },
+    });
     expect(resolveProjectIdMock).not.toHaveBeenCalled();
   });
 });
