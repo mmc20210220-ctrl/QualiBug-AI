@@ -14,9 +14,11 @@ from .agent_task_store import (
     get_agent_task,
     list_agent_task_events,
 )
+from .product_logging import get_logger
 from .real_project_onboarding import _safe_project_id
 
 _AGENT_TASK_ROLES = {"project_owner", "qa_lead", "testops_admin", "admin"}
+_agent_logger = get_logger("qualibug.agent_task")
 
 
 def _text(value: Any) -> str:
@@ -75,8 +77,24 @@ class AgentTaskHandlersMixin:
                 {"ok": False, "error": "AGENT_TASK_CONFLICT", "message": str(exc)},
                 409,
             )
+        _agent_logger.error(
+            "agent_task.request_failed",
+            exc_info=True,
+            extra={
+                "context": {
+                    "event": "agent_task.request_failed",
+                    "path": _text(getattr(self, "path", "")),
+                    "correlation_id": _text(getattr(self, "_qualibug_corr_id", "")),
+                    "exc_type": type(exc).__name__,
+                }
+            },
+        )
         return self._json(
-            {"ok": False, "error": "AGENT_TASK_INTERNAL_ERROR", "message": str(exc)[:300]},
+            {
+                "ok": False,
+                "error": "AGENT_TASK_INTERNAL_ERROR",
+                "message": "Agent Task 持久化资源暂时不可用。",
+            },
             500,
         )
 
@@ -116,7 +134,7 @@ class AgentTaskHandlersMixin:
                 task_id=route[2],
             )
             return self._json({"ok": True, "data": task})
-        except AgentTaskError as exc:
+        except Exception as exc:
             return self._agent_task_error(exc)
 
     def do_POST(self) -> None:  # noqa: N802
@@ -146,7 +164,17 @@ class AgentTaskHandlersMixin:
                 )
                 return self._json({"ok": True, "data": task})
 
-            body = self._body()
+            try:
+                body = self._body()
+            except ValueError as exc:
+                return self._json(
+                    {
+                        "ok": False,
+                        "error": "AGENT_TASK_BAD_REQUEST",
+                        "message": str(exc),
+                    },
+                    400,
+                )
             task = create_agent_task(
                 self._root(),
                 tenant_id=tenant_id,
@@ -157,5 +185,5 @@ class AgentTaskHandlersMixin:
                 correlation_id=correlation_id,
             )
             return self._json({"ok": True, "data": task}, 201)
-        except AgentTaskError as exc:
+        except Exception as exc:
             return self._agent_task_error(exc)
