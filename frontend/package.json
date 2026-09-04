@@ -19,6 +19,7 @@
     "test:brand-mark": "node scripts/brand/brand-mark-contract.mjs",
     "test:login-contract": "node scripts/login-page-contract.mjs",
     "test:autonomous-ux": "node scripts/autonomous-ux-contract.mjs",
+    "test:agent-workspace": "node scripts/agent-workspace-contract.mjs",
     "test:frontend-finalization": "node scripts/frontend-finalization-contract.mjs",
     "test:requirement-intelligence": "node scripts/requirement-intelligence-contract.mjs",
     "test:test-intelligence": "node scripts/test-intelligence-contract.mjs",
