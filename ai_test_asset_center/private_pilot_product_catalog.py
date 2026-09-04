@@ -19,9 +19,14 @@ from .product_intelligence_linkage import compose_requirement_test_linkage
 from .real_project_onboarding import _safe_project_id
 
 
+_REQUIREMENT_INTELLIGENCE_CACHE: dict[str, tuple[str, dict[str, Any]]] = {}
+_REQUIREMENT_INTELLIGENCE_CACHE_LOCK = threading.Lock()
 _TEST_INTELLIGENCE_CACHE: dict[str, tuple[str, dict[str, Any]]] = {}
 _TEST_INTELLIGENCE_CACHE_LOCK = threading.Lock()
 _TEST_INTELLIGENCE_CACHE_MAX_ENTRIES = 64
+# Requirement Intelligence and Test Intelligence share this per tenant/project lock.
+# A cold Test Intelligence build also materializes Requirement Intelligence, so the
+# two routes must not race and repeat the same requirement analysis.
 _TEST_INTELLIGENCE_BUILD_LOCKS: dict[str, threading.Lock] = {}
 _TEST_INTELLIGENCE_BUILD_LOCKS_GUARD = threading.Lock()
 _TEST_INTELLIGENCE_DB_DIGEST_CACHE: dict[str, tuple[str, str]] = {}
@@ -66,7 +71,7 @@ def _test_intelligence_db_knowledge_digest(
     File metadata is used only as a cheap change detector. When the SQLite/WAL
     identity changes, this function recomputes the exact digest for the requested
     tenant/project. Unrelated database writes therefore cost at most a scoped read;
-    they do not invalidate the expensive Test Intelligence analysis.
+    they do not invalidate the expensive intelligence analyses.
     """
     db_identity = _test_intelligence_db_identity(root)
     cache_key = f"{tenant_id}:{project}"
@@ -123,7 +128,7 @@ def _test_intelligence_source_fingerprint(
     tenant_id: str,
     project: str,
 ) -> str:
-    """Fingerprint only persisted sources that can change this project's output."""
+    """Fingerprint persisted sources consumed by Requirement/Test Intelligence."""
     from . import private_pilot_http_routing as routing
 
     return "|".join(
@@ -281,6 +286,53 @@ class ProductCatalogHttpMixin:
                 )
             return render(entry, stale=False)
 
+    def _get_requirement_intelligence_analysis(
+        self,
+        project: str,
+        root: Path,
+        actor: Any,
+    ) -> dict[str, Any]:
+        """Return cached Requirement Intelligence until its source fingerprint changes."""
+        tenant_id = self._request_tenant()
+        cache_key = f"{tenant_id}:{project}"
+        fingerprint = _test_intelligence_source_fingerprint(root, tenant_id, project)
+
+        def cached_requirement() -> dict[str, Any] | None:
+            with _REQUIREMENT_INTELLIGENCE_CACHE_LOCK:
+                entry = _REQUIREMENT_INTELLIGENCE_CACHE.get(cache_key)
+                if entry is None or entry[0] != fingerprint:
+                    return None
+                return copy.deepcopy(entry[1])
+
+        cached = cached_requirement()
+        if cached is not None:
+            cached["project_id"] = project
+            return cached
+
+        build_lock = _test_intelligence_build_lock(cache_key)
+        with build_lock:
+            cached = cached_requirement()
+            if cached is not None:
+                cached["project_id"] = project
+                return cached
+
+            asset = self._load_merged_knowledge_asset(project, root, actor)
+            analysis = analyze_knowledge_asset(asset)
+            with _REQUIREMENT_INTELLIGENCE_CACHE_LOCK:
+                if (
+                    cache_key not in _REQUIREMENT_INTELLIGENCE_CACHE
+                    and len(_REQUIREMENT_INTELLIGENCE_CACHE) >= _TEST_INTELLIGENCE_CACHE_MAX_ENTRIES
+                ):
+                    oldest_key = next(iter(_REQUIREMENT_INTELLIGENCE_CACHE))
+                    _REQUIREMENT_INTELLIGENCE_CACHE.pop(oldest_key, None)
+                _REQUIREMENT_INTELLIGENCE_CACHE[cache_key] = (
+                    fingerprint,
+                    copy.deepcopy(analysis),
+                )
+            result = copy.deepcopy(analysis)
+            result["project_id"] = project
+            return result
+
     def _get_test_intelligence_analysis(
         self,
         project: str,
@@ -290,9 +342,9 @@ class ProductCatalogHttpMixin:
         """Return a source-fingerprint cached Test Intelligence projection.
 
         A cache hit does not load the merged knowledge asset and does not execute
-        either analysis product. A source fingerprint change causes exactly one
-        request per tenant/project to rebuild while concurrent readers wait for and
-        then reuse that result.
+        either analysis product. On a cold build, an already-warmed Requirement
+        Intelligence result is reused; otherwise the requirement result is computed
+        once from the same loaded asset and cached for the Requirement route too.
         """
         tenant_id = self._request_tenant()
         cache_key = f"{tenant_id}:{project}"
@@ -301,6 +353,13 @@ class ProductCatalogHttpMixin:
         def cached_analysis() -> dict[str, Any] | None:
             with _TEST_INTELLIGENCE_CACHE_LOCK:
                 entry = _TEST_INTELLIGENCE_CACHE.get(cache_key)
+                if entry is None or entry[0] != fingerprint:
+                    return None
+                return copy.deepcopy(entry[1])
+
+        def cached_requirement() -> dict[str, Any] | None:
+            with _REQUIREMENT_INTELLIGENCE_CACHE_LOCK:
+                entry = _REQUIREMENT_INTELLIGENCE_CACHE.get(cache_key)
                 if entry is None or entry[0] != fingerprint:
                     return None
                 return copy.deepcopy(entry[1])
@@ -316,7 +375,21 @@ class ProductCatalogHttpMixin:
                 return cached
 
             asset = self._load_merged_knowledge_asset(project, root, actor)
-            requirement_analysis = analyze_knowledge_asset(asset)
+            requirement_analysis = cached_requirement()
+            if requirement_analysis is None:
+                requirement_analysis = analyze_knowledge_asset(asset)
+                with _REQUIREMENT_INTELLIGENCE_CACHE_LOCK:
+                    if (
+                        cache_key not in _REQUIREMENT_INTELLIGENCE_CACHE
+                        and len(_REQUIREMENT_INTELLIGENCE_CACHE) >= _TEST_INTELLIGENCE_CACHE_MAX_ENTRIES
+                    ):
+                        oldest_key = next(iter(_REQUIREMENT_INTELLIGENCE_CACHE))
+                        _REQUIREMENT_INTELLIGENCE_CACHE.pop(oldest_key, None)
+                    _REQUIREMENT_INTELLIGENCE_CACHE[cache_key] = (
+                        fingerprint,
+                        copy.deepcopy(requirement_analysis),
+                    )
+
             analysis = compose_requirement_test_linkage(
                 requirement_analysis,
                 analyze_test_intelligence(asset),
@@ -373,9 +446,7 @@ class ProductCatalogHttpMixin:
             return self._handle_finding_detail(project, finding_id, root)
 
         if product_route == "requirement-intelligence":
-            asset = self._load_merged_knowledge_asset(project, root, actor)
-            analysis = analyze_knowledge_asset(asset)
-            analysis["project_id"] = project
+            analysis = self._get_requirement_intelligence_analysis(project, root, actor)
         elif product_route == "test-intelligence":
             analysis = self._get_test_intelligence_analysis(project, root, actor)
         else:  # Defensive fail-closed guard; route parser currently makes this unreachable.
