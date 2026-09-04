@@ -1,5 +1,5 @@
 import { asArray, asRecord, asString } from '../lib/value-guards';
-import { API_V1_BASE, fetchJSON, resolveProjectId } from './session';
+import { API_V1_BASE, fetchJSON } from './session';
 
 export type TestObligationKind =
   | 'business_rule'
@@ -506,7 +506,7 @@ export function parseTestIntelligenceAnalysis(value: unknown): TestIntelligenceA
 }
 
 export async function getTestIntelligence(projectId: string): Promise<TestIntelligenceAnalysis | null> {
-  const project = await resolveProjectId(projectId);
+  const project = projectId.trim();
   if (!project) return null;
   const payload = await fetchJSON<unknown>(
     `${API_V1_BASE}/projects/${encodeURIComponent(project)}/test-intelligence`,
