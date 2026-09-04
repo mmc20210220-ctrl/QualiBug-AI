@@ -6,6 +6,8 @@ import { RunLifecycleBanner } from './run/RunLifecycleBanner';
 import { Sidebar } from './Sidebar';
 import { Topbar } from './Topbar';
 
+const RUN_CONTEXT_PATHS = new Set(['/campaigns', '/coverage', '/jobs']);
+
 export function Layout() {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const location = useLocation();
@@ -13,6 +15,8 @@ export function Layout() {
     || location.pathname === '/verify'
     || location.pathname === '/requirements'
     || location.pathname === '/test-intelligence';
+  const showRunContext = !isFocusedWorkspace && RUN_CONTEXT_PATHS.has(location.pathname);
+  const showOnboardingHandoff = location.pathname === '/integration';
 
   useEffect(() => {
     const closeOnDesktop = () => {
@@ -42,9 +46,9 @@ export function Layout() {
       <main className="main">
         <Topbar navOpen={mobileNavOpen} onToggleNav={() => setMobileNavOpen((open) => !open)} />
         <div className="content">
-          {!isFocusedWorkspace && <RunCustomerResultSummary />}
-          {!isFocusedWorkspace && <RunLifecycleBanner />}
-          {!isFocusedWorkspace && <MaterialsOnboardingHandoff />}
+          {showRunContext && <RunCustomerResultSummary />}
+          {showRunContext && <RunLifecycleBanner />}
+          {showOnboardingHandoff && <MaterialsOnboardingHandoff />}
           <Outlet />
         </div>
       </main>
