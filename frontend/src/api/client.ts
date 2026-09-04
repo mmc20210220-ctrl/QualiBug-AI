@@ -80,26 +80,28 @@ function emptyFindingsSnapshot(projectId: string): JsonRecord {
 const _findingsInflight = new Map<string, Promise<JsonRecord>>();
 
 export async function getFindings(projectId: string): Promise<JsonRecord> {
-  const resolvedProjectId = await resolveProjectId(projectId);
-  if (!resolvedProjectId) return emptyFindingsSnapshot('');
-  const inFlight = _findingsInflight.get(resolvedProjectId);
+  // URL 中的 project 已经是明确项目标识；读取接口由后端继续执行租户/项目校验。
+  // 这里禁止先 await /api/v1/projects 再发 command-center，避免冷首屏串行瀑布。
+  const project = projectId.trim();
+  if (!project) return emptyFindingsSnapshot('');
+  const inFlight = _findingsInflight.get(project);
   if (inFlight) return inFlight;
   const request = (async () => {
     try {
-      const envelope = await fetchJSON<unknown>(`${API_V1_BASE}/projects/${encodeURIComponent(resolvedProjectId)}/command-center`);
-      return { resolvedProjectId, projectId: resolvedProjectId, ...asRecord(asRecord(envelope).data) };
+      const envelope = await fetchJSON<unknown>(`${API_V1_BASE}/projects/${encodeURIComponent(project)}/command-center`);
+      return { resolvedProjectId: project, projectId: project, ...asRecord(asRecord(envelope).data) };
     } catch (error: unknown) {
       // 404 = 后端确认该项目尚无 command-center 快照：诚实空态，不是故障。
       // 其余任何失败（网络/5xx/解析）必须原样上抛，禁止吞掉或误判为空态。
       if (error instanceof ApiError && error.status === 404) {
-        return emptyFindingsSnapshot(resolvedProjectId);
+        return emptyFindingsSnapshot(project);
       }
       throw error;
     } finally {
-      _findingsInflight.delete(resolvedProjectId);
+      _findingsInflight.delete(project);
     }
   })();
-  _findingsInflight.set(resolvedProjectId, request);
+  _findingsInflight.set(project, request);
   return request;
 }
 
@@ -117,9 +119,9 @@ export async function replayFinding(projectId: string, findingId: string, baseUr
 }
 
 export async function getKnowledgeAsset(projectId: string): Promise<unknown> {
-  const resolvedProjectId = await resolveProjectId(projectId);
-  if (!resolvedProjectId) return { knowledge_asset: { project_id: '', sources: [] } };
-  return fetchJSON<unknown>(`${API_BASE}/knowledge/asset?project=${encodeURIComponent(resolvedProjectId)}`);
+  const project = projectId.trim();
+  if (!project) return { knowledge_asset: { project_id: '', sources: [] } };
+  return fetchJSON<unknown>(`${API_BASE}/knowledge/asset?project=${encodeURIComponent(project)}`);
 }
 
 export function getKnowledgePreview(sourceId: string): Promise<unknown> {
@@ -139,7 +141,7 @@ export function getHealth(): Promise<unknown> {
 }
 
 export async function listConnectors(projectId: string): Promise<ConnectorRecord[]> {
-  const project = await resolveProjectId(projectId);
+  const project = projectId.trim();
   if (!project) return [];
   const payload = asRecord(await fetchJSON<unknown>(`${API_BASE}/connectors/list?project=${encodeURIComponent(project)}`));
   return asArray(payload.connectors)
@@ -192,9 +194,9 @@ export function deleteKnowledge(projectId: string, sourceId: string): Promise<un
 }
 
 export async function getScanPreflight(projectId: string): Promise<ScanPreflight> {
-  const resolvedProjectId = await resolveProjectId(projectId);
-  if (!resolvedProjectId) return { ok: false, ready: false, reasons: [{ code: 'NO_PROJECT', message: '未选择有效项目，无法运行检测。' }] };
-  const payload = asRecord(await fetchJSON<unknown>(`${API_V1_BASE}/scan/preflight?project=${encodeURIComponent(resolvedProjectId)}`));
+  const project = projectId.trim();
+  if (!project) return { ok: false, ready: false, reasons: [{ code: 'NO_PROJECT', message: '未选择有效项目，无法运行检测。' }] };
+  const payload = asRecord(await fetchJSON<unknown>(`${API_V1_BASE}/scan/preflight?project=${encodeURIComponent(project)}`));
   return {
     ok: asBoolean(payload.ok, true),
     ready: asBoolean(payload.ready),
