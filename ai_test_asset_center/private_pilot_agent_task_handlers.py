@@ -4,6 +4,8 @@ from __future__ import annotations
 from typing import Any
 from urllib.parse import unquote, urlparse
 
+from .agent_task_grounding import build_agent_task_grounding
+from .agent_task_grounding_store import apply_agent_task_grounding
 from .agent_task_store import (
     AgentTaskConflict,
     AgentTaskError,
@@ -25,6 +27,19 @@ def _text(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    result: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        text = _text(item)
+        if text and text not in seen:
+            seen.add(text)
+            result.append(text)
+    return result
+
+
 def _parse_agent_task_route(path: str) -> tuple[str, str, str] | None:
     parts = [unquote(part) for part in str(path or "").split("/") if part]
     if len(parts) < 5 or parts[:3] != ["api", "v1", "projects"]:
@@ -39,6 +54,8 @@ def _parse_agent_task_route(path: str) -> tuple[str, str, str] | None:
         return "task", project, task_id
     if len(parts) == 7 and parts[6] == "events":
         return "events", project, task_id
+    if len(parts) == 7 and parts[6] == "ground":
+        return "ground", project, task_id
     if len(parts) == 7 and parts[6] == "cancel":
         return "cancel", project, task_id
     return None
@@ -93,10 +110,24 @@ class AgentTaskHandlersMixin:
             {
                 "ok": False,
                 "error": "AGENT_TASK_INTERNAL_ERROR",
-                "message": "Agent Task 持久化资源暂时不可用。",
+                "message": "Agent Task 持久化或 Grounding 资源暂时不可用。",
             },
             500,
         )
+
+    def _agent_task_body(self) -> dict[str, Any] | None:
+        try:
+            return self._body()
+        except ValueError as exc:
+            self._json(
+                {
+                    "ok": False,
+                    "error": "AGENT_TASK_BAD_REQUEST",
+                    "message": str(exc),
+                },
+                400,
+            )
+            return None
 
     def do_GET(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
@@ -140,7 +171,7 @@ class AgentTaskHandlersMixin:
     def do_POST(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
         route = _parse_agent_task_route(parsed.path)
-        if route is None or route[0] not in {"collection", "cancel"}:
+        if route is None or route[0] not in {"collection", "ground", "cancel"}:
             return super().do_POST()
 
         self._init_request_context()
@@ -164,17 +195,47 @@ class AgentTaskHandlersMixin:
                 )
                 return self._json({"ok": True, "data": task})
 
-            try:
-                body = self._body()
-            except ValueError as exc:
+            body = self._agent_task_body()
+            if body is None:
+                return None
+
+            if route[0] == "ground":
+                existing = get_agent_task(
+                    self._root(),
+                    tenant_id=tenant_id,
+                    project_id=project,
+                    task_id=route[2],
+                )
+                preflight_request = (
+                    dict(body.get("preflight"))
+                    if isinstance(body.get("preflight"), dict)
+                    else {}
+                )
+                grounding = build_agent_task_grounding(
+                    self._root(),
+                    tenant_id=tenant_id,
+                    project_id=project,
+                    task=existing,
+                    requested_target_ids=_string_list(body.get("test_target_ids")),
+                    preflight_request=preflight_request,
+                )
+                task = apply_agent_task_grounding(
+                    self._root(),
+                    tenant_id=tenant_id,
+                    project_id=project,
+                    task_id=route[2],
+                    grounding=grounding,
+                    correlation_id=correlation_id,
+                )
                 return self._json(
                     {
-                        "ok": False,
-                        "error": "AGENT_TASK_BAD_REQUEST",
-                        "message": str(exc),
-                    },
-                    400,
+                        "ok": True,
+                        "schema_version": "qualibug.agent-task-grounding.v1",
+                        "data": task,
+                        "grounding": grounding,
+                    }
                 )
+
             task = create_agent_task(
                 self._root(),
                 tenant_id=tenant_id,
