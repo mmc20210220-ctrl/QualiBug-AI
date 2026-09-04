@@ -20,6 +20,8 @@ const pageLabels: Record<string, { title: string; subtitle: string }> = {
   '/coverage': { title: 'Coverage', subtitle: '高级覆盖视图' },
   '/jobs': { title: 'System Jobs', subtitle: '后台运行诊断' },
   '/advanced-dashboard': { title: 'Advanced Dashboard', subtitle: '高级指标与内部诊断' },
+  '/advanced-findings': { title: 'Advanced Findings', subtitle: '高级筛选、验证历史与证据管理' },
+  '/release/details': { title: 'Decision Details', subtitle: '项目级 Gate、回归与交付守卫详情' },
 };
 
 const STATUS_PATHS = new Set(['/dashboard', '/verify', '/findings', '/release', '/campaigns', '/coverage']);
