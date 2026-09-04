@@ -128,6 +128,7 @@ from .private_pilot_connector_handlers import KnowledgeConnectorHandlersMixin
 from .private_pilot_finding_collaboration_handlers import (
     FindingCollaborationHandlersMixin,
 )
+from .private_pilot_agent_task_handlers import AgentTaskHandlersMixin
 from .private_pilot_credentials_handlers import CredentialsHandlerMixin
 from .private_pilot_product_catalog import ProductCatalogHttpMixin
 from .private_pilot_http_routing import HttpRoutingMixin
@@ -214,6 +215,7 @@ class PrivatePilotHandler(
     IdentityBenchmarkHttpMixin,
     KnowledgeConnectorHandlersMixin,
     FindingCollaborationHandlersMixin,
+    AgentTaskHandlersMixin,
     ProductCatalogHttpMixin,
     HttpRoutingMixin,
     CredentialsHandlerMixin,
