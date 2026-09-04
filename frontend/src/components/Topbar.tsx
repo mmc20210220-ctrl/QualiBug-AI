@@ -6,9 +6,11 @@ import { formatCustomerName } from '../lib/customer';
 import { useProjectNavigation } from '../lib/project-navigation';
 
 const pageLabels: Record<string, string> = {
+  '/dashboard': '总览',
+  '/analyze': '分析',
+  '/verify': '验证',
   '/requirements': '需求审查',
   '/test-intelligence': '测试智能',
-  '/dashboard': '总览',
   '/findings': '问题',
   '/integration': '接入',
   '/evidence': '证据',
@@ -21,10 +23,11 @@ const pageLabels: Record<string, string> = {
 };
 
 // 这些页面本身就消费 command-center；Topbar 只复用它们的共享快照。
-// 其他页面（尤其 /findings/:id、资料、接入、智能分析）不得为了顶部状态
-// 主动触发整包 command-center，避免轻页面被重数据拖慢。
+// 其他页面（尤其 /findings/:id、资料、接入、Analyze）不得为了顶部状态
+// 主动触发整包 command-center，避免轻页面被重数据拖慢或污染 Intelligence 真值。
 const COMMAND_CENTER_STATUS_PATHS = new Set([
   '/dashboard',
+  '/verify',
   '/findings',
   '/evidence',
   '/release',
@@ -43,11 +46,13 @@ export function Topbar({ navOpen = false, onToggleNav }: TopbarProps) {
   const { switchProject, navigateToProjectPath } = useProjectNavigation(); const { workspaceOptions } = useWorkspaceDirectory(); const { projectName } = useProjectSummary(statusProject);
   const [showTenantMenu, setShowTenantMenu] = useState(false); const tenantMenuRef = useRef<HTMLDivElement | null>(null);
   const { lastScanMinutes, scanActive, hasMaterializedMetrics, hasResolvedProject, continuousActive } = useLiveStatus(statusProject, 15000);
-  const currentPage = pageLabels[location.pathname] || '总览';
+  const currentPage = pageLabels[location.pathname] || (location.pathname.startsWith('/findings/') ? '问题详情' : '总览');
   const isProductsPage = location.pathname === '/products';
+  const isAnalyzePage = location.pathname === '/analyze';
+  const isVerifyPage = location.pathname === '/verify';
   const isRequirementsPage = location.pathname === '/requirements';
   const isTestIntelligencePage = location.pathname === '/test-intelligence';
-  const isIntelligencePage = isRequirementsPage || isTestIntelligencePage;
+  const isIntelligencePage = isAnalyzePage || isRequirementsPage || isTestIntelligencePage;
   const resolvedWorkspaceName = workspaceOptions.find((item) => item.id === project)?.label || '';
   const customerButtonName = project
     ? resolvedWorkspaceName || (statusDataEnabled ? formatCustomerName(projectName) : '') || formatCustomerName(project)
@@ -55,19 +60,21 @@ export function Topbar({ navOpen = false, onToggleNav }: TopbarProps) {
   const hasSelectedCustomer = Boolean(project); const minutesDisplay = lastScanMinutes !== null ? (lastScanMinutes < 1 ? '刚刚' : `${lastScanMinutes} 分钟前`) : '--';
   const statusText = isProductsPage
     ? '版本已同步'
-    : isTestIntelligencePage
-      ? (hasSelectedCustomer ? '测试智能模式' : '待选择客户')
-      : isRequirementsPage
-        ? (hasSelectedCustomer ? '需求审查模式' : '待选择客户')
-        : !hasSelectedCustomer
-          ? '待选择客户'
-          : !statusDataEnabled
-            ? '客户已选择'
-            : scanActive
-              ? '检测进行中'
-              : hasMaterializedMetrics
-                ? (continuousActive ? '持续守护中' : `结果已同步 · ${minutesDisplay}`)
-                : '暂无结果';
+    : isAnalyzePage
+      ? (hasSelectedCustomer ? '分析模式' : '待选择客户')
+      : isTestIntelligencePage
+        ? (hasSelectedCustomer ? '测试智能模式' : '待选择客户')
+        : isRequirementsPage
+          ? (hasSelectedCustomer ? '需求审查模式' : '待选择客户')
+          : !hasSelectedCustomer
+            ? '待选择客户'
+            : !statusDataEnabled
+              ? '客户已选择'
+              : scanActive
+                ? '检测进行中'
+                : hasMaterializedMetrics
+                  ? (continuousActive ? '持续守护中' : `结果已同步 · ${minutesDisplay}`)
+                  : '暂无结果';
   const dotTone = isProductsPage
     ? 'success'
     : isIntelligencePage || !statusDataEnabled
@@ -81,13 +88,22 @@ export function Topbar({ navOpen = false, onToggleNav }: TopbarProps) {
             : 'muted';
   const topbarSubtitle = isProductsPage
     ? '产品策略与版本路径'
-    : isTestIntelligencePage
-      ? '测试义务、结构化设计与支持语义覆盖'
-      : isRequirementsPage
-        ? '跨资料需求审查与证据追溯'
-        : hasSelectedCustomer
-          ? customerButtonName
-          : '把风险变成可验收结论';
+    : isAnalyzePage
+      ? '需求审查、业务语义与验证目标'
+      : isVerifyPage
+        ? '真实运行、证据与验证闭环'
+        : isTestIntelligencePage
+          ? '测试义务、结构化设计与支持语义覆盖'
+          : isRequirementsPage
+            ? '跨资料需求审查与证据追溯'
+            : hasSelectedCustomer
+              ? customerButtonName
+              : '把风险变成可验收结论';
+  const primaryAction = isIntelligencePage
+    ? { path: '/materials', search: '', label: '管理资料' }
+    : isVerifyPage
+      ? { path: '/verify', search: 'view=run-control', label: '运行控制' }
+      : { path: '/verify', search: '', label: '开始验证' };
 
   useEffect(() => {
     if (!showTenantMenu) return;
@@ -110,9 +126,9 @@ export function Topbar({ navOpen = false, onToggleNav }: TopbarProps) {
       <div className="topbar-right">
         <span className={`system-status ${isProductsPage || (statusDataEnabled && !isIntelligencePage && project && hasResolvedProject && !scanActive && hasMaterializedMetrics) ? 'online' : ''}`}><span className={`system-status-dot tone-${dotTone}`} />{statusText}</span>
         {hasSelectedCustomer && (
-          <button type="button" className="btn btn-primary topbar-run-btn" onClick={() => navigateToProjectPath(isIntelligencePage ? '/materials' : '/integration', project)}>
+          <button type="button" className="btn btn-primary topbar-run-btn" onClick={() => navigateToProjectPath(primaryAction.path, project, primaryAction.search)}>
             <span className="topbar-run-btn-icon" aria-hidden="true">&gt;</span>
-            {isIntelligencePage ? '管理资料' : '开始验证'}
+            {primaryAction.label}
           </button>
         )}
         <div className="tenant-switcher" ref={tenantMenuRef}>
