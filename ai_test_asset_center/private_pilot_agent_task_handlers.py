@@ -15,6 +15,7 @@ from .agent_task_store import (
     create_agent_task,
     get_agent_task,
     list_agent_task_events,
+    list_agent_tasks,
 )
 from .product_logging import get_logger
 from .real_project_onboarding import _safe_project_id
@@ -165,7 +166,7 @@ class AgentTaskHandlersMixin:
     def do_GET(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
         route = _parse_agent_task_route(parsed.path)
-        if route is None or route[0] not in {"task", "events"}:
+        if route is None or route[0] not in {"collection", "task", "events"}:
             return super().do_GET()
 
         self._init_request_context()
@@ -175,6 +176,16 @@ class AgentTaskHandlersMixin:
         project, _actor = scope
         tenant_id = self._request_tenant()
         try:
+            if route[0] == "collection":
+                items = list_agent_tasks(
+                    self._root(), tenant_id=tenant_id, project_id=project,
+                )
+                return self._json({
+                    "ok": True,
+                    "schema_version": "qualibug.agent-task-list.v1",
+                    "project_id": project,
+                    "items": items,
+                })
             if route[0] == "events":
                 items = list_agent_task_events(
                     self._root(),

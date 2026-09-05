@@ -9,6 +9,10 @@ implementation-level facts inside this package.
 
 ## Package Boundary
 
+### Agent Task collection
+
+`agent_task_store.list_agent_tasks` reads existing task artifacts and returns their public projection ordered by update time. `AgentTaskHandlersMixin` exposes it through authenticated GET `/api/v1/projects/{project}/agent-tasks`, using the same actor, tenant, known-project and project-scope checks as individual task reads. Collection reads never ground tasks, parse sources, call a provider, or launch scans. Foreign-scope records are excluded; corrupt artifacts and identity mismatches remain visible failures through the existing request error logger. Task history is independent of customer Finding delivery projection.
+
 `ai_test_asset_center` is the backend core: private-pilot HTTP service,
 connector authorities, discovery pipeline (Behavior IR → obligations →
 experiments → oracles → delivery gate), and evaluation/projection helpers.

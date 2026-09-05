@@ -48,12 +48,12 @@ export function Topbar({ navOpen = false, onToggleNav }: TopbarProps) {
   const statusText = !project
     ? '未选择客户'
     : !statusEnabled
-      ? 'Context ready'
+      ? '资料工作区'
       : scanActive
-        ? 'Agent working'
+        ? '项目运行中'
         : hasMaterializedMetrics
-          ? 'Evidence synced'
-          : 'Ready';
+          ? '已有项目记录'
+          : '状态未上报';
   const statusTone = scanActive ? 'warning' : hasMaterializedMetrics ? 'success' : 'muted';
 
   useEffect(() => {

@@ -225,6 +225,16 @@ export async function getAgentTask(project: string, taskId: string): Promise<Age
   return parseTask(payload.data);
 }
 
+export async function listAgentTasks(project: string): Promise<AgentTask[]> {
+  const payload = asRecord(await fetchJSON<unknown>(basePath(project)));
+  if (payload.schema_version !== 'qualibug.agent-task-list.v1' || payload.project_id !== project || !Array.isArray(payload.items)) {
+    throw new Error('任务列表响应不符合产品契约。');
+  }
+  const tasks = payload.items.map(parseTask);
+  if (tasks.some((task) => task.projectId !== project)) throw new Error('任务列表包含其他项目的数据。');
+  return tasks;
+}
+
 export async function getAgentTaskEvents(
   project: string,
   taskId: string,

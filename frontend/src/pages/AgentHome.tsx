@@ -1,6 +1,6 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { createAgentTask, type AgentTaskIntent } from '../api/agent-tasks';
+import { createAgentTask, listAgentTasks, type AgentTask, type AgentTaskIntent } from '../api/agent-tasks';
 import { isCustomerReadyFinding, usePipelineData } from '../api/data';
 import { StatePanel } from '../components/dashboard/DashboardPrimitives';
 import { usePageTitle } from '../lib/page-title';
@@ -22,6 +22,11 @@ function visibleStatus(value: string): string {
   const normalized = value.trim().toLowerCase();
   if (!normalized) return '未上报';
   const labels: Record<string, string> = {
+    created: '已创建',
+    understanding: '理解中',
+    planning: '规划中',
+    evaluating: '判断中',
+    cancelled: '已取消',
     running: '正在验证',
     completed: '最近验证已完成',
     executed: '最近验证已执行',
@@ -37,6 +42,11 @@ function visibleStatus(value: string): string {
 }
 
 export function AgentHome() {
+  const [params] = useSearchParams();
+  return <AgentHomeWorkspace key={params.get('project') || ''} />;
+}
+
+function AgentHomeWorkspace() {
   usePageTitle('新任务');
   const [params] = useSearchParams();
   const { navigateToProjectPath } = useProjectNavigation();
@@ -45,6 +55,26 @@ export function AgentHome() {
   const [goal, setGoal] = useState('');
   const [creatingTask, setCreatingTask] = useState(false);
   const [taskError, setTaskError] = useState('');
+  const [intent, setIntent] = useState<AgentTaskIntent>('release_readiness');
+  const [tasks, setTasks] = useState<AgentTask[]>([]);
+  const [tasksLoading, setTasksLoading] = useState(true);
+  const [tasksError, setTasksError] = useState('');
+  const [taskRefresh, setTaskRefresh] = useState(0);
+
+  useEffect(() => {
+    let disposed = false;
+    if (!project) return;
+    setTasksLoading(true);
+    setTasksError('');
+    void listAgentTasks(project).then((items) => {
+      if (!disposed) setTasks(items);
+    }).catch((caught: unknown) => {
+      if (!disposed) setTasksError(caught instanceof Error ? caught.message : '任务读取失败');
+    }).finally(() => {
+      if (!disposed) setTasksLoading(false);
+    });
+    return () => { disposed = true; };
+  }, [project, taskRefresh]);
 
   const record = asRecord(data);
   const campaign = asRecord(record.campaign);
@@ -76,7 +106,7 @@ export function AgentHome() {
       next.set('task', task.taskId);
       next.set('goal', task.goal);
       if (mode === 'analyze') next.set('from', 'agent-home');
-      navigateToProjectPath(mode === 'analyze' ? '/analyze' : '/verify', project, next.toString());
+      navigateToProjectPath('/verify', project, next.toString());
     } catch (caught: unknown) {
       setTaskError(caught instanceof Error ? caught.message : 'Agent Task 创建失败');
     } finally {
@@ -99,59 +129,81 @@ export function AgentHome() {
   return (
     <div className="agent-home">
       <section className="agent-home-hero">
-        <div className="agent-home-orb" aria-hidden="true">Q</div>
-        <span className="agent-home-kicker">Your AI Quality Engineer</span>
+        <span className="agent-home-kicker">QualiBug / 工作空间</span>
         <h1>今天要我帮你验证什么？</h1>
-        <p>
-          描述质量目标后，QualiBug 会先创建一个持久化 Agent Task，再沿着“理解 → 计划 → 真实执行 → 证据 → 判断”的主链工作。
-          Goal 是任务上下文，不是执行授权；真实执行范围仍由已连接资料、运行环境、Runtime Grounding 和 Preflight 决定。
-        </p>
+        <p>给出目标，从已有知识开始。一起追踪实验、检查证据，决定下一步。</p>
 
-        <div className="agent-goal-composer">
+        <form className="agent-goal-composer" onSubmit={(event) => {
+          event.preventDefault();
+          if (goal.trim()) void beginTask(intent === 'analyze_requirements' ? 'analyze' : 'verify', intent);
+        }}>
+          <label className="agent-composer-label" htmlFor="quality-goal">我想验证…</label>
           <textarea
+            id="quality-goal"
             value={goal}
             onChange={(event) => setGoal(event.target.value)}
-            placeholder="例如：检查这次版本变更是否存在发布阻断风险；或者先分析我刚上传的 PRD。"
+            placeholder="描述你关心的行为、这次变更，或想弄清的问题。"
             rows={3}
+            maxLength={4000}
+            required
             aria-label="质量验证目标"
+            disabled={creatingTask}
           />
           <div className="agent-goal-actions">
-            <button type="button" className="btn btn-secondary" onClick={() => void beginTask('analyze')} disabled={creatingTask}>
-              {creatingTask ? '正在创建任务…' : '先理解资料'}
-            </button>
-            <button type="button" className="btn btn-primary" onClick={() => void beginTask('verify')} disabled={creatingTask}>
-              {creatingTask ? '正在创建任务…' : '开始 Agent Task'}
+            <label className="agent-intent-select">任务方向
+              <select value={intent} onChange={(event) => setIntent(event.target.value as AgentTaskIntent)} disabled={creatingTask}>
+                <option value="release_readiness">评估发布风险</option>
+                <option value="verify_changes">验证版本变更</option>
+                <option value="find_blockers">调查阻断问题</option>
+                <option value="analyze_requirements">理解企业资料</option>
+              </select>
+            </label>
+            <button type="submit" className="btn btn-primary" disabled={creatingTask || !goal.trim()}>
+              {creatingTask ? '正在创建任务…' : '开始任务 ↗'}
             </button>
           </div>
           {taskError && <div className="settings-inline-feedback" role="alert">{taskError}</div>}
-        </div>
+        </form>
 
-        <div className="agent-source-actions" aria-label="常用起点">
-          <Link to={buildProjectPath('/analyze', project)}><span>＋</span> PRD / 企业资料</Link>
-          <Link to={buildProjectPath('/integration', project)}><span>＋</span> API / GitHub / Connector</Link>
-          <Link to={buildProjectPath('/verify', project, 'view=run-control')}><span>＋</span> 测试环境</Link>
+        <div className="agent-intent-grid" aria-label="建议任务">
+          <button type="button" disabled={creatingTask} onClick={() => { setIntent('verify_changes'); setGoal(DEFAULT_GOALS.verify_changes); }}>验证这次变更 ↗</button>
+          <button type="button" disabled={creatingTask} onClick={() => { setIntent('find_blockers'); setGoal(DEFAULT_GOALS.find_blockers); }}>找出发布阻断 ↗</button>
+          <button type="button" disabled={creatingTask} onClick={() => { setIntent('analyze_requirements'); setGoal(DEFAULT_GOALS.analyze_requirements); }}>理解现有资料 ↗</button>
         </div>
+        <div className="agent-source-actions" aria-label="任务上下文">
+          <span>补充上下文</span>
+          <Link to={buildProjectPath('/analyze', project)}>企业知识</Link>
+          <Link to={buildProjectPath('/integration', project)}>连接资料与系统</Link>
+          <Link to={buildProjectPath('/verify', project, 'view=run-control')}>测试环境</Link>
+        </div>
+        <details className="agent-authority-note">
+          <summary>任务如何开始工作</summary>
+          <p>Goal 是任务上下文，不是执行授权；执行范围由已连接资料、运行环境、Runtime Grounding 和 Preflight 决定。任务复用已有理解快照，创建任务后可查看条件检查与真实事件。</p>
+        </details>
       </section>
 
-      <section className="agent-intent-grid" aria-label="建议任务">
-        <button type="button" onClick={() => void beginTask('verify', 'find_blockers')} disabled={creatingTask}>
-          <span>01</span><strong>找发布阻断</strong><p>创建真实 Agent Task，并基于当前运行、Finding 与 Gate 判断下一步。</p>
-        </button>
-        <button type="button" onClick={() => void beginTask('analyze', 'analyze_requirements')} disabled={creatingTask}>
-          <span>02</span><strong>分析需求与风险</strong><p>只给 PRD 也可以开始，先理解应该怎样工作。</p>
-        </button>
-        <Link to={buildProjectPath('/findings', project)}>
-          <span>03</span><strong>调查已确认问题</strong><p>从业务影响一路追到 Expected / Actual 与原始证据。</p>
-        </Link>
-        <Link to={buildProjectPath('/release', project)}>
-          <span>04</span><strong>做发布判断</strong><p>查看为什么建议发布、暂缓或继续补证。</p>
-        </Link>
-      </section>
-
-      <section className="agent-current-work">
+      <section className="agent-task-history" aria-labelledby="task-history-title">
         <div className="agent-section-heading">
-          <div><span>Current work</span><h2>这个客户现在是什么状态</h2></div>
-          <Link to={buildProjectPath('/verify', project)}>打开 Live Workspace →</Link>
+          <div><span>继续工作</span><h2 id="task-history-title">你的任务</h2></div>
+          <button className="btn btn-secondary btn-sm" type="button" onClick={() => setTaskRefresh((value) => value + 1)} disabled={tasksLoading}>刷新任务</button>
+        </div>
+        {tasksError ? <div className="agent-state-error" role="alert"><strong>无法读取任务</strong><p>{tasksError}</p></div>
+          : tasksLoading ? <p role="status">正在读取已保存的任务…</p>
+          : tasks.length ? <div className="agent-task-list">{tasks.map((task) => (
+            <Link key={task.taskId} to={buildProjectPath('/verify', project, `task=${encodeURIComponent(task.taskId)}`)} className="agent-task-row">
+              <span className={`agent-task-indicator status-${task.status.toLowerCase()}`} aria-hidden="true" />
+              <div><strong>{task.goal}</strong><p>{task.groundingBlockers[0]?.message || (task.executionRunId ? '已关联真实运行 · 打开查看进展' : task.sourceSnapshotStatus === 'PINNED' ? '已有理解快照 · 打开查看下一步' : '打开任务查看上下文与条件')}</p></div>
+              <span className="agent-task-meta">{visibleStatus(task.status)}<time dateTime={task.updatedAt}>{task.updatedAt ? new Date(task.updatedAt).toLocaleString('zh-CN') : '时间未上报'}</time></span>
+              <span aria-hidden="true">↗</span>
+            </Link>
+          ))}</div> : <div className="agent-tasks-empty"><strong>从一个问题开始</strong><p>创建的任务会保存在这里。随时回来，沿着原有目标和证据继续。</p></div>}
+      </section>
+
+      <details className="agent-current-work" open={Boolean(error)}>
+        <summary>项目证据与发布状态</summary>
+        <div className="agent-section-heading">
+          <div><span>Current work</span><h2>项目级结果</h2></div>
+          <Link to={buildProjectPath('/verify', project)}>查看工作台 →</Link>
         </div>
 
         {error && !data ? (
@@ -169,7 +221,7 @@ export function AgentHome() {
             </article>
             <article>
               <span>Confirmed findings</span>
-              <strong>{loading && !data ? '…' : findings.length}</strong>
+              <strong>{loading && !data ? '…' : !data ? '未上报' : findings.length}</strong>
               <p>没有已确认 Finding 不等于系统安全。</p>
             </article>
             <article>
@@ -179,7 +231,7 @@ export function AgentHome() {
             </article>
           </div>
         )}
-      </section>
+      </details>
     </div>
   );
 }

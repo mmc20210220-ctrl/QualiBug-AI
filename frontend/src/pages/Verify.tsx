@@ -115,6 +115,11 @@ function hasEvent(events: AgentTaskEvent[], eventType: string): boolean {
 }
 
 export function Verify() {
+  const [params] = useSearchParams();
+  return <VerifyWorkspace key={`${params.get('project') || ''}:${params.get('task') || ''}`} />;
+}
+
+function VerifyWorkspace() {
   usePageTitle('Live Workspace');
   const [params, setParams] = useSearchParams();
   const project = params.get('project')?.trim() || '';
@@ -243,7 +248,7 @@ export function Verify() {
   const runtimeActive = runtimeNormalized === 'running';
   const runtimeFailed = ['failed', 'fail', 'blocked', 'error', 'failed_safe'].includes(runtimeNormalized);
   const hasRuntimeReceipt = Boolean(runtimeStatus || latestRunAt);
-  const taskGoal = agentTask?.goal || goal || '验证当前系统并形成证据化质量判断';
+  const taskGoal = agentTask?.goal || (taskId ? (agentTaskError ? '任务目标暂不可用' : '正在读取任务目标…') : goal || '选择要继续的任务');
   const taskTone = toneForStatus(agentTask?.status || '');
   const taskIsTerminal = Boolean(agentTask && TERMINAL_TASK_STATUSES.has(agentTask.status));
   const pinnedTargets = agentTask?.selectedTargetSnapshots.slice(0, 12) || [];
@@ -373,7 +378,7 @@ export function Verify() {
     );
   }
 
-  if (loading && !data) {
+  if (!taskId && loading && !data) {
     return (
       <div className="verify-workspace">
         <div className="verify-live-shell">
@@ -384,12 +389,14 @@ export function Verify() {
     );
   }
 
-  if (error && !data) {
+  if (!taskId && error && !data) {
     return <StatePanel eyebrow="Live Workspace · 连接状态" title="无法读取当前项目运行结果" description={error} action={<button className="btn btn-primary" onClick={refetch}>重新连接</button>} />;
   }
 
   return (
     <div className="verify-workspace">
+      <Link className="verify-back-link" to={buildProjectPath('/dashboard', project)}>← 所有任务</Link>
+      {error && <div className="agent-state-error" role="alert"><strong>项目结果暂不可用</strong><details><summary>查看错误详情</summary><p>{error}</p></details><button className="btn btn-secondary btn-sm" onClick={refetch}>重试项目结果</button></div>}
       <section className="verify-live-shell">
         <aside className="verify-agent-rail" aria-label="Agent 工作状态">
           <div className="verify-context-card">
@@ -404,7 +411,7 @@ export function Verify() {
             </p>
           </div>
 
-          <div className="verify-agent-message">
+          <details className="verify-agent-message"><summary>工作方式与边界</summary>
             <div className="verify-agent-avatar">Q</div>
             <div>
               <strong>QualiBug</strong>
@@ -412,19 +419,19 @@ export function Verify() {
                 我只消费已经持久化的企业理解快照，并复用真实 Scan Preflight。Snapshot 过期、环境未就绪或 Test Target 尚未 Runtime Binding 时会明确阻断，不会偷偷重跑理解，也不会伪造执行。
               </p>
             </div>
-          </div>
+          </details>
 
-          <div className="verify-milestones">
+          <details className="verify-milestone-details"><summary>查看任务阶段</summary><div className="verify-milestones">
             {milestones.map((milestone) => (
               <div key={milestone.key} className={`verify-milestone state-${milestone.state}`}>
                 <span className="verify-milestone-icon">{milestoneIcon(milestone.state)}</span>
                 <div><strong>{milestone.label}</strong><p>{milestone.detail}</p></div>
               </div>
             ))}
-          </div>
+          </div></details>
 
           <div className="verify-agent-rail-actions">
-            <Link className="btn btn-secondary" to={buildProjectPath('/analyze', project, taskId ? `task=${encodeURIComponent(taskId)}&goal=${encodeURIComponent(taskGoal)}` : '')}>查看 Knowledge</Link>
+            <Link className="btn btn-secondary" to={buildProjectPath('/analyze', project, taskId ? `task=${encodeURIComponent(taskId)}${agentTask ? `&goal=${encodeURIComponent(agentTask.goal)}` : ''}` : '')}>查看 Knowledge</Link>
             {agentTask && !taskIsTerminal ? (
               <button type="button" className="btn btn-secondary" onClick={() => void regroundCurrentTask()} disabled={groundingTask}>
                 {groundingTask ? '正在评估…' : '重新评估 Grounding'}
@@ -435,7 +442,7 @@ export function Verify() {
                 {cancellingTask ? '正在取消…' : '取消 Agent Task'}
               </button>
             ) : null}
-            <button type="button" className="btn btn-primary" onClick={() => selectView('run-control')}>运行控制</button>
+            <button type="button" className="btn btn-secondary" onClick={() => selectView('run-control')}>项目运行控制</button>
           </div>
           {agentTaskError && <div className="settings-inline-feedback" role="alert">{agentTaskError}</div>}
         </aside>
@@ -452,6 +459,17 @@ export function Verify() {
             </div>
           </header>
 
+          <section className="verify-next-step" aria-label="任务下一步">
+            <span className="panel-kicker">下一步</span>
+            <h2>{agentTaskLoading && !agentTask ? '正在读取任务' : !agentTask ? '任务暂不可用' : taskIsTerminal ? '回看这次工作的记录' : agentTask.executionRunId ? '跟踪真实执行进展' : agentTask.groundingBlockers.length ? '补充实验需要的条件' : agentTask.intent === 'analyze_requirements' ? '检查已固定的企业知识' : '检查范围，准备实验'}</h2>
+            <p>{agentTask?.groundingBlockers[0]?.message || (agentTask?.executionRunId ? `已绑定运行：${agentTask.executionRunId}` : agentTask ? '查看已有知识、验证目标和事件，再决定下一步。项目运行控制仍负责实际测试；创建任务本身不会启动测试。' : agentTaskError || '等待后端任务记录。')}</p>
+            <div className="verify-next-actions">
+              {agentTask && <Link className="btn btn-secondary" to={buildProjectPath('/analyze', project, `task=${encodeURIComponent(taskId)}`)}>查看任务知识</Link>}
+              {agentTask && !taskIsTerminal && <button className="btn btn-primary" onClick={() => void regroundCurrentTask()} disabled={groundingTask}>{groundingTask ? '正在检查…' : '重新检查条件'}</button>}
+              {agentTaskError && <button className="btn btn-secondary" onClick={() => void loadAgentTask()}>重新读取任务</button>}
+            </div>
+          </section>
+          <details className="verify-context-details"><summary>快照、绑定与项目上下文</summary>
           <div className="verify-context-chips" aria-label="当前真实上下文">
             <span>Snapshot · {agentTask ? statusLabel(agentTask.sourceSnapshotStatus) : '未绑定'}</span>
             <span>Selected Targets · {agentTask ? agentTask.groundingSummary.selectedTargetCount : '未绑定'}</span>
@@ -459,9 +477,9 @@ export function Verify() {
             <span>Preflight · {agentTask ? (agentTask.groundingSummary.preflightReady ? 'READY' : 'NOT READY') : '未绑定'}</span>
             <span>Grounding · {agentTask ? statusLabel(agentTask.runtimeGroundingStatus) : '未绑定'}</span>
             <span>Task Events · {agentTask ? agentEvents.length : '未绑定'}</span>
-            <span>Project Findings · {findings.length}</span>
-            <span>Background clues · {clues.length}</span>
-          </div>
+            <span>Project Findings · {error || !data ? '未上报' : findings.length}</span>
+            <span>Background clues · {error || !data ? '未上报' : clues.length}</span>
+          </div></details>
 
           <section className="verify-work-grid">
             <article className="verify-plan-panel">
@@ -526,10 +544,9 @@ export function Verify() {
               </div>
 
               <div className="verify-live-surface">
-                <div className="verify-live-surface-tabs"><b>Execution Surface</b><span>Snapshot</span><span>Targets</span><span>Preflight</span><span>Runtime</span><span>Evidence</span></div>
+                <div className="verify-live-surface-tabs"><b>实验条件检查</b></div>
                 <div className="verify-live-surface-body">
-                  <div className="verify-surface-pulse" aria-hidden="true"><span /></div>
-                  {agentTask?.runtimeGroundingStatus === 'BLOCKED' ? (
+                  {agentTask?.executionRunId ? (<><strong>已关联真实运行</strong><p>{agentTask.executionRunId} · {statusLabel(agentTask.status)}</p></>) : agentTask?.runtimeGroundingStatus === 'BLOCKED' ? (
                     <>
                       <strong>Runtime Grounding 被真实条件阻断</strong>
                       <p>{agentTask.groundingBlockers.slice(0, 4).map((blocker) => `${blocker.code}：${blocker.message}`).join('；') || '后端未提供 blocker 详情。'}</p>
@@ -555,7 +572,7 @@ export function Verify() {
             </article>
 
             <aside className="verify-activity-panel">
-              <div className="verify-panel-title"><div><span>Activity</span><strong>Agent Event Ledger</strong></div></div>
+              <div className="verify-panel-title"><div><span>Activity</span><strong>工作记录 · Agent Event Ledger</strong></div></div>
               {taskId ? (
                 agentTaskLoading && !agentTask ? (
                   <div className="verify-empty"><span className="spinner" /><p>正在读取 Task Events…</p></div>
@@ -594,7 +611,7 @@ export function Verify() {
 
           <footer className="verify-evidence-dock">
             <span>Evidence</span>
-            <b>{evidenceBackedFindings} 个项目级证据化 Finding</b>
+            <b>{error || !data ? '项目证据暂未读取' : `${evidenceBackedFindings} 个项目级证据化 Finding`}</b>
             <Link to={buildProjectPath('/findings', project)}>Inspect findings</Link>
             <Link to={buildProjectPath('/release', project)}>Open decision</Link>
           </footer>

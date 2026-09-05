@@ -218,6 +218,25 @@ def get_agent_task(
         return _public_task(task)
 
 
+def list_agent_tasks(
+    root: Path,
+    *,
+    tenant_id: str,
+    project_id: str,
+) -> list[dict[str, Any]]:
+    """Read persisted tasks in this scope; never ground or start work on listing."""
+    items = []
+    for path in _task_dir(root, project_id).glob("*.json"):
+        with _task_lock(path):
+            task = _read_task(path)
+            if task.get("tenant_id") != tenant_id or task.get("project_id") != project_id:
+                continue
+            if task.get("task_id") != path.stem:
+                raise AgentTaskError("agent_task_artifact_identity_mismatch")
+            items.append(_public_task(task))
+    return sorted(items, key=lambda item: (str(item.get("updated_at") or ""), item["task_id"]), reverse=True)
+
+
 def list_agent_task_events(
     root: Path,
     *,
