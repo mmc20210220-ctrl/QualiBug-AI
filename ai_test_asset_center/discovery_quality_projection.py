@@ -112,19 +112,42 @@ def _finding_id(item: dict[str, Any]) -> str:
     return _text(item.get("finding_id") or item.get("id") or item.get("bug_id"))
 
 
+def _is_artifact_ref_placeholder(item: dict[str, Any]) -> bool:
+    """Identify an unhydrated scan-store row without treating it as a finding."""
+
+    return set(item) == {"$qualibug_artifact_ref"} and bool(
+        _text(item.get("$qualibug_artifact_ref"))
+    )
+
+
 def authority_scoped_findings(scan_result: dict[str, Any]) -> dict[str, Any]:
     """Bind every projected row to the immutable run authority fingerprint."""
 
     result = _dict(scan_result)
     v12 = _dict(result.get("v12"))
-    raw_findings = [item for item in _list(result.get("findings")) if isinstance(item, dict)]
-    raw_candidates = [
-        item for item in _list(result.get("candidate_findings")) if isinstance(item, dict)
-    ]
-    raw_shadow = [
-        item
-        for item in _list(result.get("shadow_findings") or v12.get("shadow_findings"))
-        if isinstance(item, dict)
+    raw_findings: list[dict[str, Any]] = []
+    raw_candidates: list[dict[str, Any]] = []
+    raw_shadow: list[dict[str, Any]] = []
+    artifact_placeholders: list[dict[str, Any]] = []
+    for source, target in (
+        (result.get("findings"), raw_findings),
+        (result.get("candidate_findings"), raw_candidates),
+        (result.get("shadow_findings") or v12.get("shadow_findings"), raw_shadow),
+    ):
+        for item in _list(source):
+            if not isinstance(item, dict):
+                continue
+            if _is_artifact_ref_placeholder(item):
+                artifact_placeholders.append(item)
+                continue
+            target.append(item)
+    placeholder_shadow = [
+        {
+            **item,
+            "finding_class": "shadow",
+            "shadow_origin": "artifact_ref_placeholder",
+        }
+        for item in artifact_placeholders
     ]
     raw_contract = result.get("mainline_run") or v12.get("mainline_run")
     if raw_contract is None:
@@ -134,7 +157,7 @@ def authority_scoped_findings(scan_result: dict[str, Any]) -> dict[str, Any]:
             "mainline_run": None,
             "authoritative_findings": [],
             "authoritative_candidates": [],
-            "shadow": [],
+            "shadow": placeholder_shadow,
         }
     contract: MainlineRunContract = validate_mainline_run_contract(raw_contract)
     expected_fingerprint = contract["contract_fingerprint"]
@@ -164,7 +187,7 @@ def authority_scoped_findings(scan_result: dict[str, Any]) -> dict[str, Any]:
             "mainline_run": contract,
             "authoritative_findings": raw_findings,
             "authoritative_candidates": raw_candidates,
-            "shadow": [
+            "shadow": placeholder_shadow + [
                 {
                     **item,
                     "finding_class": "shadow",
@@ -174,7 +197,7 @@ def authority_scoped_findings(scan_result: dict[str, Any]) -> dict[str, Any]:
                 for item in raw_shadow
             ],
         }
-    shadow: list[dict[str, Any]] = []
+    shadow: list[dict[str, Any]] = list(placeholder_shadow)
     for source, rows in (
         ("finding", raw_findings),
         ("candidate", raw_candidates),
@@ -705,10 +728,18 @@ def build_run_delivery_readiness_projection(
 def attach_quality_projection_to_scan_result(scan_result: dict[str, Any]) -> dict[str, Any]:
     """Mutate-safe: return a copy of scan_result with SSOT quality projection."""
     result = dict(scan_result or {})
-    ledger = _dict(
+    raw_v12 = result.get("v12")
+    v12_is_unhydrated = isinstance(raw_v12, dict) and _is_artifact_ref_placeholder(
+        raw_v12
+    )
+    raw_ledger = (
         result.get("obligation_attempt_ledger")
         or _dict(result.get("v12")).get("obligation_attempt_ledger")
     )
+    ledger_is_unhydrated = v12_is_unhydrated or (
+        isinstance(raw_ledger, dict) and _is_artifact_ref_placeholder(raw_ledger)
+    )
+    ledger = _dict(raw_ledger)
     delivery_occurrences = [
         item
         for item in _list(
@@ -722,6 +753,12 @@ def attach_quality_projection_to_scan_result(scan_result: dict[str, Any]) -> dic
         or _dict(result.get("v12")).get("canonical_defect_registry")
     )
     try:
+        if ledger_is_unhydrated:
+            # A raw scan-result index is a valid storage view, but its ledger
+            # ref cannot prove authority until the dual-read loader hydrates
+            # it.  Refuse the commercial projection visibly instead of
+            # validating the placeholder as if it were a real ledger.
+            raise MainlineContractError("attempt_ledger_missing")
         scoped = authority_scoped_findings(result)
         counts = build_formal_count_projection(
             findings=delivery_occurrences,

@@ -5,6 +5,9 @@ import json
 from pathlib import Path
 
 from ai_test_asset_center.artifact_store import default_artifact_store
+from ai_test_asset_center.discovery_quality_projection import (
+    attach_quality_projection_to_scan_result,
+)
 from ai_test_asset_center.private_pilot_report_loading import ReportLoadingMixin
 
 
@@ -46,3 +49,19 @@ def test_compact_intelligence_report_hydrates_authority_artifact(
 
     assert loaded["obligation_attempt_ledger"] == ledger
     assert loaded["obligation_attempt_ledger_ref"] == ref
+
+
+def test_raw_scan_index_with_unhydrated_v12_is_unverifiable() -> None:
+    projected = attach_quality_projection_to_scan_result(
+        {
+            "v12": {"$qualibug_artifact_ref": "content:scan-v12"},
+            "findings": [
+                {"$qualibug_artifact_ref": "findings_by_id:placeholder"}
+            ],
+        }
+    )
+
+    counts = projected["formal_count_projection"]
+    assert counts["authority_status"] == "UNVERIFIABLE"
+    assert counts["authority_reason"] == "attempt_ledger_missing"
+    assert counts["formal_customer_deliverable_count"] == 0
