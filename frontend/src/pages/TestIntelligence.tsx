@@ -238,6 +238,14 @@ function ObligationCard({ obligation, design, selectable = false, selected = fal
   );
 }
 
+function DataDesignDisclosure({ design }: { design: TestDesign }) {
+  const [open, setOpen] = useState(false);
+  return <details className="ti-data-design-link" onToggle={(event) => setOpen(event.currentTarget.open)}>
+    <summary>查看对应测试设计</summary>
+    {open && <TestDesignPanel design={design} />}
+  </details>;
+}
+
 function TestDataWorkspace({ analysis, project, taskId }: { analysis: TestIntelligenceAnalysis; project: string; taskId: string }) {
   const { navigateToProjectPath } = useProjectNavigation();
   const [query, setQuery] = useState('');
@@ -318,6 +326,7 @@ function TestDataWorkspace({ analysis, project, taskId }: { analysis: TestIntell
                 <span>前置条件</span>
                 {preconditions.length ? <ul>{preconditions.map((item, index) => <li key={`${item}:${index}`}>{item}</li>)}</ul> : <p>未声明额外前置条件</p>}
               </section>
+              <section><DataDesignDisclosure design={design} /></section>
               <section>
                 <details className="ti-evidence-disclosure"><summary>查看来源依据 <span>{design.evidence.length} 条证据</span></summary>
                   {design.evidence.length ? <EvidenceList evidence={design.evidence} /> : <p>当前设计未提供来源证据明细</p>}

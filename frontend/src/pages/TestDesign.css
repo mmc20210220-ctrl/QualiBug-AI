@@ -1,5 +1,9 @@
 .ti-design { margin-top: 14px; border: 1px solid #b2ccff; border-radius: 14px; background: #f5f8ff; overflow: hidden; }
 .ti-design-heading { padding: 13px 15px; color: #1849a9; font-size: 14px; }
+.ti-data-design-link > summary { cursor: pointer; color: var(--primary); font-size: 13px; font-weight: 700; padding: 8px 0; }
+.ti-data-design-link .ti-design-grid > section { grid-column: auto; }
+.ti-data-design-link, .ti-data-design-link .ti-design, .ti-data-design-link .ti-design-grid > section { min-width: 0; max-width: 100%; box-sizing: border-box; overflow-wrap: anywhere; }
+.ti-data-design-link .ti-design-truth { flex-wrap: wrap; }
 .ti-design-diagnostics { margin: 0 14px 14px; }
 .ti-design-diagnostics > summary { cursor: pointer; color: #475467; font-size: 13px; padding: 10px 0; }
 .ti-design-diagnostics > p { font-size: 11px; color: #667085; overflow-wrap: anywhere; }
