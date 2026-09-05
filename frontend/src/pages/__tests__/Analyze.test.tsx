@@ -30,4 +30,3 @@ it('retains each visited workspace without mounting unopened workspaces', () => 
   fireEvent.click(screen.getByRole('button', { name: /^需求审查/ }));
   expect((screen.getByRole('textbox', { name: '需求搜索' }) as HTMLInputElement).value).toBe('风险');
 });
-
