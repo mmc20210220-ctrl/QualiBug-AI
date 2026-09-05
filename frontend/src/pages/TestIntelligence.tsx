@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
+  getAgentTask,
+  groundAgentTask,
+  type AgentTask,
+} from '../api/agent-tasks';
+import {
   getTestIntelligence,
   type TestCoverageStatus,
   type TestDesign,
@@ -143,7 +148,15 @@ function TestDesignPanel({ design }: { design: TestDesign }) {
   );
 }
 
-function ObligationCard({ obligation, design }: { obligation: TestObligation; design?: TestDesign }) {
+type ObligationCardProps = {
+  obligation: TestObligation;
+  design?: TestDesign;
+  selectable?: boolean;
+  selected?: boolean;
+  onToggle?: (obligationId: string) => void;
+};
+
+function ObligationCard({ obligation, design, selectable = false, selected = false, onToggle }: ObligationCardProps) {
   const meta = KIND_META[obligation.obligationKind];
   const preconditions = obligation.preconditions.map(displayValue).filter(Boolean);
   const outcomes = obligation.expectedOutcomes.map(displayValue).filter(Boolean);
@@ -152,6 +165,17 @@ function ObligationCard({ obligation, design }: { obligation: TestObligation; de
       <div className="ti-obligation-head">
         <div>
           <div className="ti-tags">
+            {selectable && onToggle && (
+              <label className="ti-target-checkbox">
+                <input
+                  type="checkbox"
+                  checked={selected}
+                  onChange={() => onToggle(obligation.obligationId)}
+                  aria-label={`选择 Test Target：${obligation.title}`}
+                />
+                <span>纳入当前任务范围</span>
+              </label>
+            )}
             <span className={`ti-tag kind-${obligation.obligationKind}`}>{meta.label}</span>
             <span className="ti-tag neutral">仅义务</span>
             <span className="ti-tag neutral">未执行</span>
@@ -228,11 +252,19 @@ export function TestIntelligence() {
   usePageTitle('测试智能');
   const [params] = useSearchParams();
   const project = params.get('project')?.trim() || '';
+  const taskId = params.get('task')?.trim() || '';
   const { navigateToProjectPath } = useProjectNavigation();
   const [analysis, setAnalysis] = useState<TestIntelligenceAnalysis | null>(null);
   const [loading, setLoading] = useState(Boolean(project));
   const [error, setError] = useState('');
   const [activeKind, setActiveKind] = useState<TestObligationKind | 'all'>('all');
+  const [task, setTask] = useState<AgentTask | null>(null);
+  const [taskLoading, setTaskLoading] = useState(Boolean(taskId));
+  const [taskError, setTaskError] = useState('');
+  const [selectedTargetIds, setSelectedTargetIds] = useState<string[]>([]);
+  const [scopeConfirmed, setScopeConfirmed] = useState(false);
+  const [grounding, setGrounding] = useState(false);
+  const [groundingError, setGroundingError] = useState('');
 
   const load = useCallback(async () => {
     if (!project) {
@@ -256,6 +288,65 @@ export function TestIntelligence() {
   }, [project]);
 
   useEffect(() => { void load(); }, [load]);
+
+  const loadTask = useCallback(async () => {
+    if (!project || !taskId) {
+      setTask(null);
+      setTaskError('');
+      setTaskLoading(false);
+      setSelectedTargetIds([]);
+      setScopeConfirmed(false);
+      return;
+    }
+    setTaskLoading(true);
+    setTaskError('');
+    try {
+      const next = await getAgentTask(project, taskId);
+      setTask(next);
+      setSelectedTargetIds(next.selectedTestTargets);
+      setScopeConfirmed(false);
+    } catch (caught: unknown) {
+      setTask(null);
+      setTaskError(caught instanceof Error ? caught.message : 'Agent Task 读取失败');
+    } finally {
+      setTaskLoading(false);
+    }
+  }, [project, taskId]);
+
+  useEffect(() => { void loadTask(); }, [loadTask]);
+
+  const canSelectTaskScope = Boolean(
+    task
+      && task.intent === 'verify_changes'
+      && task.selectedTestTargets.length === 0
+      && task.status !== 'COMPLETED'
+      && task.status !== 'FAILED'
+      && task.status !== 'CANCELLED',
+  );
+
+  const toggleTarget = (obligationId: string) => {
+    setSelectedTargetIds((current) => current.includes(obligationId)
+      ? current.filter((id) => id !== obligationId)
+      : [...current, obligationId]);
+    setGroundingError('');
+  };
+
+  const groundSelectedTargets = async () => {
+    if (!project || !taskId || !canSelectTaskScope || !scopeConfirmed || selectedTargetIds.length === 0 || grounding) return;
+    setGrounding(true);
+    setGroundingError('');
+    try {
+      const grounded = await groundAgentTask(project, taskId, { testTargetIds: selectedTargetIds });
+      if (grounded.projectId !== project || grounded.taskId !== taskId) {
+        throw new Error('Grounding 响应与当前项目任务不一致。');
+      }
+      navigateToProjectPath('/verify', project, `task=${encodeURIComponent(taskId)}`);
+    } catch (caught: unknown) {
+      setGroundingError(caught instanceof Error ? caught.message : 'Test Target 固定失败');
+    } finally {
+      setGrounding(false);
+    }
+  };
 
   const obligations = useMemo(() => {
     if (!analysis) return [];
@@ -344,6 +435,36 @@ export function TestIntelligence() {
         </section>
       )}
 
+      {taskId && (
+        <section className="ti-task-scope" aria-label="当前任务验证范围">
+          <div className="ti-task-scope-copy">
+            <span>Task scope</span>
+            {taskLoading ? (
+              <><strong>正在读取当前 Agent Task</strong><p>只有任务记录确认后，才允许把来源支持的 Test Targets 固定到任务。</p></>
+            ) : taskError ? (
+              <><strong>无法读取当前 Agent Task</strong><p>{taskError}</p><button type="button" className="btn btn-secondary" onClick={() => void loadTask()}>重新读取任务</button></>
+            ) : task?.intent === 'analyze_requirements' ? (
+              <><strong>这是分析型任务，不需要固定执行范围</strong><p>分析任务只消费企业理解快照，不会把 Test Targets 伪装成执行目标。</p></>
+            ) : canSelectTaskScope ? (
+              <>
+                <strong>为这次任务选择真实变更影响范围</strong>
+                <p>请只选择有来源证据、确实属于本次变更影响范围的 Test Targets。系统不会默认全选，也不会根据目标文本猜测范围。</p>
+                <label className="ti-scope-confirm">
+                  <input type="checkbox" checked={scopeConfirmed} onChange={(event) => setScopeConfirmed(event.target.checked)} disabled={grounding} />
+                  <span>我确认下面选择的目标来自本次真实变更范围</span>
+                </label>
+                <button type="button" className="btn btn-primary" onClick={() => void groundSelectedTargets()} disabled={grounding || !scopeConfirmed || selectedTargetIds.length === 0}>
+                  {grounding ? '正在固定并重新评估…' : `固定 ${selectedTargetIds.length} 个目标并重新评估`}
+                </button>
+                {groundingError && <p className="ti-scope-error" role="alert">{groundingError}</p>}
+              </>
+            ) : (
+              <><strong>当前 Task 已有固定的 Test Targets</strong><p>{task?.selectedTestTargets.length || 0} 个目标已写入任务；如果资料发生变化，请回到 Live Workspace 重新评估 Grounding。</p><button type="button" className="btn btn-secondary" onClick={() => navigateToProjectPath('/verify', project, `task=${encodeURIComponent(taskId)}`)}>返回 Live Workspace</button></>
+            )}
+          </div>
+        </section>
+      )}
+
       <section className="ti-obligations-section">
         <div className="ti-section-heading">
           <div><span>Test Obligations + Test Design</span><h2>从“必须验证什么”到“如何验证”</h2></div>
@@ -357,7 +478,14 @@ export function TestIntelligence() {
 
         {obligations.length > 0 ? (
           <div className="ti-obligations-list">{obligations.map((item) => (
-            <ObligationCard obligation={item} design={designsByObligation.get(item.obligationId)} key={item.obligationId} />
+            <ObligationCard
+              obligation={item}
+              design={designsByObligation.get(item.obligationId)}
+              key={item.obligationId}
+              selectable={canSelectTaskScope}
+              selected={selectedTargetIds.includes(item.obligationId)}
+              onToggle={canSelectTaskScope ? toggleTarget : undefined}
+            />
           ))}</div>
         ) : (
           <div className="ti-no-obligations">

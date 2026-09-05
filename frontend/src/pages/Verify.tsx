@@ -279,6 +279,10 @@ function VerifyWorkspace() {
   const taskClaimed = Boolean(agentTask?.executionClaimStatus && agentTask.executionClaimStatus !== 'NOT_CLAIMED');
   const executionUncertain = Boolean(agentTask?.executionRecoveryRequired);
   const canExecute = Boolean(agentTask && !taskIsTerminal && !taskClaimed && agentTask.intent !== 'analyze_requirements');
+  const requiresExplicitScope = Boolean(agentTask?.groundingBlockers.some((blocker) => blocker.code === 'CHANGE_SCOPE_NOT_GROUNDED'));
+  const taskKnowledgeSearch = taskId
+    ? `${requiresExplicitScope ? 'view=test-targets&' : ''}task=${encodeURIComponent(taskId)}${agentTask ? `&goal=${encodeURIComponent(agentTask.goal)}` : ''}`
+    : 'view=test-targets';
   const pinnedTargets = agentTask?.selectedTargetSnapshots.slice(0, 12) || [];
   const fallbackTargets = intelligence?.obligations.slice(0, 12) || [];
   const taskHasObservation = hasEvent(agentEvents, 'OBSERVATION_RECORDED');
@@ -472,7 +476,7 @@ function VerifyWorkspace() {
           </div></details>
 
           <div className="verify-agent-rail-actions">
-            <Link className="btn btn-secondary" to={buildProjectPath('/analyze', project, taskId ? `task=${encodeURIComponent(taskId)}${agentTask ? `&goal=${encodeURIComponent(agentTask.goal)}` : ''}` : '')}>查看 Knowledge</Link>
+            <Link className="btn btn-secondary" to={buildProjectPath('/analyze', project, taskKnowledgeSearch)}>查看 Knowledge</Link>
             {agentTask && !taskIsTerminal && !taskClaimed ? (
               <button type="button" className="btn btn-secondary" onClick={() => void regroundCurrentTask()} disabled={groundingTask}>
                 {groundingTask ? '正在评估…' : '重新评估 Grounding'}
@@ -505,7 +509,8 @@ function VerifyWorkspace() {
             <h2>{executionUncertain ? '执行结果待确认' : agentTaskLoading && !agentTask ? '正在读取任务' : !agentTask ? '任务暂不可用' : taskIsTerminal ? '回看这次工作的记录' : agentTask.executionRunId ? '跟踪真实执行进展' : agentTask.groundingBlockers.length ? '补充实验需要的条件' : agentTask.intent === 'analyze_requirements' ? '检查已固定的企业知识' : '检查范围，准备实验'}</h2>
             <p>{executionUncertain ? '原执行进程已不再持有该任务的运行锁，无法确认它是否发送过请求。系统不会自动重跑；请根据 Scan 身份检查已有证据。' : agentTask?.groundingBlockers[0]?.message || (agentTask?.executionRunId ? `已绑定运行：${agentTask.executionRunId}` : agentTask ? '查看已有知识、验证目标和事件，再决定下一步。项目运行控制仍负责实际测试；点击按项目范围执行后，系统会重新检查环境并启动原有 Scan 主链。' : agentTaskError || '等待后端任务记录。')}</p>
             <div className="verify-next-actions">
-              {agentTask && <Link className="btn btn-secondary" to={buildProjectPath('/analyze', project, `task=${encodeURIComponent(taskId)}`)}>查看任务知识</Link>}
+              {agentTask && <Link className="btn btn-secondary" to={buildProjectPath('/analyze', project, taskKnowledgeSearch)}>查看任务知识</Link>}
+              {requiresExplicitScope && <Link className="btn btn-primary" to={buildProjectPath('/analyze', project, taskKnowledgeSearch)}>选择真实变更范围</Link>}
               {agentTask && !taskIsTerminal && !taskClaimed && <button className="btn btn-secondary" onClick={() => void regroundCurrentTask()} disabled={groundingTask}>{groundingTask ? '正在检查…' : '重新检查条件'}</button>}
               {agentTaskError && <button className="btn btn-secondary" onClick={() => void loadAgentTask()}>重新读取任务</button>}
             </div>
@@ -534,7 +539,7 @@ function VerifyWorkspace() {
             <article className="verify-plan-panel">
               <div className="verify-panel-title">
                 <div><span>Plan</span><strong>{agentTask ? '该 Task 固定的 Test Targets' : '当前可用 Test Targets'}</strong></div>
-                <Link to={buildProjectPath('/analyze', project, 'view=test-targets')}>查看 Knowledge</Link>
+                <Link to={buildProjectPath('/analyze', project, taskKnowledgeSearch)}>查看 Knowledge</Link>
               </div>
 
               {agentTask ? (
@@ -552,6 +557,7 @@ function VerifyWorkspace() {
                   <div className="verify-empty">
                     <strong>{agentTask.intent === 'analyze_requirements' ? '分析任务不需要固定执行目标' : '该 Task 尚未固定可执行 Test Targets'}</strong>
                     <p>{agentTask.groundingBlockers[0]?.message || '查看 Runtime Grounding blocker 了解原因。'}</p>
+                    {requiresExplicitScope && <Link className="btn btn-primary" to={buildProjectPath('/analyze', project, taskKnowledgeSearch)}>选择本次变更范围</Link>}
                   </div>
                 )
               ) : intelligenceLoading ? (

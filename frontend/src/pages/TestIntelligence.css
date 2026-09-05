@@ -27,6 +27,14 @@
 .ti-diagnostics span { color: #667085; font-size: 12px; }
 .ti-diagnostics strong { font-size: 20px; }
 .ti-diagnostics p { margin: 0; color: #98a2b3; font-size: 12px; line-height: 1.5; }
+.ti-task-scope { padding: 20px; border: 1px solid #c7d7fe; border-radius: 16px; background: #f5f8ff; }
+.ti-task-scope-copy { display: grid; gap: 10px; max-width: 920px; }
+.ti-task-scope-copy > span { color: #175cd3; font-size: 11px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+.ti-task-scope-copy > strong { font-size: 20px; line-height: 1.3; }
+.ti-task-scope-copy > p { margin: 0; color: #475467; line-height: 1.6; }
+.ti-scope-confirm { display: flex; gap: 9px; align-items: flex-start; color: #344054; font-size: 13px; font-weight: 700; line-height: 1.5; }
+.ti-scope-confirm input { flex: 0 0 auto; width: 16px; height: 16px; margin-top: 2px; accent-color: #175cd3; }
+.ti-scope-error { color: #b42318 !important; font-weight: 700; }
 .ti-obligations-section { display: grid; gap: 14px; }
 .ti-section-heading { display: flex; justify-content: space-between; gap: 16px; align-items: end; }
 .ti-section-heading h2 { margin: 4px 0 0; font-size: 24px; }
@@ -49,6 +57,8 @@
 .ti-tag.kind-authorization { background: #eff8ff; color: #175cd3; }
 .ti-tag.kind-side_effect { background: #ecfdf3; color: #027a48; }
 .ti-tag.kind-requirement_risk { background: #fef3f2; color: #b42318; }
+.ti-target-checkbox { display: inline-flex; gap: 6px; align-items: center; min-height: 24px; padding: 3px 8px; border: 1px solid #84adff; border-radius: 999px; background: #eff8ff; color: #175cd3; font-size: 11px; font-weight: 800; cursor: pointer; }
+.ti-target-checkbox input { width: 14px; height: 14px; margin: 0; accent-color: #175cd3; }
 .ti-obligation-id { max-width: 280px; overflow: hidden; color: #98a2b3; font-family: ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .ti-context-grid { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 10px; margin-top: 16px; }
 .ti-context-grid > div { padding: 11px 12px; border-radius: 11px; background: #f8fafc; }
