@@ -83,7 +83,6 @@ function FindingCard({ finding }: { finding: RequirementFinding }) {
           </div>
           <h3>{finding.title}</h3>
         </div>
-        <span className="ri-finding-id" title={finding.findingId}>{finding.findingId}</span>
       </div>
 
       {finding.description && <p className="ri-finding-description">{finding.description}</p>}
@@ -107,6 +106,7 @@ function FindingCard({ finding }: { finding: RequirementFinding }) {
           查看证据
           <span>{finding.evidence.length} 条 · {finding.sourceIds.length} 个来源</span>
         </summary>
+        <p className="ri-finding-id">审查项标识：{finding.findingId}</p>
         <EvidenceList evidence={finding.evidence} />
       </details>
     </article>
@@ -230,8 +230,8 @@ export function RequirementIntelligence() {
           </div>
         </div>
         <div className="ri-readiness-card" aria-label="需求就绪门禁">
-          <span>Requirement Readiness</span>
-          <strong>{readiness.status}</strong>
+          <span>需要关注</span>
+          <strong>{readiness.blockingFindingCount + readiness.reviewRequiredFindingCount} 项</strong>
           <p>{readiness.blockingFindingCount > 0
             ? `${readiness.blockingFindingCount} 个事项影响需求理解，需澄清`
             : readiness.reviewRequiredFindingCount > 0
@@ -263,13 +263,10 @@ export function RequirementIntelligence() {
         </article>
       </section>
 
-      <section className="ri-scope-note">
-        <div>
-          <span>当前审查边界</span>
-          <strong>只展示可追溯、已有 authority 支撑的 Finding</strong>
-        </div>
-        <p>本页不是“AI 需求质量打分”。READY 仅表示当前支持的 Conflict / Missing / Ambiguity 没有活动 Finding，不等于资料完整率或问题召回率为 100%。</p>
-      </section>
+      <details className="ri-scope-note">
+        <summary>审查范围与状态说明</summary>
+        <p>结论来自已有资料中的冲突、定义缺失和业务歧义。没有待处理事项，仅表示当前支持范围内未发现活动审查项，不代表资料完整或已执行测试。当前状态：{readiness.status}。</p>
+      </details>
 
       <section className="ri-findings-section">
         <div className="ri-section-heading">
@@ -330,7 +327,7 @@ export function RequirementIntelligence() {
         ) : (
           <div className="ri-no-findings">
             <strong>{query || onlyBlocking ? '没有匹配当前筛选的审查项' : activeType === 'all' ? '当前没有活动需求审查项' : `当前没有${TYPE_META[activeType as RequirementFindingType].label}`}</strong>
-            <p>系统不会为了填满报告而生成无证据结论。新增或更新企业资料后可重新运行审查。</p>
+            <p>{query || onlyBlocking || activeType !== 'all' ? '尝试调整关键词或清除筛选，查看其他审查项。筛选不会改变项目审查结论。' : '当前支持范围内未发现活动审查项。新增或更新资料后，可再次查看审查结果。'}</p>
           </div>
         )}
       </section>

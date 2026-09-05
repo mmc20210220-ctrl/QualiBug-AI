@@ -125,10 +125,12 @@ describe('Requirement Intelligence workspace', () => {
       </MemoryRouter>,
     );
 
-    expect(await screen.findByText('NOT_READY')).toBeTruthy();
+    expect(await screen.findByText('需求就绪状态 · 未就绪')).toBeTruthy();
     expect(screen.getByText('业务规则约束冲突')).toBeTruthy();
     expect(screen.getByText('已支付订单不得取消')).toBeTruthy();
-    expect(screen.getByText(/不等于资料完整率或问题召回率为 100%/)).toBeTruthy();
+    const scope = screen.getByText('审查范围与状态说明').closest('details');
+    expect(scope?.open).toBe(false);
+    expect(screen.getByText(/不代表资料完整或已执行测试/)).toBeTruthy();
     expect(getRequirementIntelligenceMock).toHaveBeenCalledWith('project-a');
   });
 
@@ -204,7 +206,7 @@ it('combines search and understanding filters without changing source readiness'
   expect(screen.getByText('生命周期起始状态定义缺失')).toBeTruthy();
   fireEvent.click(screen.getByRole('checkbox'));
   expect(screen.getByText('没有匹配当前筛选的审查项')).toBeTruthy();
-  expect(screen.getByText('NOT_READY')).toBeTruthy();
+  expect(screen.getByText('需求就绪状态 · 未就绪')).toBeTruthy();
   fireEvent.click(screen.getByRole('button', { name: '清除筛选' }));
   expect(screen.getByText('业务规则约束冲突')).toBeTruthy();
   cleanup();
