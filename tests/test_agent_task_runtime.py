@@ -12,9 +12,12 @@ from ai_test_asset_center.agent_task_store import (
     AgentTaskValidationError,
     append_agent_task_event,
     cancel_agent_task,
+    claim_agent_task_execution,
     create_agent_task,
     get_agent_task,
     list_agent_task_events,
+    record_agent_task_execution_started,
+    record_agent_task_scan_id,
 )
 from ai_test_asset_center.private_pilot_agent_task_handlers import (
     AgentTaskHandlersMixin,
@@ -39,7 +42,9 @@ def test_agent_task_persists_goal_without_granting_execution(tmp_path: Path) -> 
     assert task["runtime_grounding_status"] == "NOT_REQUESTED"
     assert task["source_snapshot"] == {"status": "NOT_PINNED", "snapshot_ref": ""}
     assert task["selected_test_targets"] == []
+    assert task["scan_id"] == ""
     assert task["execution_run_id"] == ""
+    assert task["execution_claim_status"] == "NOT_CLAIMED"
     assert task["event_count"] == 1
     assert task["latest_event"]["event_type"] == "TASK_CREATED"
     assert task["latest_event"]["detail"]["execution_authority"] == "NOT_REQUESTED"
@@ -314,6 +319,164 @@ def test_grounding_persistence_emits_factual_events_idempotently(tmp_path: Path)
         "TEST_TARGET_SELECTION_EVALUATED",
         "RUNTIME_GROUNDING_EVALUATED",
     ]
+
+
+def _ready_task(tmp_path: Path) -> dict:
+    task = create_agent_task(
+        tmp_path,
+        tenant_id="tenant-a",
+        project_id="project-a",
+        goal="执行已绑定的单接口验证",
+        intent="release_readiness",
+    )
+    path = (
+        tmp_path
+        / "platform_workspace"
+        / "project-a"
+        / "agent_tasks"
+        / f"{task['task_id']}.json"
+    )
+    import json
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["status"] = "READY"
+    payload["runtime_grounding_status"] = "READY"
+    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    return get_agent_task(
+        tmp_path,
+        tenant_id="tenant-a",
+        project_id="project-a",
+        task_id=task["task_id"],
+    )
+
+
+def test_execution_claim_is_one_way_and_idempotent(tmp_path: Path) -> None:
+    task = _ready_task(tmp_path)
+    first = claim_agent_task_execution(
+        tmp_path,
+        tenant_id="tenant-a",
+        project_id="project-a",
+        task_id=task["task_id"],
+        correlation_id="corr-exec",
+    )
+    second = claim_agent_task_execution(
+        tmp_path,
+        tenant_id="tenant-a",
+        project_id="project-a",
+        task_id=task["task_id"],
+        correlation_id="corr-exec-retry",
+    )
+
+    assert first["status"] == "RUNNING"
+    assert first["execution_claim_status"] == "CLAIMED"
+    assert first["scan_id"] == ""
+    assert second["event_count"] == first["event_count"]
+    assert second["latest_event"]["event_type"] == "EXECUTION_CLAIMED"
+
+
+def test_scan_id_is_durable_before_execution_started_event(tmp_path: Path) -> None:
+    task = _ready_task(tmp_path)
+    claim_agent_task_execution(
+        tmp_path,
+        tenant_id="tenant-a",
+        project_id="project-a",
+        task_id=task["task_id"],
+    )
+
+    with pytest.raises(AgentTaskConflict, match="agent_task_scan_id_not_durable"):
+        record_agent_task_execution_started(
+            tmp_path,
+            tenant_id="tenant-a",
+            project_id="project-a",
+            task_id=task["task_id"],
+            execution_run_id="run-1",
+        )
+
+    scanned = record_agent_task_scan_id(
+        tmp_path,
+        tenant_id="tenant-a",
+        project_id="project-a",
+        task_id=task["task_id"],
+        scan_id="scan-1",
+        correlation_id="corr-scan",
+    )
+    assert scanned["scan_id"] == "scan-1"
+    assert scanned["execution_run_id"] == ""
+    assert scanned["latest_event"]["event_type"] == "SCAN_ID_RECORDED"
+
+    started = record_agent_task_execution_started(
+        tmp_path,
+        tenant_id="tenant-a",
+        project_id="project-a",
+        task_id=task["task_id"],
+        execution_run_id="run-1",
+        correlation_id="corr-run",
+    )
+    assert started["scan_id"] == "scan-1"
+    assert started["execution_run_id"] == "run-1"
+    assert started["latest_event"]["event_type"] == "EXECUTION_STARTED"
+    assert started["latest_event"]["detail"] == {
+        "scan_id": "scan-1",
+        "execution_run_id": "run-1",
+    }
+
+
+def test_scan_and_run_linkage_retries_do_not_duplicate_events(tmp_path: Path) -> None:
+    task = _ready_task(tmp_path)
+    claim_agent_task_execution(
+        tmp_path,
+        tenant_id="tenant-a",
+        project_id="project-a",
+        task_id=task["task_id"],
+    )
+    scanned = record_agent_task_scan_id(
+        tmp_path,
+        tenant_id="tenant-a",
+        project_id="project-a",
+        task_id=task["task_id"],
+        scan_id="scan-1",
+    )
+    scanned_retry = record_agent_task_scan_id(
+        tmp_path,
+        tenant_id="tenant-a",
+        project_id="project-a",
+        task_id=task["task_id"],
+        scan_id="scan-1",
+    )
+    assert scanned_retry["event_count"] == scanned["event_count"]
+
+    started = record_agent_task_execution_started(
+        tmp_path,
+        tenant_id="tenant-a",
+        project_id="project-a",
+        task_id=task["task_id"],
+        execution_run_id="run-1",
+    )
+    started_retry = record_agent_task_execution_started(
+        tmp_path,
+        tenant_id="tenant-a",
+        project_id="project-a",
+        task_id=task["task_id"],
+        execution_run_id="run-1",
+    )
+    assert started_retry["event_count"] == started["event_count"]
+
+    with pytest.raises(AgentTaskConflict, match="agent_task_scan_id_conflict"):
+        record_agent_task_scan_id(
+            tmp_path,
+            tenant_id="tenant-a",
+            project_id="project-a",
+            task_id=task["task_id"],
+            scan_id="scan-2",
+        )
+    with pytest.raises(AgentTaskConflict, match="agent_task_execution_run_id_conflict"):
+        record_agent_task_execution_started(
+            tmp_path,
+            tenant_id="tenant-a",
+            project_id="project-a",
+            task_id=task["task_id"],
+            execution_run_id="run-2",
+        )
 
 
 def test_agent_task_rejects_missing_goal_and_unknown_intent(tmp_path: Path) -> None:
