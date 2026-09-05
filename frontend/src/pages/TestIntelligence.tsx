@@ -315,12 +315,12 @@ function WorkspaceEmpty({ onMaterials }: { onMaterials: () => void }) {
   );
 }
 
-export function TestIntelligence() {
+export function TestIntelligence({ view }: { view?: 'test-targets' | 'test-data' } = {}) {
   usePageTitle('测试智能');
   const [params] = useSearchParams();
   const project = params.get('project')?.trim() || '';
   const taskId = params.get('task')?.trim() || '';
-  const activeView = params.get('view') || 'test-targets';
+  const activeView = view || params.get('view') || 'test-targets';
   const { navigateToProjectPath } = useProjectNavigation();
   const [analysis, setAnalysis] = useState<TestIntelligenceAnalysis | null>(null);
   const [loading, setLoading] = useState(Boolean(project));

@@ -1,4 +1,4 @@
-import { useRef, useState, type ChangeEvent, type DragEvent } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type ChangeEvent, type DragEvent } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { ingestKnowledge } from '../api/client';
 import { useToast } from '../components/useToast';
@@ -11,6 +11,27 @@ import './Analyze.css';
 type AnalyzeView = 'requirements' | 'test-targets' | 'test-data';
 
 const PRD_ACCEPT = '.pdf,.doc,.docx,.md,.txt,.ppt,.pptx';
+
+function KnowledgeSurfaces({ activeView }: { activeView: AnalyzeView }) {
+  const [visited, setVisited] = useState<AnalyzeView[]>([activeView]);
+  const positions = useRef<Partial<Record<AnalyzeView, number>>>({});
+  useLayoutEffect(() => {
+    const saved = positions.current[activeView];
+    if (saved !== undefined) window.scrollTo({ top: saved, behavior: 'instant' });
+    const remember = () => { positions.current[activeView] = window.scrollY; };
+    window.addEventListener('scroll', remember, { passive: true });
+    return () => window.removeEventListener('scroll', remember);
+  }, [activeView]);
+  useEffect(() => {
+    setVisited((views) => views.includes(activeView) ? views : [...views, activeView]);
+  }, [activeView]);
+  const views = visited.includes(activeView) ? visited : [...visited, activeView];
+  return <>{views.map((view) => (
+    <section key={view} className="analyze-surface" hidden={view !== activeView} aria-label={view === 'requirements' ? '需求审查工作区' : view === 'test-targets' ? '测试设计工作区' : '测试数据工作区'}>
+      {view === 'requirements' ? <RequirementIntelligence /> : <TestIntelligence view={view} />}
+    </section>
+  ))}</>;
+}
 
 export function Analyze() {
   usePageTitle('Knowledge');
@@ -125,11 +146,7 @@ export function Analyze() {
         </button>
       </nav>
 
-      <section className="analyze-surface">
-        {activeView === 'requirements'
-          ? <RequirementIntelligence key={`requirements:${project}:${analysisVersion}`} />
-          : <TestIntelligence key={`${activeView}:${project}:${analysisVersion}`} />}
-      </section>
+      <KnowledgeSurfaces key={`${project}:${taskId}:${analysisVersion}`} activeView={activeView} />
     </div>
   );
 }
