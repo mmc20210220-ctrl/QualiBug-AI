@@ -58,7 +58,7 @@ describe('getFinding', () => {
     expect(finding?.reproduction?.steps).toEqual(['创建订单']);
     expect(finding?.expected_actual_comparison?.difference).toBe('state mismatch');
     expect((finding as unknown as Record<string, unknown>)?.recommended_fix).toBeUndefined();
-    expect((finding?.technical_details as Record<string, unknown>)?.possible_root_cause).toBeUndefined();
+    expect((finding?.technical_details as unknown as Record<string, unknown>)?.possible_root_cause).toBeUndefined();
     expect(finding?.product_responsibility_boundary?.no_fix_advice).toBe(true);
   });
 });

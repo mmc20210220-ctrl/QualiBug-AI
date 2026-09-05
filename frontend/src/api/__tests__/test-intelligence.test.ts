@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { parseTestIntelligenceAnalysis } from '../test-intelligence';
 
-function validPayload(): any {
+function validPayload() {
   return {
     ok: true,
     data: {
@@ -60,7 +60,7 @@ function validPayload(): any {
           source_ids: ['prd'],
           evidence: [{ source_id: 'prd', source_locator: 'PRD.md#line=20', quote: '客服不得取消已支付订单', fact_id: 'fact:auth' }],
           derived_from: [{ kind: 'business_behavior', id: 'b1' }],
-          requirement_finding_ids: [],
+          requirement_finding_ids: [] as string[],
           design_status: 'OBLIGATION_ONLY',
           verification_status: 'NOT_MEASURED',
           runtime_linkage: 'NOT_EVALUATED',
@@ -119,7 +119,7 @@ function validPayload(): any {
           source_ids: ['prd'],
           evidence: [{ source_id: 'prd', source_locator: 'PRD.md#line=20', quote: '客服不得取消已支付订单', fact_id: 'fact:auth' }],
           derived_from: [{ kind: 'test_obligation', id: 'test-obligation:auth' }],
-          requirement_finding_ids: [],
+          requirement_finding_ids: [] as string[],
           design_status: 'STRUCTURED_DESIGN_ONLY',
           observer_binding_status: 'NOT_GROUNDED',
           oracle_binding_status: 'NOT_GROUNDED',
