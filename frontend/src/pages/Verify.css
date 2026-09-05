@@ -538,6 +538,10 @@
 .verify-next-step { padding: 24px 20px; border-top: 1px solid var(--line); }
 .verify-next-step h2 { margin: 8px 0; font-size: 21px; }
 .verify-next-step p { color: var(--subtle); line-height: 1.8; }
+.verify-next-step { overflow-wrap: anywhere; }
+.verify-task-execute { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--line); }
+.verify-task-execute p { flex-basis: 100%; margin: 0; }
+.verify-task-execute label { display: flex; align-items: center; gap: 8px; }
 .verify-next-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
 .verify-context-details > summary, .verify-milestone-details > summary { cursor: pointer; padding: 12px; color: var(--subtle); font-size: 12px; }
 .verify-context-details .verify-context-chips { padding-top: 12px; }

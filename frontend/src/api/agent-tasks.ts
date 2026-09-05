@@ -67,6 +67,14 @@ export type AgentTask = {
   selectedTestTargets: string[];
   selectedTargetSnapshots: AgentPinnedTestTarget[];
   executionRunId: string;
+  scanId: string;
+  executionScope: string;
+  executionSnapshotRef: string;
+  executionClaimStatus: string;
+  executionLive: boolean;
+  executionRecoveryRequired: boolean;
+  executionCancelRequested: boolean;
+  executionResult: Record<string, unknown>;
   runtimeGroundingStatus: string;
   runtimeContext: Record<string, unknown>;
   groundingBlockers: AgentGroundingBlocker[];
@@ -165,6 +173,14 @@ function parseTask(value: unknown): AgentTask {
     selectedTestTargets: asArray(record.selected_test_targets).map(asString).filter(Boolean),
     selectedTargetSnapshots: parsePinnedTargets(record.selected_test_target_snapshot),
     executionRunId: asString(record.execution_run_id),
+    scanId: asString(record.scan_id),
+    executionScope: asString(record.execution_scope),
+    executionSnapshotRef: asString(record.execution_snapshot_ref),
+    executionClaimStatus: asString(record.execution_claim_status) || 'NOT_CLAIMED',
+    executionLive: record.execution_live === true,
+    executionRecoveryRequired: record.execution_recovery_required === true,
+    executionCancelRequested: record.execution_cancel_requested === true,
+    executionResult: asRecord(record.execution_result),
     runtimeGroundingStatus: asString(record.runtime_grounding_status),
     runtimeContext: asRecord(record.runtime_context),
     groundingBlockers: parseBlockers(record.grounding_blockers),
@@ -262,4 +278,13 @@ export async function cancelAgentTask(project: string, taskId: string): Promise<
     { method: 'POST' },
   ));
   return parseTask(payload.data);
+}
+
+
+export async function executeAgentTask(project: string, taskId: string, readOnly: boolean): Promise<void> {
+  await fetchJSON<unknown>(`${basePath(project)}/${encodeURIComponent(taskId)}/execute`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ execution_scope: 'project', read_only: readOnly }),
+  });
 }

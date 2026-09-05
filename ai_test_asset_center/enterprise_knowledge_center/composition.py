@@ -2615,6 +2615,28 @@ def load_enterprise_business_knowledge_asset(
     return _base_api.load_enterprise_business_knowledge_asset(project_id, root)
 
 
+def pin_enterprise_business_knowledge_asset(project_id: str, root: Path) -> str:
+    """Version an existing asset using the existing content-addressed store."""
+    from ..artifact_store import LocalArtifactStore
+
+    asset = load_enterprise_business_knowledge_asset(project_id, root)
+    if not asset:
+        raise ValueError("UNDERSTANDING_ASSET_NOT_MATERIALIZED")
+    store = LocalArtifactStore(_base_api._paths(project_id, root)["asset"].parent / "snapshots")
+    return store.put_json(asset, "ENTERPRISE_UNDERSTANDING").artifact_id
+
+
+def load_pinned_enterprise_business_knowledge_asset(project_id: str, root: Path, snapshot_ref: str) -> dict[str, Any]:
+    """Load exactly the pinned asset; never refresh or rebuild missing versions."""
+    from ..artifact_store import LocalArtifactStore
+
+    store = LocalArtifactStore(_base_api._paths(project_id, root)["asset"].parent / "snapshots")
+    asset = store.get_json(snapshot_ref)
+    if not isinstance(asset, dict) or not asset:
+        raise ValueError("UNDERSTANDING_SNAPSHOT_INVALID")
+    return asset
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Run-start understanding freshness gate (AGENTS.md principle 16).
 #

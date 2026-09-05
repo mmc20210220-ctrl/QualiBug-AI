@@ -13,7 +13,7 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, Callable
 
 from .scan_diagnostics import increment_scan_counter
 from .enterprise_test_data_plan import build_campaign_test_data_plan
@@ -250,7 +250,7 @@ def _verified_archive_chain(
         }
 
 
-def _scan_impl(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_doc_path: str = "", api_doc_text: str = "", base_url: str = "", ci_gate: bool = False, multi_layer: bool = True, output_dir: Optional[Path] = None, save_report: bool = True, campaign_context: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+def _scan_impl(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_doc_path: str = "", api_doc_text: str = "", base_url: str = "", ci_gate: bool = False, multi_layer: bool = True, output_dir: Optional[Path] = None, save_report: bool = True, campaign_context: Optional[dict[str, Any]] = None, on_started: Optional[Callable[[str], None]] = None) -> dict[str, Any]:
     """Run the single enterprise-safe discovery and evidence pipeline."""
     prepared = prepare_scan_before_pipeline(
         project,
@@ -350,13 +350,17 @@ def _scan_impl(project: str, root: Optional[Path] = None, *, prd_text: str = "",
             "load_failure": f"{type(exc).__name__}:{str(exc)[:200]}",
         }
 
+    scan_id = f"scan_{_safe_project(project)}_{int(started * 1000)}"
+    if on_started is not None:
+        on_started(scan_id)
+
     try:
         from .v12_pipeline import run_v12_pipeline
         v12 = run_v12_pipeline(project=project, root=root, prd_text=prd_text, api_spec_text=api_doc_text, db_schema_text=schema_text, base_url=approved_base_url, campaign_context=context)
     except Exception as exc:
         import traceback as _tb
         _tb.print_exc()
-        return {"success": False, "error": f"v12_pipeline_failed:{type(exc).__name__}:{exc}"}
+        return {"success": False, "scan_id": scan_id, "error": f"v12_pipeline_failed:{type(exc).__name__}:{exc}"}
 
     runtime_contract = _as_dict(v12.get("runtime_contract")) or initial_runtime_contract
     phases = _as_dict(v12.get("phases"))
@@ -489,7 +493,6 @@ def _scan_impl(project: str, root: Optional[Path] = None, *, prd_text: str = "",
         candidates.extend(external_candidates)
     state_graph = _as_dict(phases.get("state_graph"))
     incremental = _as_dict(phases.get("incremental_discovery"))
-    scan_id = f"scan_{_safe_project(project)}_{int(started * 1000)}"
     external_findings, external_reproduction_assets = _materialize_external_reproduction_assets(
         project=project,
         root=root,
@@ -1438,7 +1441,7 @@ def _scan_impl(project: str, root: Optional[Path] = None, *, prd_text: str = "",
 
 
 
-def scan(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_doc_path: str = "", api_doc_text: str = "", base_url: str = "", ci_gate: bool = False, multi_layer: bool = True, output_dir: Optional[Path] = None, save_report: bool = True, campaign_context: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+def scan(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_doc_path: str = "", api_doc_text: str = "", base_url: str = "", ci_gate: bool = False, multi_layer: bool = True, output_dir: Optional[Path] = None, save_report: bool = True, campaign_context: Optional[dict[str, Any]] = None, on_started: Optional[Callable[[str], None]] = None) -> dict[str, Any]:
     """Public scan entry — runs core discovery then first-class post-hooks."""
     from .scan_post_hooks import apply_scan_post_hooks
     from .artifact_store import artifact_store_enabled
@@ -1475,6 +1478,7 @@ def scan(project: str, root: Optional[Path] = None, *, prd_text: str = "", api_d
         output_dir=output_dir,
         save_report=save_report,
         campaign_context=campaign_context,
+        on_started=on_started,
     )
     resolved_root = Path(root or Path.cwd())
     _t_hooks_total = time.perf_counter()

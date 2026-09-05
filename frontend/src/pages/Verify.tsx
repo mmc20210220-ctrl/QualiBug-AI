@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import {
   cancelAgentTask,
+  executeAgentTask,
   getAgentTaskBundle,
   groundAgentTask,
   type AgentTask,
@@ -84,7 +85,11 @@ function eventLabel(eventType: string): string {
     TEST_TARGET_SELECTION_EVALUATED: '已评估 Test Target 选择',
     ANALYSIS_CONTEXT_EVALUATED: '已评估分析上下文',
     RUNTIME_GROUNDING_EVALUATED: '已评估 Runtime Grounding',
-    EXECUTION_STARTED: '真实执行开始',
+    EXECUTION_CLAIMED: '已认领项目执行请求',
+    SCAN_ID_RECORDED: '已记录 Scan 身份',
+    EXECUTION_STARTED: 'Scan 主链已启动',
+    EXECUTION_CANCEL_REQUESTED: '已请求在实验边界停止',
+    EXECUTION_RESULT_RECORDED: '已记录 Scan 执行结果',
     OBSERVATION_RECORDED: '收到真实 Observation',
     ORACLE_EVALUATED: 'Oracle 已判定',
     FINDING_CREATED: '已形成 Finding',
@@ -97,6 +102,9 @@ function eventDetail(event: AgentTaskEvent): string {
   const intent = asText(event.detail.intent);
   const previousStatus = asText(event.detail.previous_status);
   const status = asText(event.detail.status);
+  const scanId = asText(event.detail.scan_id);
+  const executionStatus = asText(event.detail.execution_status);
+  if (scanId) return `Scan · ${scanId}${executionStatus ? ` · ${executionStatus}` : ''}`;
   const blockingCodes = asArray(event.detail.blocking_codes).map(asText).filter(Boolean);
   const selectedCount = Number(event.detail.selected_target_count || 0);
   const runtimeBoundCount = Number(event.detail.runtime_bound_target_count || 0);
@@ -136,6 +144,9 @@ function VerifyWorkspace() {
   const [agentTaskError, setAgentTaskError] = useState('');
   const [cancellingTask, setCancellingTask] = useState(false);
   const [groundingTask, setGroundingTask] = useState(false);
+  const [executingTask, setExecutingTask] = useState(false);
+  const [executionError, setExecutionError] = useState('');
+  const [readOnly, setReadOnly] = useState(false);
 
   const selectView = (view: VerifyView) => {
     const next = new URLSearchParams(params);
@@ -224,6 +235,20 @@ function VerifyWorkspace() {
     }
   };
 
+  const executeCurrentTask = async () => {
+    if (!project || !taskId || executingTask) return;
+    setExecutingTask(true);
+    setExecutionError('');
+    try {
+      await executeAgentTask(project, taskId, readOnly);
+    } catch (caught: unknown) {
+      setExecutionError(caught instanceof Error ? caught.message : '执行请求未完成；请查看任务记录，不要重复创建任务。');
+    } finally {
+      await loadAgentTask();
+      setExecutingTask(false);
+    }
+  };
+
   const record = asRecord(data);
   const campaign = asRecord(record.campaign);
   const scanMeta = asRecord(record.scan_meta);
@@ -251,6 +276,9 @@ function VerifyWorkspace() {
   const taskGoal = agentTask?.goal || (taskId ? (agentTaskError ? '任务目标暂不可用' : '正在读取任务目标…') : goal || '选择要继续的任务');
   const taskTone = toneForStatus(agentTask?.status || '');
   const taskIsTerminal = Boolean(agentTask && TERMINAL_TASK_STATUSES.has(agentTask.status));
+  const taskClaimed = Boolean(agentTask?.executionClaimStatus && agentTask.executionClaimStatus !== 'NOT_CLAIMED');
+  const executionUncertain = Boolean(agentTask?.executionRecoveryRequired);
+  const canExecute = Boolean(agentTask && !taskIsTerminal && !taskClaimed && agentTask.intent !== 'analyze_requirements');
   const pinnedTargets = agentTask?.selectedTargetSnapshots.slice(0, 12) || [];
   const fallbackTargets = intelligence?.obligations.slice(0, 12) || [];
   const taskHasObservation = hasEvent(agentEvents, 'OBSERVATION_RECORDED');
@@ -432,14 +460,14 @@ function VerifyWorkspace() {
 
           <div className="verify-agent-rail-actions">
             <Link className="btn btn-secondary" to={buildProjectPath('/analyze', project, taskId ? `task=${encodeURIComponent(taskId)}${agentTask ? `&goal=${encodeURIComponent(agentTask.goal)}` : ''}` : '')}>查看 Knowledge</Link>
-            {agentTask && !taskIsTerminal ? (
+            {agentTask && !taskIsTerminal && !taskClaimed ? (
               <button type="button" className="btn btn-secondary" onClick={() => void regroundCurrentTask()} disabled={groundingTask}>
                 {groundingTask ? '正在评估…' : '重新评估 Grounding'}
               </button>
             ) : null}
             {agentTask && !taskIsTerminal ? (
-              <button type="button" className="btn btn-secondary" onClick={() => void cancelCurrentTask()} disabled={cancellingTask}>
-                {cancellingTask ? '正在取消…' : '取消 Agent Task'}
+              <button type="button" className="btn btn-secondary" onClick={() => void cancelCurrentTask()} disabled={cancellingTask || executionUncertain || agentTask.executionCancelRequested}>
+                {cancellingTask ? '正在提交…' : agentTask.executionCancelRequested ? '已请求安全停止' : taskClaimed ? '请求安全停止本次运行' : '取消 Agent Task'}
               </button>
             ) : null}
             <button type="button" className="btn btn-secondary" onClick={() => selectView('run-control')}>项目运行控制</button>
@@ -461,13 +489,21 @@ function VerifyWorkspace() {
 
           <section className="verify-next-step" aria-label="任务下一步">
             <span className="panel-kicker">下一步</span>
-            <h2>{agentTaskLoading && !agentTask ? '正在读取任务' : !agentTask ? '任务暂不可用' : taskIsTerminal ? '回看这次工作的记录' : agentTask.executionRunId ? '跟踪真实执行进展' : agentTask.groundingBlockers.length ? '补充实验需要的条件' : agentTask.intent === 'analyze_requirements' ? '检查已固定的企业知识' : '检查范围，准备实验'}</h2>
-            <p>{agentTask?.groundingBlockers[0]?.message || (agentTask?.executionRunId ? `已绑定运行：${agentTask.executionRunId}` : agentTask ? '查看已有知识、验证目标和事件，再决定下一步。项目运行控制仍负责实际测试；创建任务本身不会启动测试。' : agentTaskError || '等待后端任务记录。')}</p>
+            <h2>{executionUncertain ? '执行结果待确认' : agentTaskLoading && !agentTask ? '正在读取任务' : !agentTask ? '任务暂不可用' : taskIsTerminal ? '回看这次工作的记录' : agentTask.executionRunId ? '跟踪真实执行进展' : agentTask.groundingBlockers.length ? '补充实验需要的条件' : agentTask.intent === 'analyze_requirements' ? '检查已固定的企业知识' : '检查范围，准备实验'}</h2>
+            <p>{executionUncertain ? '原执行进程已不再持有该任务的运行锁，无法确认它是否发送过请求。系统不会自动重跑；请根据 Scan 身份检查已有证据。' : agentTask?.groundingBlockers[0]?.message || (agentTask?.executionRunId ? `已绑定运行：${agentTask.executionRunId}` : agentTask ? '查看已有知识、验证目标和事件，再决定下一步。项目运行控制仍负责实际测试；点击按项目范围执行后，系统会重新检查环境并启动原有 Scan 主链。' : agentTaskError || '等待后端任务记录。')}</p>
             <div className="verify-next-actions">
               {agentTask && <Link className="btn btn-secondary" to={buildProjectPath('/analyze', project, `task=${encodeURIComponent(taskId)}`)}>查看任务知识</Link>}
-              {agentTask && !taskIsTerminal && <button className="btn btn-primary" onClick={() => void regroundCurrentTask()} disabled={groundingTask}>{groundingTask ? '正在检查…' : '重新检查条件'}</button>}
+              {agentTask && !taskIsTerminal && !taskClaimed && <button className="btn btn-secondary" onClick={() => void regroundCurrentTask()} disabled={groundingTask}>{groundingTask ? '正在检查…' : '重新检查条件'}</button>}
               {agentTaskError && <button className="btn btn-secondary" onClick={() => void loadAgentTask()}>重新读取任务</button>}
             </div>
+            {canExecute && <div className="verify-task-execute">
+              <p>执行范围：当前项目。任务中的验证目标用于理解上下文，不代表只运行这些目标，也不代表已证明变更覆盖。每次实验仍由既有执行与安全规则决定。</p>
+              <label><input type="checkbox" checked={readOnly} onChange={(event) => setReadOnly(event.target.checked)} disabled={executingTask} /> 仅执行只读实验</label>
+              <button type="button" className="btn btn-primary" disabled={executingTask || groundingTask} onClick={() => void executeCurrentTask()}>{executingTask ? '正在提交执行请求…' : '按项目范围执行'}</button>
+            </div>}
+            {executionError && <div role="alert" className="settings-inline-feedback">{executionError}</div>}
+            {agentTask?.executionSnapshotRef && <p>本次执行的知识版本：{agentTask.executionSnapshotRef}</p>}
+            {Boolean(agentTask?.executionResult.error) && <p role="alert">执行诊断：{asText(agentTask?.executionResult.error)}</p>}
           </section>
           <details className="verify-context-details"><summary>快照、绑定与项目上下文</summary>
           <div className="verify-context-chips" aria-label="当前真实上下文">
@@ -554,7 +590,7 @@ function VerifyWorkspace() {
                   ) : agentTask?.runtimeGroundingStatus === 'READY' ? (
                     <>
                       <strong>Runtime Grounding 已就绪，尚未开始 Task-specific Execution</strong>
-                      <p>Preflight 和目标绑定已满足当前 Grounding 合同；下一阶段会把该 Task 绑定到现有 Scan，并生成真实 execution_run_id 与执行事件。</p>
+                      <p>Preflight 和目标绑定已满足当前 Grounding 合同；可以按项目范围启动现有 Scan，真实 Scan 身份和结果会写回本任务；就绪不等于已经执行。</p>
                     </>
                   ) : agentTask?.runtimeGroundingStatus === 'NOT_REQUIRED' ? (
                     <>

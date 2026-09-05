@@ -42,6 +42,9 @@ def apply_agent_task_grounding(
         if current_status in _AGENT_TASK_TERMINAL_STATUSES:
             raise AgentTaskConflict("agent_task_terminal")
 
+        if task.get("execution_claim_status") not in {None, "", "NOT_CLAIMED"}:
+            raise AgentTaskConflict("agent_task_execution_already_claimed")
+
         grounding_key = _text(grounding.get("grounding_key"))
         if grounding_key and grounding_key == _text(task.get("grounding_key")):
             return _public_task(task)

@@ -52,6 +52,7 @@ def request_scan_cancel(
     project: str,
     *,
     requester: dict[str, Any] | None = None,
+    expected_token: str = "",
 ) -> dict[str, Any]:
     """Register a cancel request against the live scan lease, fail-closed otherwise.
 
@@ -69,6 +70,8 @@ def request_scan_cancel(
             "message": "当前没有正在运行的检测任务。",
             "active_scan": {},
         }
+    if expected_token and str(owner.get("token") or "") != expected_token:
+        return {"requested": False, "reason_code": "SCAN_OWNER_MISMATCH", "message": "该任务绑定的运行已结束或已被另一运行替换。", "active_scan": {}}
     payload = {
         "schema": CANCEL_REQUEST_SCHEMA,
         "target_token": str(owner.get("token") or ""),

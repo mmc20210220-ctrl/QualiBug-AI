@@ -215,7 +215,18 @@ def get_agent_task(
     with _task_lock(path):
         task = _read_task(path)
         _assert_scope(task, tenant_id=tenant_id, project_id=project_id)
-        return _public_task(task)
+        return _execution_liveness(root, project_id, _public_task(task))
+
+
+def _execution_liveness(root: Path, project_id: str, task: dict[str, Any]) -> dict[str, Any]:
+    from .private_pilot_scan_coordinator import active_scan_owner
+
+    claimed = task.get("execution_claim_status") not in {None, "", "NOT_CLAIMED"}
+    active = claimed and task.get("status") not in _AGENT_TASK_TERMINAL_STATUSES
+    owner = active_scan_owner(root, project_id) if active else {}
+    task["execution_live"] = bool(active and task.get("execution_lease_token") and owner.get("token") == task["execution_lease_token"])
+    task["execution_recovery_required"] = bool(active and not task["execution_live"])
+    return task
 
 
 def list_agent_tasks(
@@ -233,7 +244,7 @@ def list_agent_tasks(
                 continue
             if task.get("task_id") != path.stem:
                 raise AgentTaskError("agent_task_artifact_identity_mismatch")
-            items.append(_public_task(task))
+            items.append(_execution_liveness(root, project_id, _public_task(task)))
     return sorted(items, key=lambda item: (str(item.get("updated_at") or ""), item["task_id"]), reverse=True)
 
 
@@ -301,6 +312,10 @@ def claim_agent_task_execution(
     project_id: str,
     task_id: str,
     correlation_id: str = "",
+    claim_id: str = "",
+    lease_token: str = "",
+    execution_snapshot_ref: str = "",
+    execution_scope: str = "",
 ) -> dict[str, Any]:
     """Persist the one-way execute claim before any external side effect.
 
@@ -317,15 +332,23 @@ def claim_agent_task_execution(
         current_status = str(task.get("status") or "").strip().upper()
         if current_status in _AGENT_TASK_TERMINAL_STATUSES:
             raise AgentTaskConflict("agent_task_terminal")
-        if current_status != "READY":
-            if str(task.get("execution_claim_status") or "") != "CLAIMED":
-                raise AgentTaskConflict("agent_task_not_ready")
+        if task.get("execution_claim_status") not in {None, "", "NOT_CLAIMED"}:
             return _public_task(task)
-        if str(task.get("execution_claim_status") or "") == "CLAIMED":
-            return _public_task(task)
-
+        project_claim = (
+            execution_scope == "project" and claim_id and lease_token and execution_snapshot_ref
+            and task.get("intent") != "analyze_requirements"
+            and (task.get("source_snapshot") or {}).get("status") == "PINNED"
+        )
+        if current_status != "READY" and not project_claim:
+            raise AgentTaskConflict("agent_task_not_ready")
+        if execution_scope and not project_claim:
+            raise AgentTaskConflict("agent_task_execution_contract_invalid")
         now = _utc_now()
         task["execution_claim_status"] = "CLAIMED"
+        task["execution_claim_id"] = claim_id
+        task["execution_lease_token"] = lease_token
+        task["execution_scope"] = execution_scope
+        task["execution_snapshot_ref"] = execution_snapshot_ref
         task["execution_claimed_at"] = now
         task["status"] = "RUNNING"
         task["updated_at"] = now
@@ -452,6 +475,8 @@ def cancel_agent_task(
             if current_status == "CANCELLED":
                 return _public_task(task)
             raise AgentTaskConflict("agent_task_terminal")
+        if task.get("execution_claim_status") not in {None, "", "NOT_CLAIMED"}:
+            raise AgentTaskConflict("agent_task_execution_claimed_use_bound_scan_cancellation")
         cancelled_at = _utc_now()
         events = task.get("events") if isinstance(task.get("events"), list) else []
         events.append(
@@ -466,5 +491,46 @@ def cancel_agent_task(
         task["status"] = "CANCELLED"
         task["cancelled_at"] = cancelled_at
         task["updated_at"] = cancelled_at
+        _write_json_object_atomic(path, task)
+        return _public_task(task)
+
+
+def finish_agent_task_execution(root: Path, *, tenant_id: str, project_id: str, task_id: str, claim_id: str, result: dict[str, Any], correlation_id: str = "") -> dict[str, Any]:
+    """Persist orchestration outcome before HTTP delivery; findings keep Scan authority."""
+    path = _task_path(root, project_id, task_id)
+    with _task_lock(path):
+        task = _read_task(path)
+        _assert_scope(task, tenant_id=tenant_id, project_id=project_id)
+        if not claim_id or task.get("execution_claim_id") != claim_id:
+            raise AgentTaskConflict("agent_task_execution_claim_mismatch")
+        if task.get("status") in _AGENT_TASK_TERMINAL_STATUSES:
+            return _public_task(task)
+        scan_id = str(result.get("scan_id") or "")
+        if scan_id and task.get("scan_id") != scan_id:
+            raise AgentTaskConflict("agent_task_scan_id_conflict")
+        failed = result.get("ok") is not True
+        outcome = {key: copy.deepcopy(result[key]) for key in (
+            "scan_id", "execution_status", "error", "result_available_but_not_committed", "customer_output_status",
+        ) if key in result}
+        outcome["status"] = "FAILED" if failed else "COMPLETED"
+        task["execution_result"] = outcome
+        task["status"] = outcome["status"]
+        task["completed_at"] = _utc_now()
+        task["updated_at"] = task["completed_at"]
+        task["events"].append(_event(task_id, "EXECUTION_RESULT_RECORDED", correlation_id=correlation_id, detail=outcome))
+        _write_json_object_atomic(path, task)
+        return _public_task(task)
+
+
+def record_agent_task_cancel_request(root: Path, *, tenant_id: str, project_id: str, task_id: str) -> dict[str, Any]:
+    path = _task_path(root, project_id, task_id)
+    with _task_lock(path):
+        task = _read_task(path)
+        _assert_scope(task, tenant_id=tenant_id, project_id=project_id)
+        if task.get("execution_cancel_requested") or task.get("status") in _AGENT_TASK_TERMINAL_STATUSES:
+            return _public_task(task)
+        task["execution_cancel_requested"] = True
+        task["updated_at"] = _utc_now()
+        task["events"].append(_event(task_id, "EXECUTION_CANCEL_REQUESTED", detail={"status": "REQUESTED", "scan_id": task.get("scan_id", "")}))
         _write_json_object_atomic(path, task)
         return _public_task(task)

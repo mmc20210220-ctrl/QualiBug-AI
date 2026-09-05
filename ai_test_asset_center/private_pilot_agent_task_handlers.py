@@ -1,6 +1,7 @@
 """HTTP contract for project-scoped Agent Tasks and their event ledger."""
 from __future__ import annotations
 
+import uuid
 from typing import Any
 from urllib.parse import unquote, urlparse
 
@@ -16,6 +17,7 @@ from .agent_task_store import (
     get_agent_task,
     list_agent_task_events,
     list_agent_tasks,
+    claim_agent_task_execution,
 )
 from .product_logging import get_logger
 from .real_project_onboarding import _safe_project_id
@@ -57,6 +59,8 @@ def _parse_agent_task_route(path: str) -> tuple[str, str, str] | None:
         return "events", project, task_id
     if len(parts) == 7 and parts[6] == "ground":
         return "ground", project, task_id
+    if len(parts) == 7 and parts[6] == "execute":
+        return "execute", project, task_id
     if len(parts) == 7 and parts[6] == "cancel":
         return "cancel", project, task_id
     return None
@@ -163,6 +167,64 @@ class AgentTaskHandlersMixin:
         )
         return grounded, grounding
 
+    def _prepare_agent_task_execution(self, project: str, task_id: str, request: dict[str, Any], owner: dict[str, Any]) -> dict[str, Any]:
+        """Bind project-scope execution under the canonical lease; no new executor."""
+        from .agent_task_grounding import _scan_preflight_payload, _snapshot_ref
+        from .private_pilot_product_catalog import _test_intelligence_source_fingerprint
+        from .enterprise_knowledge_center.composition import pin_enterprise_business_knowledge_asset
+        from .enterprise_source_registry import compose_project_source_manifest
+
+        if set(request) - {"execution_scope", "read_only"} or request.get("execution_scope") != "project":
+            raise AgentTaskValidationError("agent_task_explicit_project_scope_required")
+        if "read_only" in request and not isinstance(request["read_only"], bool):
+            raise AgentTaskValidationError("agent_task_read_only_must_be_boolean")
+        tenant_id = self._request_tenant()
+        root = self._root()
+        task = get_agent_task(root, tenant_id=tenant_id, project_id=project, task_id=task_id)
+        if task.get("execution_claim_status") not in {None, "", "NOT_CLAIMED"}:
+            return {"execute": False, "task": task}
+        if task.get("intent") == "analyze_requirements":
+            raise AgentTaskValidationError("analysis_task_does_not_execute_scans")
+        if task.get("status") in {"COMPLETED", "FAILED", "CANCELLED"}:
+            raise AgentTaskConflict("agent_task_terminal")
+        expected = (task.get("source_snapshot") or {}).get("snapshot_ref")
+        fingerprint = _test_intelligence_source_fingerprint(root, tenant_id, project)
+        if not expected or expected != _snapshot_ref(fingerprint):
+            raise AgentTaskConflict("agent_task_snapshot_changed_recheck_context")
+        preflight = _scan_preflight_payload(project, root, request)
+        if preflight.get("ready") is not True:
+            raise AgentTaskConflict("agent_task_preflight_blocked:" + ",".join(preflight.get("blocking_codes") or ["NOT_READY"]))
+        snapshot_ref = pin_enterprise_business_knowledge_asset(project, root)
+        manifest = compose_project_source_manifest(project, root=root)
+        if not manifest.get("source_id") or len(_text(manifest.get("source_hash"))) != 64:
+            raise AgentTaskConflict("agent_task_source_manifest_unavailable")
+        if _test_intelligence_source_fingerprint(root, tenant_id, project) != fingerprint:
+            raise AgentTaskConflict("agent_task_sources_changed_during_pin")
+        checks = preflight.get("input_checks") or {}
+        target = checks.get("target") or {}
+        environment = checks.get("environment") or {}
+        scan_body = {
+            "source_manifest": {key: manifest[key] for key in ("source_id", "source_hash")},
+            "base_url": _text(target.get("target_url")),
+            "approved_base_url": _text(target.get("approved_base_url")),
+            "environment_type": _text(environment.get("environment_type")),
+            "environment_ref": _text(environment.get("environment_ref")),
+            "read_only": request.get("read_only") is True,
+        }
+        claim_id = uuid.uuid4().hex
+        claimed = claim_agent_task_execution(
+            root, tenant_id=tenant_id, project_id=project, task_id=task_id,
+            claim_id=claim_id, lease_token=_text(owner.get("token")),
+            execution_scope="project", execution_snapshot_ref=snapshot_ref,
+            correlation_id=_text(getattr(self, "_qualibug_corr_id", "")),
+        )
+        return {
+            "execute": claimed.get("execution_claim_id") == claim_id,
+            "task": claimed, "scan_body": scan_body,
+            "task_id": task_id, "tenant_id": tenant_id, "claim_id": claim_id,
+            "snapshot_ref": snapshot_ref,
+        }
+
     def do_GET(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
         route = _parse_agent_task_route(parsed.path)
@@ -215,7 +277,7 @@ class AgentTaskHandlersMixin:
     def do_POST(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
         route = _parse_agent_task_route(parsed.path)
-        if route is None or route[0] not in {"collection", "ground", "cancel"}:
+        if route is None or route[0] not in {"collection", "ground", "cancel", "execute"}:
             return super().do_POST()
 
         self._init_request_context()
@@ -230,6 +292,20 @@ class AgentTaskHandlersMixin:
         correlation_id = _text(getattr(self, "_qualibug_corr_id", ""))
         try:
             if route[0] == "cancel":
+                from .scan_cancellation import request_scan_cancel
+                from .agent_task_store import record_agent_task_cancel_request
+                existing = get_agent_task(self._root(), tenant_id=tenant_id, project_id=project, task_id=route[2])
+                if existing.get("execution_claim_status") not in {None, "", "NOT_CLAIMED"}:
+                    if existing.get("status") in {"COMPLETED", "FAILED", "CANCELLED"}:
+                        return self._json({"ok": True, "data": existing})
+                    token = _text(existing.get("execution_lease_token"))
+                    if not token:
+                        raise AgentTaskConflict("agent_task_execution_owner_unknown")
+                    cancellation = request_scan_cancel(self._root(), project, requester=actor, expected_token=token)
+                    if cancellation.get("requested") is not True:
+                        raise AgentTaskConflict(_text(cancellation.get("reason_code")))
+                    task = record_agent_task_cancel_request(self._root(), tenant_id=tenant_id, project_id=project, task_id=route[2])
+                    return self._json({"ok": True, "data": task})
                 task = cancel_agent_task(
                     self._root(),
                     tenant_id=tenant_id,
@@ -242,6 +318,9 @@ class AgentTaskHandlersMixin:
             body = self._agent_task_body()
             if body is None:
                 return None
+
+            if route[0] == "execute":
+                return self._handle_v12_scan(project, self._root(), actor, body, agent_task_id=route[2])
 
             if route[0] == "ground":
                 existing = get_agent_task(

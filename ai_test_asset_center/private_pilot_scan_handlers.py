@@ -554,6 +554,8 @@ class ScanHandlersMixin:
         root: Path,
         actor: dict[str, str],
         body: dict[str, Any],
+        *,
+        agent_task_id: str = "",
     ) -> None:
         if not self._require_role(actor, _SCAN_ROLES, "scan execution"):
             return None
@@ -572,7 +574,12 @@ class ScanHandlersMixin:
                 mode="manual_scan",
                 tenant_id=tenant_id,
                 actor=actor,
-            ):
+            ) as owner:
+                if agent_task_id:
+                    binding = self._prepare_agent_task_execution(project, agent_task_id, body, owner)
+                    if not binding["execute"]:
+                        return self._json({"ok": True, "data": binding["task"], "execution_replayed": False})
+                    return self._execute_v12_scan(project, root, actor, binding["scan_body"], agent_task_context=binding)
                 return self._execute_v12_scan(project, root, actor, body)
         except ScanLeaseBusy as exc:
             return self._json(
@@ -621,7 +628,27 @@ class ScanHandlersMixin:
         root: Path,
         actor: dict[str, str],
         body: dict[str, Any],
+        *,
+        agent_task_context: dict[str, Any] | None = None,
     ) -> None:
+        def respond(payload: dict[str, Any], status: int = 200) -> Any:
+            if agent_task_context:
+                from .agent_task_store import finish_agent_task_execution
+                finish_agent_task_execution(
+                    root, tenant_id=agent_task_context["tenant_id"], project_id=project,
+                    task_id=agent_task_context["task_id"], claim_id=agent_task_context["claim_id"],
+                    result=payload, correlation_id=_text(getattr(self, "_qualibug_corr_id", "")),
+                )
+            return self._json(payload, status)
+
+        def on_scan_started(scan_id: str) -> None:
+            from .agent_task_store import record_agent_task_scan_id, record_agent_task_execution_started
+            assert agent_task_context is not None
+            scope = {"tenant_id": agent_task_context["tenant_id"], "project_id": project, "task_id": agent_task_context["task_id"]}
+            record_agent_task_scan_id(root, **scope, scan_id=scan_id)
+            # The canonical Scan id is the execution identity; no synthetic run is created.
+            record_agent_task_execution_started(root, **scope, execution_run_id=scan_id)
+
         try:
             from .__main__ import scan
             from .enterprise_source_registry import compose_project_source_manifest
@@ -698,6 +725,10 @@ class ScanHandlersMixin:
                 },
                 trace_id=trace_id,
             )
+            if agent_task_context:
+                campaign_context["agent_task_id"] = agent_task_context["task_id"]
+                campaign_context["agent_task_execution_scope"] = "project"
+                campaign_context["enterprise_understanding_snapshot_ref"] = agent_task_context["snapshot_ref"]
             context_token = SCAN_CAMPAIGN_CONTEXT.set(campaign_context or None)
             try:
                 result = scan(
@@ -712,6 +743,7 @@ class ScanHandlersMixin:
                     base_url=_text(prepared.get("base_url") or base_url),
                     multi_layer=bool(_text(prepared.get("base_url") or base_url)),
                     campaign_context=campaign_context,
+                    **({"on_started": on_scan_started} if agent_task_context else {}),
                 )
             finally:
                 SCAN_CAMPAIGN_CONTEXT.reset(context_token)
@@ -732,7 +764,7 @@ class ScanHandlersMixin:
                 or not _text(result.get("scan_id"))
             )
             if scan_failed:
-                return self._json(
+                return respond(
                     {
                         "ok": False,
                         "error": _text(result.get("error"))
@@ -765,7 +797,7 @@ class ScanHandlersMixin:
                         },
                     },
                 )
-                return self._json(
+                return respond(
                     {
                         "ok": False,
                         "error": "SCAN_PERSISTENCE_FAILED",
@@ -786,7 +818,7 @@ class ScanHandlersMixin:
             )
             _response_started = time.perf_counter()
             _watchdog = _response_stall_watchdog(_text(result.get("scan_id")))
-            response = self._json(
+            response = respond(
                 {
                     "ok": True,
                     "scan_id": result.get("scan_id", ""),
@@ -826,7 +858,7 @@ class ScanHandlersMixin:
                 "scan request failed",
                 extra={"context": {"project": project}},
             )
-            return self._json(
+            return respond(
                 {
                     "ok": False,
                     "error": "V12_SCAN_FAILED",

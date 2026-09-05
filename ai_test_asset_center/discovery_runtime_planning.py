@@ -1041,15 +1041,20 @@ def build_discovery_plan(
     # understanding snapshot, but if the active source material has changed
     # since the snapshot was built, drive an event-scoped incremental refresh
     # first. A load with no existing asset falls through to a full build.
-    asset = load_enterprise_business_knowledge_asset_ensuring_current(
-        inputs.project,
-        inputs.root,
-        options=_understanding_options,
-    ) or build_enterprise_business_knowledge_asset(
-        inputs.project,
-        inputs.root,
-        options=_understanding_options,
-    )
+    pinned_understanding = _text(inputs.campaign_context.get("enterprise_understanding_snapshot_ref"))
+    if pinned_understanding:
+        from .enterprise_knowledge_center.composition import load_pinned_enterprise_business_knowledge_asset
+        asset = load_pinned_enterprise_business_knowledge_asset(inputs.project, inputs.root, pinned_understanding)
+    else:
+        asset = load_enterprise_business_knowledge_asset_ensuring_current(
+            inputs.project,
+            inputs.root,
+            options=_understanding_options,
+        ) or build_enterprise_business_knowledge_asset(
+            inputs.project,
+            inputs.root,
+            options=_understanding_options,
+        )
     runtime_source_overlay = build_runtime_source_knowledge_overlay(
         prd_text=inputs.prd_text,
         api_spec_text=_text(
