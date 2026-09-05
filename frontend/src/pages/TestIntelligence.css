@@ -134,7 +134,7 @@
 .ti-data-card > summary::after { content: '展开'; color: var(--primary); font-size: 11px; font-weight: 700; }
 .ti-data-card[open] > summary::after { content: '收起'; }
 .ti-data-card > summary > span { display: grid; gap: 4px; min-width: 0; }
-.ti-data-card > summary strong { overflow: hidden; color: var(--ink); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.ti-data-card > summary strong { color: var(--ink); font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
 .ti-data-card > summary small { overflow: hidden; color: var(--subtle); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .ti-data-card > summary em { flex: 0 0 auto; color: var(--subtle); font-size: 11px; font-style: normal; }
 .ti-data-card-body { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; padding: 0 16px 16px; }
