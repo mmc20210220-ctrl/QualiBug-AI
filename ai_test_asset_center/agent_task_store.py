@@ -183,7 +183,10 @@ def create_agent_task(
             "snapshot_ref": "",
         },
         "selected_test_targets": [],
+        "scan_id": "",
         "execution_run_id": "",
+        "execution_claim_status": "NOT_CLAIMED",
+        "execution_claimed_at": "",
         "runtime_grounding_status": "NOT_REQUESTED",
         "created_by_role": str(actor_role or "").strip(),
         "created_at": created_at,
@@ -268,6 +271,147 @@ def append_agent_task_event(
         task["updated_at"] = _utc_now()
         if next_status in {"COMPLETED", "FAILED"}:
             task["completed_at"] = task["updated_at"]
+        _write_json_object_atomic(path, task)
+        return _public_task(task)
+
+
+def claim_agent_task_execution(
+    root: Path,
+    *,
+    tenant_id: str,
+    project_id: str,
+    task_id: str,
+    correlation_id: str = "",
+) -> dict[str, Any]:
+    """Persist the one-way execute claim before any external side effect.
+
+    A pre-existing claim is returned unchanged. Callers must treat a claimed task
+    without a durable scan_id as an uncertain recovery state and MUST NOT invoke
+    Scan again. This deliberately fails closed instead of risking duplicate API
+    mutations after a crash.
+    """
+
+    path = _task_path(root, project_id, task_id)
+    with _task_lock(path):
+        task = _read_task(path)
+        _assert_scope(task, tenant_id=tenant_id, project_id=project_id)
+        current_status = str(task.get("status") or "").strip().upper()
+        if current_status in _AGENT_TASK_TERMINAL_STATUSES:
+            raise AgentTaskConflict("agent_task_terminal")
+        if current_status != "READY":
+            if str(task.get("execution_claim_status") or "") != "CLAIMED":
+                raise AgentTaskConflict("agent_task_not_ready")
+            return _public_task(task)
+        if str(task.get("execution_claim_status") or "") == "CLAIMED":
+            return _public_task(task)
+
+        now = _utc_now()
+        task["execution_claim_status"] = "CLAIMED"
+        task["execution_claimed_at"] = now
+        task["status"] = "RUNNING"
+        task["updated_at"] = now
+        events = task.get("events") if isinstance(task.get("events"), list) else []
+        events.append(
+            _event(
+                task_id,
+                "EXECUTION_CLAIMED",
+                correlation_id=correlation_id,
+                detail={"retry_policy": "FAIL_CLOSED_UNTIL_SCAN_ID_DURABLE"},
+            )
+        )
+        task["events"] = events
+        _write_json_object_atomic(path, task)
+        return _public_task(task)
+
+
+def record_agent_task_scan_id(
+    root: Path,
+    *,
+    tenant_id: str,
+    project_id: str,
+    task_id: str,
+    scan_id: str,
+    correlation_id: str = "",
+) -> dict[str, Any]:
+    """Make a returned Scan identity durable before any run/event linkage."""
+
+    normalized_scan_id = str(scan_id or "").strip()
+    if not normalized_scan_id:
+        raise AgentTaskValidationError("agent_task_scan_id_required")
+    path = _task_path(root, project_id, task_id)
+    with _task_lock(path):
+        task = _read_task(path)
+        _assert_scope(task, tenant_id=tenant_id, project_id=project_id)
+        if str(task.get("execution_claim_status") or "") not in {"CLAIMED", "SCAN_RECORDED", "STARTED"}:
+            raise AgentTaskConflict("agent_task_execution_not_claimed")
+        existing = str(task.get("scan_id") or "").strip()
+        if existing:
+            if existing != normalized_scan_id:
+                raise AgentTaskConflict("agent_task_scan_id_conflict")
+            return _public_task(task)
+
+        now = _utc_now()
+        task["scan_id"] = normalized_scan_id
+        task["execution_claim_status"] = "SCAN_RECORDED"
+        task["updated_at"] = now
+        events = task.get("events") if isinstance(task.get("events"), list) else []
+        events.append(
+            _event(
+                task_id,
+                "SCAN_ID_RECORDED",
+                correlation_id=correlation_id,
+                detail={"scan_id": normalized_scan_id},
+            )
+        )
+        task["events"] = events
+        _write_json_object_atomic(path, task)
+        return _public_task(task)
+
+
+def record_agent_task_execution_started(
+    root: Path,
+    *,
+    tenant_id: str,
+    project_id: str,
+    task_id: str,
+    execution_run_id: str,
+    correlation_id: str = "",
+) -> dict[str, Any]:
+    """Link ExecutionRun only after scan_id is durable, then emit STARTED once."""
+
+    normalized_run_id = str(execution_run_id or "").strip()
+    if not normalized_run_id:
+        raise AgentTaskValidationError("agent_task_execution_run_id_required")
+    path = _task_path(root, project_id, task_id)
+    with _task_lock(path):
+        task = _read_task(path)
+        _assert_scope(task, tenant_id=tenant_id, project_id=project_id)
+        if not str(task.get("scan_id") or "").strip():
+            raise AgentTaskConflict("agent_task_scan_id_not_durable")
+        existing = str(task.get("execution_run_id") or "").strip()
+        if existing:
+            if existing != normalized_run_id:
+                raise AgentTaskConflict("agent_task_execution_run_id_conflict")
+            return _public_task(task)
+
+        now = _utc_now()
+        task["execution_run_id"] = normalized_run_id
+        task["execution_claim_status"] = "STARTED"
+        task["status"] = "RUNNING"
+        task["updated_at"] = now
+        events = task.get("events") if isinstance(task.get("events"), list) else []
+        events.append(
+            _event(
+                task_id,
+                "EXECUTION_STARTED",
+                correlation_id=correlation_id,
+                detail={
+                    "scan_id": str(task.get("scan_id") or "").strip(),
+                    "execution_run_id": normalized_run_id,
+                },
+            )
+        )
+        task["events"] = events
         _write_json_object_atomic(path, task)
         return _public_task(task)
 
