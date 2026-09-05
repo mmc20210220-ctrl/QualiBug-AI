@@ -97,37 +97,33 @@ function TestDesignPanel({ design }: { design: TestDesign }) {
   const dataRequirements = design.setup.testDataRequirements.map(displayValue).filter(Boolean);
   const oracleAssertions = design.oracle.assertions.map(displayValue).filter(Boolean);
   return (
-    <details className="ti-design">
-      <summary>
-        <span><b>Test Design</b> 已形成结构化设计</span>
-        <code>{design.designId}</code>
-      </summary>
+    <section className="ti-design" aria-label="结构化测试设计">
+      <header className="ti-design-heading"><strong>如何验证</strong></header>
       <div className="ti-design-truth">
         <strong>只定义“如何验证”的语义结构，不代表已经找到 API / UI 执行入口。</strong>
-        <span>{design.designStatus} · {design.action.bindingStatus} · {design.executionStatus}</span>
       </div>
       <div className="ti-design-grid">
         <section>
-          <span>准备</span>
+          <span>1 · 前置条件</span>
           {setup.length ? <ul>{setup.map((item, index) => <li key={`${item}:${index}`}>{item}</li>)}</ul> : <p>无额外来源前置条件</p>}
           <small>测试数据：{design.setup.testDataMaterializationStatus} · 环境：{design.setup.environmentStatus}</small>
         </section>
         <section>
-          <span>动作</span>
+          <span>2 · 验证动作</span>
           <strong>{design.action.operationRef || '语义动作待运行时绑定'}</strong>
           <p>执行表面：{design.action.executionSurface} · 绑定：{design.action.bindingStatus}</p>
         </section>
         <section>
-          <span>观察点</span>
-          <ul>{design.observations.map((item, index) => (
+          <span>3 · 观察内容</span>
+          {design.observations.length ? <ul>{design.observations.map((item, index) => (
             <li key={`${item.observationKind}:${item.target}:${index}`}>
               <b>{item.target}</b>：{displayValue(item.expected)} <small>{item.bindingStatus}</small>
             </li>
-          ))}</ul>
+          ))}</ul> : <p>尚未提供观察内容</p>}
         </section>
         <section>
-          <span>Oracle</span>
-          <ul>{oracleAssertions.map((item, index) => <li key={`${item}:${index}`}>{item}</li>)}</ul>
+          <span>4 · 预期结果与判定依据</span>
+          {oracleAssertions.length ? <ul>{oracleAssertions.map((item, index) => <li key={`${item}:${index}`}>{item}</li>)}</ul> : <p>尚未提供判定依据</p>}
           <small>{design.oracle.semanticStatus} · {design.oracle.bindingStatus}</small>
         </section>
       </div>
@@ -138,13 +134,16 @@ function TestDesignPanel({ design }: { design: TestDesign }) {
           <p>这里只保留来源约束，不生成账号、ID、金额或其他具体测试数据值。</p>
         </div>
       )}
+      <details className="ti-design-diagnostics"><summary>执行绑定与技术状态</summary>
+      <p>{design.designId} · {design.designStatus} · {design.action.bindingStatus} · {design.executionStatus}</p>
       <div className="ti-design-status">
         <span><b>Observer</b>{design.observerBindingStatus}</span>
         <span><b>Oracle Binding</b>{design.oracleBindingStatus}</span>
         <span><b>Runtime Handoff</b>{design.runtimeHandoffStatus}</span>
         <span><b>Safety Review</b>{design.safetyReviewStatus}</span>
       </div>
-    </details>
+      </details>
+    </section>
   );
 }
 
@@ -177,16 +176,16 @@ function ObligationCard({ obligation, design, selectable = false, selected = fal
               </label>
             )}
             <span className={`ti-tag kind-${obligation.obligationKind}`}>{meta.label}</span>
-            <span className="ti-tag neutral">仅义务</span>
+            <span className="ti-tag neutral">{design ? '已有测试设计' : '待形成测试设计'}</span>
             <span className="ti-tag neutral">未执行</span>
           </div>
           <h3>{obligation.title}</h3>
           <p>{obligation.objective}</p>
         </div>
-        <span className="ti-obligation-id" title={obligation.obligationId}>{obligation.obligationId}</span>
       </div>
 
       <details className="ti-target-detail"><summary>查看测试详情、数据要求与证据</summary>
+      <span className="ti-obligation-id">测试目标标识：{obligation.obligationId}</span>
       <div className="ti-context-grid">
         <div><span>业务对象</span><strong>{obligation.objectRefs.join('、') || '后端暂未提供'}</strong></div>
         <div><span>业务操作</span><strong>{obligation.operationRef || '后端暂未提供'}</strong></div>

@@ -1,7 +1,8 @@
 .ti-design { margin-top: 14px; border: 1px solid #b2ccff; border-radius: 14px; background: #f5f8ff; overflow: hidden; }
-.ti-design > summary { display: flex; justify-content: space-between; gap: 12px; align-items: center; padding: 13px 15px; cursor: pointer; color: #1849a9; }
-.ti-design > summary span { display: flex; gap: 8px; align-items: center; font-size: 13px; }
-.ti-design > summary code { max-width: 300px; overflow: hidden; color: #667085; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.ti-design-heading { padding: 13px 15px; color: #1849a9; font-size: 14px; }
+.ti-design-diagnostics { margin: 0 14px 14px; }
+.ti-design-diagnostics > summary { cursor: pointer; color: #475467; font-size: 13px; padding: 10px 0; }
+.ti-design-diagnostics > p { font-size: 11px; color: #667085; overflow-wrap: anywhere; }
 .ti-design-truth { display: flex; justify-content: space-between; gap: 14px; align-items: center; padding: 12px 15px; border-top: 1px solid #d1e0ff; background: #eef4ff; }
 .ti-design-truth strong { color: #344054; font-size: 12px; }
 .ti-design-truth span { color: #175cd3; font-family: ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace; font-size: 10px; }
