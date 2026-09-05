@@ -5,90 +5,70 @@
     "behavior_ir": {
       "status": "RESOLVED",
       "target": "ai_test_asset_center.discovery_runtime_semantic_binding:build_behavior_ir_with_semantic_operation_bindings",
-      "production_callers": [
-        "ai_test_asset_center.discovery_runtime_planning:build_discovery_plan"
-      ],
+      "production_callers": ["ai_test_asset_center.discovery_runtime_planning:build_discovery_plan"],
       "usage": "CALL",
       "evidence": "The production planning authority builds the canonical Behavior IR through the semantic-binding wrapper before obligation compilation."
     },
     "obligation_source": {
       "status": "RESOLVED",
       "target": "ai_test_asset_center.obligation_compiler:compile_obligations_from_behavior_ir",
-      "production_callers": [
-        "ai_test_asset_center.discovery_runtime_planning:build_discovery_plan"
-      ],
+      "production_callers": ["ai_test_asset_center.discovery_runtime_planning:build_discovery_plan"],
       "usage": "CALL",
       "evidence": "The production planning authority compiles formal obligations directly from the resolved Behavior IR."
     },
     "planner": {
       "status": "RESOLVED",
       "target": "ai_test_asset_center.discovery_runtime_semantic_binding:build_discovery_plan",
-      "production_callers": [
-        "ai_test_asset_center.discovery_runtime:build_discovery_plan"
-      ],
+      "production_callers": ["ai_test_asset_center.discovery_runtime:build_discovery_plan"],
       "usage": "CALL",
       "evidence": "The public discovery runtime delegates planning to the semantic-bound planning wrapper used by the V12 production mainline."
     },
     "experiment_compiler": {
       "status": "RESOLVED",
       "target": "ai_test_asset_center.experiment_compiler:compile_experiments",
-      "production_callers": [
-        "ai_test_asset_center.discovery_runtime_planning:build_discovery_plan"
-      ],
+      "production_callers": ["ai_test_asset_center.discovery_runtime_planning:build_discovery_plan"],
       "usage": "CALL",
       "evidence": "The production planning authority compiles selected obligations through the canonical experiment compiler, including fail-closed fallback variants."
     },
     "executor": {
       "status": "RESOLVED",
       "target": "ai_test_asset_center.experiment_executor:execute_selected_experiments",
-      "production_callers": [
-        "ai_test_asset_center.discovery_runtime_execution:run_experiment_candidate"
-      ],
+      "production_callers": ["ai_test_asset_center.discovery_runtime_execution:run_experiment_candidate"],
       "usage": "CALL",
       "evidence": "The experiment-candidate runtime sends scheduled formal experiments through the governed public executor."
     },
     "evidence_pipeline": {
       "status": "RESOLVED",
       "target": "ai_test_asset_center.scan_execution_outcome:_persist_execution_evidence",
-      "production_callers": [
-        "ai_test_asset_center.__main__:_scan_impl"
-      ],
+      "production_callers": ["ai_test_asset_center.__main__:_scan_impl"],
       "usage": "CALL",
       "evidence": "The canonical enterprise scan persists normalized execution evidence and fails safe when evidence persistence fails."
     },
     "oracle": {
       "status": "RESOLVED",
       "target": "ai_test_asset_center.contract_oracles:evaluate_contract_oracle",
-      "production_callers": [
-        "ai_test_asset_center.experiment_outcome_finalizer:finalize_experiment_execution"
-      ],
+      "production_callers": ["ai_test_asset_center.experiment_outcome_finalizer:finalize_experiment_execution"],
       "usage": "CALLABLE_BINDING",
       "evidence": "The canonical outcome finalizer composes the Contract Oracle evaluator into exact-scope finalization before findings are emitted."
     },
     "finding_pipeline": {
       "status": "RESOLVED",
       "target": "ai_test_asset_center.experiment_outcome_finalizer:_fanout_finding_outcomes",
-      "production_callers": [
-        "ai_test_asset_center.experiment_outcome_finalizer:finalize_experiment_execution"
-      ],
+      "production_callers": ["ai_test_asset_center.experiment_outcome_finalizer:finalize_experiment_execution"],
       "usage": "CALL",
       "evidence": "The canonical outcome finalizer materializes deterministic finding occurrences from violated outcome identities and Oracle receipts."
     },
     "delivery_gate": {
       "status": "RESOLVED",
       "target": "ai_test_asset_center.customer_delivery_gate_v2:build_customer_delivery_gate_receipt_v2",
-      "production_callers": [
-        "ai_test_asset_center.experiment_batch_executor_base:_build_occurrence"
-      ],
+      "production_callers": ["ai_test_asset_center.experiment_batch_executor_base:_build_occurrence"],
       "usage": "CALL",
       "evidence": "Each delivery occurrence is evaluated by the shipped v2 customer-delivery gate, not the compatibility shim."
     },
     "release_decision": {
       "status": "RESOLVED",
       "target": "ai_test_asset_center.release_gate:evaluate_release_gate",
-      "production_callers": [
-        "ai_test_asset_center.scan_execution_outcome:_evaluate_release_gate"
-      ],
+      "production_callers": ["ai_test_asset_center.scan_execution_outcome:_evaluate_release_gate"],
       "usage": "CALL",
       "evidence": "The scan release boundary evaluates campaign, execution, evidence, test-data, findings, coverage gaps and release policy through the release gate."
     }
