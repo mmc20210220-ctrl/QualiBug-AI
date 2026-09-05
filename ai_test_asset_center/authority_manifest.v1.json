@@ -1,0 +1,58 @@
+{
+  "schema_version": "qualibug.authority-manifest.v1",
+  "production_entrypoint": "ai_test_asset_center.private_pilot_entrypoint:run_server",
+  "slots": {
+    "syntactic_normalize": {
+      "status": "UNRESOLVED",
+      "target": null,
+      "production_callers": []
+    },
+    "semantic_normalize": {
+      "status": "UNRESOLVED",
+      "target": null,
+      "production_callers": []
+    },
+    "state_reduce": {
+      "status": "UNRESOLVED",
+      "target": null,
+      "production_callers": []
+    },
+    "world_model_reduce": {
+      "status": "UNRESOLVED",
+      "target": null,
+      "production_callers": []
+    },
+    "events_projection": {
+      "status": "UNRESOLVED",
+      "target": null,
+      "production_callers": []
+    },
+    "reward_projection": {
+      "status": "UNRESOLVED",
+      "target": null,
+      "production_callers": []
+    },
+    "behavior_ir": {
+      "status": "RESOLVED",
+      "target": "ai_test_asset_center.discovery_runtime_semantic_binding:build_behavior_ir_with_semantic_operation_bindings",
+      "production_callers": [
+        "ai_test_asset_center.discovery_runtime_planning:build_discovery_plan"
+      ]
+    },
+    "path_predicate": {
+      "status": "UNRESOLVED",
+      "target": null,
+      "production_callers": []
+    },
+    "evaluator": {
+      "status": "UNRESOLVED",
+      "target": null,
+      "production_callers": []
+    },
+    "candidate_orchestration": {
+      "status": "UNRESOLVED",
+      "target": null,
+      "production_callers": []
+    }
+  }
+}
