@@ -318,7 +318,9 @@ export function TestIntelligence() {
   const canSelectTaskScope = Boolean(
     task
       && task.intent === 'verify_changes'
+      && task.sourceSnapshotStatus === 'PINNED'
       && task.selectedTestTargets.length === 0
+      && task.groundingBlockers.some((blocker) => blocker.code === 'CHANGE_SCOPE_NOT_GROUNDED')
       && task.status !== 'COMPLETED'
       && task.status !== 'FAILED'
       && task.status !== 'CANCELLED',

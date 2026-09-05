@@ -22,6 +22,7 @@ const task = {
   goal: 'Check changed behavior',
   intent: 'verify_changes',
   status: 'BLOCKED',
+  sourceSnapshotStatus: 'PINNED',
   selectedTestTargets: [],
   groundingBlockers: [{ code: 'CHANGE_SCOPE_NOT_GROUNDED', message: 'scope required', source: 'agent_task' }],
 } as unknown as AgentTask;
