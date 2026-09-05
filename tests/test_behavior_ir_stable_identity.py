@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 
-from ai_test_asset_center.behavior_ir_mainline_base import (
+from ai_test_asset_center.behavior_ir import (
     attach_stable_behavior_identity,
     build_behavior_ir_from_knowledge_asset,
     build_minimum_ir_delta,
