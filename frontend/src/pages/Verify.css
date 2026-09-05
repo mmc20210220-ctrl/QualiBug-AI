@@ -29,8 +29,8 @@
 
 .verify-live-shell {
   display: grid;
-  grid-template-columns: minmax(200px, 250px) minmax(0, 1fr);
-  min-height: calc(100vh - 150px);
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
   overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 22px;
@@ -558,3 +558,24 @@
   .verify-live-main { grid-row: 1; }
   .verify-agent-rail { border-top: 1px solid var(--line); }
 }
+
+.verify-agent-rail { grid-row: 2; display: block; border-right: 0; border-top: 1px solid var(--line); }
+.verify-agent-rail > summary { cursor: pointer; color: var(--subtle); font-size: 13px; }
+.verify-agent-rail[open] > :not(summary) { margin-top: 14px; }
+.verify-live-main { grid-row: 1; }
+.verify-section-nav { display: flex; flex-wrap: wrap; gap: 6px; padding: 12px 20px; border-top: 1px solid var(--line); }
+.verify-section-nav button { font: inherit; padding: 9px 14px; border: 1px solid transparent; border-radius: 9px; color: var(--subtle); background: transparent; cursor: pointer; }
+.verify-section-nav button[aria-current] { color: var(--primary); background: color-mix(in srgb, var(--primary) 8%, var(--surface)); border-color: var(--primary); }
+.verify-section-nav button:focus-visible, .verify-artifact-grid > :focus-visible { outline: 2px solid var(--primary); outline-offset: 3px; }
+.verify-deliverables { padding: 20px; border-top: 1px solid var(--line); }
+.verify-deliverables h2 { margin: 0 0 8px; font-size: 20px; }
+.verify-deliverables p { color: var(--subtle); font-size: 13px; line-height: 1.7; }
+.verify-artifact-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 18px; }
+.verify-artifact-grid > * { display: flex; flex-direction: column; align-items: flex-start; padding: 18px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); color: var(--ink); text-align: left; text-decoration: none; font: inherit; cursor: pointer; }
+.verify-artifact-grid > *:hover { border-color: var(--primary); }
+.verify-artifact-grid strong { font-size: 16px; }
+.verify-artifact-grid span { margin-top: auto; color: var(--primary); font-size: 13px; }
+.verify-event-row { padding: 16px 20px; border-bottom: 1px solid var(--line); }
+.verify-event-row details { margin: 8px 0; }
+.verify-event-row summary { cursor: pointer; color: var(--subtle); font-size: 13px; }
+@media (max-width: 600px) { .verify-artifact-grid { grid-template-columns: minmax(0, 1fr); } }

@@ -19,6 +19,14 @@ import type { Finding } from '../types';
 import './Verify.css';
 
 type VerifyView = 'workspace' | 'run-control';
+type WorkspaceSection = 'overview' | 'deliverables' | 'execution' | 'activity';
+const WORKSPACE_SECTIONS: { id: WorkspaceSection; label: string }[] = [
+  { id: 'overview', label: '任务概览' },
+  { id: 'deliverables', label: '交付物' },
+  { id: 'execution', label: '执行与条件' },
+  { id: 'activity', label: '工作记录' },
+];
+
 type WorkState = 'done' | 'active' | 'pending' | 'attention';
 
 type AgentMilestone = {
@@ -134,6 +142,18 @@ function VerifyWorkspace() {
   const taskId = params.get('task')?.trim() || '';
   const goal = params.get('goal')?.trim() || '';
   const activeView: VerifyView = params.get('view') === 'run-control' ? 'run-control' : 'workspace';
+  const activeSection = WORKSPACE_SECTIONS.find((item) => item.id === params.get('section'))?.id || 'overview';
+  const selectSection = (section: WorkspaceSection) => {
+    const next = new URLSearchParams(params);
+    next.set('section', section);
+    setParams(next);
+  };
+  const artifactSearch = (view: string) => {
+    const next = new URLSearchParams();
+    next.set('view', view);
+    if (taskId) next.set('task', taskId);
+    return next.toString();
+  };
   const { data, loading, error, refetch } = usePipelineData(project);
   const [intelligence, setIntelligence] = useState<TestIntelligenceAnalysis | null>(null);
   const [intelligenceLoading, setIntelligenceLoading] = useState(Boolean(project && !taskId));
@@ -443,7 +463,7 @@ function VerifyWorkspace() {
       <Link className="verify-back-link" to={buildProjectPath('/dashboard', project)}>← 所有任务</Link>
       {error && <div className="agent-state-error" role="alert"><strong>项目结果暂不可用</strong><details><summary>查看错误详情</summary><p>{error}</p></details><button className="btn btn-secondary btn-sm" onClick={refetch}>重试项目结果</button></div>}
       <section className="verify-live-shell">
-        <aside className="verify-agent-rail" aria-label="Agent 工作状态">
+        <details className="verify-agent-rail"><summary>任务管理与技术详情</summary>
           <div className="verify-context-card">
             <span>Agent Task</span>
             <strong>{taskGoal}</strong>
@@ -461,7 +481,7 @@ function VerifyWorkspace() {
             <div>
               <strong>QualiBug</strong>
               <p>
-                我只消费已经持久化的企业理解快照，并复用真实 Scan Preflight。Snapshot 过期、环境未就绪或 Test Target 尚未 Runtime Binding 时会明确阻断，不会偷偷重跑理解，也不会伪造执行。
+                我只消费已经持久化的企业理解快照，并复用真实 Scan Preflight。资料状态与执行条件分别展示；知识缺口不自动禁止受控实验，实际执行仍由项目安全检查决定。
               </p>
             </div>
           </details>
@@ -490,7 +510,7 @@ function VerifyWorkspace() {
             <button type="button" className="btn btn-secondary" onClick={() => selectView('run-control')}>项目运行控制</button>
           </div>
           {agentTaskError && <div className="settings-inline-feedback" role="alert">{agentTaskError}</div>}
-        </aside>
+        </details>
 
         <main className="verify-live-main">
           <header className="verify-goal-bar">
@@ -504,17 +524,21 @@ function VerifyWorkspace() {
             </div>
           </header>
 
-          <section className="verify-next-step" aria-label="任务下一步">
+          <nav className="verify-section-nav" aria-label="任务工作区">
+            {WORKSPACE_SECTIONS.map((section) => <button key={section.id} type="button" aria-current={activeSection === section.id ? 'page' : undefined} onClick={() => selectSection(section.id)}>{section.label}</button>)}
+          </nav>
+          {(activeSection === 'overview' || activeSection === 'execution') && <section className="verify-next-step" aria-label="任务下一步">
             <span className="panel-kicker">下一步</span>
             <h2>{executionUncertain ? '执行结果待确认' : agentTaskLoading && !agentTask ? '正在读取任务' : !agentTask ? '任务暂不可用' : taskIsTerminal ? '回看这次工作的记录' : agentTask.executionRunId ? '跟踪真实执行进展' : agentTask.groundingBlockers.length ? '补充实验需要的条件' : agentTask.intent === 'analyze_requirements' ? '检查已固定的企业知识' : '检查范围，准备实验'}</h2>
             <p>{executionUncertain ? '原执行进程已不再持有该任务的运行锁，无法确认它是否发送过请求。系统不会自动重跑；请根据 Scan 身份检查已有证据。' : agentTask?.groundingBlockers[0]?.message || (agentTask?.executionRunId ? `已绑定运行：${agentTask.executionRunId}` : agentTask ? '查看已有知识、验证目标和事件，再决定下一步。项目运行控制仍负责实际测试；点击按项目范围执行后，系统会重新检查环境并启动原有 Scan 主链。' : agentTaskError || '等待后端任务记录。')}</p>
             <div className="verify-next-actions">
+              {canExecute && activeSection === 'overview' && <button type="button" className="btn btn-primary" onClick={() => selectSection('execution')}>查看执行条件与范围</button>}
               {agentTask && <Link className="btn btn-secondary" to={buildProjectPath('/analyze', project, taskKnowledgeSearch)}>查看任务知识</Link>}
               {requiresExplicitScope && <Link className="btn btn-primary" to={buildProjectPath('/analyze', project, taskKnowledgeSearch)}>选择关注的验证目标</Link>}
               {agentTask && !taskIsTerminal && !taskClaimed && <button className="btn btn-secondary" onClick={() => void regroundCurrentTask()} disabled={groundingTask}>{groundingTask ? '正在检查…' : '重新检查条件'}</button>}
               {agentTaskError && <button className="btn btn-secondary" onClick={() => void loadAgentTask()}>重新读取任务</button>}
             </div>
-            {canExecute && <div className="verify-task-execute">
+            {canExecute && activeSection === 'execution' && <div className="verify-task-execute">
               <p>执行范围：当前项目。任务中的验证目标用于理解上下文，不代表只运行这些目标，也不代表已证明变更覆盖。每次实验仍由既有执行与安全规则决定。</p>
               <label><input type="checkbox" checked={readOnly} onChange={(event) => setReadOnly(event.target.checked)} disabled={executingTask} /> 仅执行只读实验</label>
               <button type="button" className="btn btn-primary" disabled={executingTask || groundingTask} onClick={() => void executeCurrentTask()}>{executingTask ? '正在提交执行请求…' : '按项目范围执行'}</button>
@@ -522,8 +546,8 @@ function VerifyWorkspace() {
             {executionError && <div role="alert" className="settings-inline-feedback">{executionError}</div>}
             {agentTask?.executionSnapshotRef && <p>本次执行的知识版本：{agentTask.executionSnapshotRef}</p>}
             {Boolean(agentTask?.executionResult.error) && <p role="alert">执行诊断：{asText(agentTask?.executionResult.error)}</p>}
-          </section>
-          <details className="verify-context-details"><summary>快照、绑定与项目上下文</summary>
+          </section>}
+          {activeSection === 'execution' && <details className="verify-context-details"><summary>快照、绑定与项目上下文</summary>
           <div className="verify-context-chips" aria-label="当前真实上下文">
             <span>Snapshot · {agentTask ? statusLabel(agentTask.sourceSnapshotStatus) : '未绑定'}</span>
             <span>Selected Targets · {agentTask ? agentTask.groundingSummary.selectedTargetCount : '未绑定'}</span>
@@ -533,10 +557,19 @@ function VerifyWorkspace() {
             <span>Task Events · {agentTask ? agentEvents.length : '未绑定'}</span>
             <span>Project Findings · {error || !data ? '未上报' : findings.length}</span>
             <span>Background clues · {error || !data ? '未上报' : clues.length}</span>
-          </div></details>
+          </div></details>}
 
+          {(activeSection === 'overview' || activeSection === 'deliverables') && <section className="verify-deliverables" aria-label="任务交付物">
+            <div><h2>{activeSection === 'overview' ? '查看工作成果' : '交付物工作区'}</h2><p>进入对应工作区查看内容与来源。企业知识为项目共享资产；项目历史结果不代表本任务已执行。</p></div>
+            <div className="verify-artifact-grid">
+              <Link to={buildProjectPath('/analyze', project, artifactSearch('requirements'))}><strong>需求审查</strong><p>查看已有资料中的冲突、缺失与待澄清问题。</p><span>打开审查结果 →</span></Link>
+              <Link to={buildProjectPath('/analyze', project, artifactSearch('test-targets'))}><strong>测试设计与数据要求</strong><p>查看来源支持的场景、预期结果和数据约束；结构化设计不代表可执行计划或已准备的数据。</p><span>打开测试设计 →</span></Link>
+              <button type="button" onClick={() => selectSection('activity')}><strong>本任务执行记录</strong><p>{agentTask?.executionRunId ? '已关联运行，查看后端记录与诊断。' : '尚未关联真实运行，暂无本任务执行结果。'}</p><span>查看工作记录 →</span></button>
+              <Link to={buildProjectPath('/findings', project)}><strong>项目缺陷与证据</strong><p>查看项目已确认的问题和复现证据，具体归属以运行记录为准。</p><span>查看项目缺陷 →</span></Link>
+            </div>
+          </section>}
           <section className="verify-work-grid">
-            <article className="verify-plan-panel">
+            {activeSection === 'deliverables' && <article className="verify-plan-panel">
               <div className="verify-panel-title">
                 <div><span>Plan</span><strong>{agentTask ? '该 Task 固定的 Test Targets' : '当前可用 Test Targets'}</strong></div>
                 <Link to={buildProjectPath('/analyze', project, taskKnowledgeSearch)}>查看 Knowledge</Link>
@@ -577,9 +610,9 @@ function VerifyWorkspace() {
               ) : (
                 <div className="verify-empty"><strong>还没有可展示的 Test Targets</strong><p>先让 Knowledge 从企业资料形成有来源依据的验证目标。</p></div>
               )}
-            </article>
+            </article>}
 
-            <article className="verify-execution-panel">
+            {activeSection === 'execution' && <article className="verify-execution-panel">
               <div className="verify-panel-title">
                 <div><span>Runtime Grounding</span><strong>执行前真实条件</strong></div>
                 <button type="button" onClick={() => selectView('run-control')}>打开 Run Control</button>
@@ -624,9 +657,9 @@ function VerifyWorkspace() {
                   )}
                 </div>
               </div>
-            </article>
+            </article>}
 
-            <aside className="verify-activity-panel">
+            {activeSection === 'activity' && <aside className="verify-activity-panel">
               <div className="verify-panel-title"><div><span>Activity</span><strong>工作记录 · Agent Event Ledger</strong></div></div>
               {taskId ? (
                 agentTaskLoading && !agentTask ? (
@@ -637,9 +670,9 @@ function VerifyWorkspace() {
                   <div className="verify-event-list">
                     {agentEvents.slice().reverse().map((event) => (
                       <div className="verify-event-row" key={event.eventId}>
-                        <span>{event.eventType}</span>
+
                         <strong>{eventLabel(event.eventType)}</strong>
-                        <p>{eventDetail(event)}</p>
+                        <details><summary>查看事件详情</summary><p>{eventDetail(event)}</p></details>
                         <small>{event.occurredAt || '时间未上报'}</small>
                       </div>
                     ))}
@@ -661,14 +694,14 @@ function VerifyWorkspace() {
               ) : (
                 <div className="verify-empty"><strong>当前没有 Agent Task Event</strong><p>从 New Task 创建任务后，这里才会显示后端真实事件；不会模拟 Agent “忙碌感”。</p></div>
               )}
-            </aside>
+            </aside>}
           </section>
 
           <footer className="verify-evidence-dock">
-            <span>Evidence</span>
+            <span>项目历史</span>
             <b>{error || !data ? '项目证据暂未读取' : `${evidenceBackedFindings} 个项目级证据化 Finding`}</b>
-            <Link to={buildProjectPath('/findings', project)}>Inspect findings</Link>
-            <Link to={buildProjectPath('/release', project)}>Open decision</Link>
+            <Link to={buildProjectPath('/findings', project)}>查看缺陷</Link>
+            <Link to={buildProjectPath('/release', project)}>查看发布判断</Link>
           </footer>
         </main>
       </section>

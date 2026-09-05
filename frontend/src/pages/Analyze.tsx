@@ -18,6 +18,7 @@ export function Analyze() {
   const { navigateToProjectPath } = useProjectNavigation();
   const toast = useToast();
   const project = params.get('project')?.trim() || '';
+  const taskId = params.get('task')?.trim() || '';
   const goal = params.get('goal')?.trim() || '';
   const activeView: AnalyzeView = params.get('view') === 'test-targets' ? 'test-targets' : 'requirements';
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
@@ -64,13 +65,13 @@ export function Analyze() {
 
   return (
     <div className="analyze-workspace">
+      {taskId && <button type="button" className="btn btn-secondary" onClick={() => navigateToProjectPath('/verify', project, `task=${encodeURIComponent(taskId)}&section=deliverables`)}>← 返回任务交付物</button>}
       <header className="analyze-header">
         <div>
           <span className="panel-kicker">Knowledge · Understanding</span>
-          <h1>QualiBug 正在建立“软件应该怎样工作”的上下文</h1>
+          <h1>需求审查与测试设计</h1>
           <p>
-            这里不是需要用户维护的需求管理模块，而是 Agent 的理解表面：企业资料被持久化为可追溯知识，
-            需求冲突、业务语义和 Test Targets 都从真实来源派生。连接运行环境后，Agent 才进入 Live Workspace 做真实验证。
+            查看已有资料形成的审查结果与测试设计，按需展开来源证据。这里展示项目共享知识，实际测试结果请在任务中查看。
           </p>
         </div>
         <button type="button" className="btn btn-secondary" onClick={() => navigateToProjectPath('/materials', project)}>管理全部资料</button>
@@ -84,7 +85,7 @@ export function Analyze() {
         </section>
       )}
 
-      <section className="analyze-ingest" aria-label="上传 PRD 开始分析">
+      <details className="analyze-upload-disclosure"><summary>补充需求资料</summary><section className="analyze-ingest" aria-label="上传 PRD 开始分析">
         <div
           className={`analyze-dropzone${!project ? ' disabled' : ''}${uploading ? ' busy' : ''}`}
           onDragOver={(event) => event.preventDefault()}
@@ -106,15 +107,15 @@ export function Analyze() {
           <strong>只有 PRD，也可以先交付需求风险和验证目标</strong>
           <p>没有 Runtime Grounding 时不会声称已经执行测试；Knowledge 与真实 Verify 是连续主链，但不是同一种真值。</p>
         </div>
-      </section>
+      </section></details>
 
       <nav className="analyze-tabs" aria-label="Knowledge 工作区">
         <button type="button" className={activeView === 'requirements' ? 'active' : ''} onClick={() => selectView('requirements')}>
-          <strong>Understanding</strong>
+          <strong>需求审查</strong>
           <span>冲突、缺失、歧义与需求就绪状态</span>
         </button>
         <button type="button" className={activeView === 'test-targets' ? 'active' : ''} onClick={() => selectView('test-targets')}>
-          <strong>Test Targets</strong>
+          <strong>测试设计与数据要求</strong>
           <span>Agent 需要验证什么，以及当前验证设计</span>
         </button>
       </nav>

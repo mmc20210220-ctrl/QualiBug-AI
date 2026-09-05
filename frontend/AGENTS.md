@@ -20,3 +20,10 @@ This frontend is a **Vite + React SPA** — not Next.js. Stack: Vite 8, React 19
 - `/advanced-dashboard`, `/advanced-findings`, `/release/details`, `/campaigns`, `/coverage`, `/jobs`, `/evidence`, `/requirements`, and `/test-intelligence` are advanced / compatibility surfaces. Do not re-promote these internal entities into first-level customer navigation unless the Agent-first product model is intentionally changed and this file is updated in the same change.
 - Verify with `npm run lint`, `npm run typecheck`, and `npm run build` (includes `brand:check`) after changes.
 - Honesty semantics are non-negotiable: never invent metrics or Agent activity on the frontend; missing backend data renders as 「后端暂未提供 / 未上报 / 待评估 / NOT_MEASURED」states, never as healthy-looking defaults.
+
+## Task results and progressive disclosure
+
+- Task workspaces default to an overview with next actions and artifact links. The URL `section` selects overview, deliverables, execution or activity; project/task context must survive switching and returning from Knowledge.
+- Detailed task events, execution diagnostics and pinned targets appear only in their selected workspace. Technical task management and source evidence use explicit disclosure controls. Narrow screens use one content column.
+- Knowledge offers requirement review and test design/data requirements through the existing Intelligence APIs. Shared project knowledge and historical project findings must never be labeled as task-specific completed deliverables. Structured data requirements are not materialized test data; target snapshots are not an executable test plan.
+- Uploading additional sources is an explicit expandable action, not a required step when viewing existing results. Existing knowledge is reused; navigating result views must not create tasks or execute scans.

@@ -46,9 +46,12 @@ it('shows list failure without inventing an empty success state', async () => {
 it('loads task ledger despite project delivery failure and preserves unknown counts', async () => {
   render(<MemoryRouter initialEntries={['/verify?project=workspace&task=task-a']}><Verify /></MemoryRouter>);
   await waitFor(() => expect(getAgentTaskBundle).toHaveBeenCalledWith('workspace', 'task-a'));
-  await screen.findByText('Agent Task 已创建');
+  expect(screen.queryByText('Agent Task 已创建')).toBeNull();
   expect(screen.getByRole('heading', { name: '补充实验需要的条件' })).toBeTruthy();
   expect(screen.getByText('Project delivery unavailable')).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: '工作记录' }));
+  await screen.findByText('Agent Task 已创建');
+  fireEvent.click(screen.getByRole('button', { name: '执行与条件' }));
   expect(screen.getByText('Project Findings · 未上报')).toBeTruthy();
   expect(screen.getByText('项目证据暂未读取')).toBeTruthy();
 });
@@ -57,6 +60,7 @@ it('submits explicit project scope once and reloads durable state on network fai
   let rejectExecution: (reason: Error) => void = () => {};
   vi.mocked(executeAgentTask).mockImplementation(() => new Promise((_resolve, reject) => { rejectExecution = reject; }));
   render(<MemoryRouter initialEntries={['/verify?project=workspace&task=task-a']}><Verify /></MemoryRouter>);
+  fireEvent.click(await screen.findByRole('button', { name: '查看执行条件与范围' }));
   const button = await screen.findByRole('button', {name: '按项目范围执行'});
   fireEvent.click(screen.getByRole('checkbox', {name: '仅执行只读实验'}));
   fireEvent.click(button);
@@ -85,4 +89,19 @@ it('preserves persisted target selection when rechecking task conditions', async
   render(<MemoryRouter initialEntries={['/verify?project=workspace&task=task-a']}><Verify /></MemoryRouter>);
   fireEvent.click(await screen.findByRole('button', { name: '重新检查条件' }));
   await waitFor(() => expect(groundAgentTask).toHaveBeenCalledWith('workspace', 'task-a', { testTargetIds: ['target-a', 'target-b'] }));
+});
+
+it('keeps artifacts separate from activity and preserves project and task links', async () => {
+  render(<MemoryRouter initialEntries={['/verify?project=workspace&task=task-a']}><Verify /></MemoryRouter>);
+  await screen.findByRole('heading', { name: task.goal });
+  expect(screen.queryByText('工作记录 · Agent Event Ledger')).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: '交付物' }));
+  const review = screen.getByRole('link', { name: /打开审查结果/ });
+  const url = new URL(review.getAttribute('href')!, 'http://localhost');
+  expect(url.searchParams.get('project')).toBe('workspace');
+  expect(url.searchParams.get('task')).toBe('task-a');
+  expect(url.searchParams.get('view')).toBe('requirements');
+  expect(screen.queryByRole('button', { name: '按项目范围执行' })).toBeNull();
+  expect(executeAgentTask).not.toHaveBeenCalled();
+  expect(groundAgentTask).not.toHaveBeenCalled();
 });

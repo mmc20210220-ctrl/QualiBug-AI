@@ -99,3 +99,6 @@
 @media (max-width: 950px) { .ti-hero, .ti-truth-note { grid-template-columns: 1fr; } .ti-metrics { grid-template-columns: repeat(2,minmax(0,1fr)); } .ti-diagnostics { grid-template-columns: repeat(2,minmax(0,1fr)); } .ti-diagnostics p { grid-column: 1 / -1; } .ti-section-heading, .ti-obligation-head { align-items: stretch; flex-direction: column; } .ti-obligation-id { max-width: 100%; } }
 @media (max-width: 680px) { .ti-context-grid, .ti-contract-grid, .ti-status-strip { grid-template-columns: 1fr; } }
 @media (max-width: 560px) { .ti-hero, .ti-obligation, .ti-empty, .ti-error, .ti-loading { padding: 18px; } .ti-metrics, .ti-diagnostics { grid-template-columns: 1fr; } .ti-evidence-head, .ti-evidence-disclosure summary { align-items: flex-start; flex-direction: column; } }
+
+.ti-target-detail > summary { cursor: pointer; padding: 14px 0; color: var(--primary); font-size: 13px; }
+.ti-target-detail[open] > summary { margin-bottom: 12px; }

@@ -170,3 +170,5 @@
   .analyze-dropzone { grid-template-columns: auto minmax(0, 1fr); }
   .analyze-dropzone .btn { grid-column: 1 / -1; }
 }
+
+.analyze-upload-disclosure > summary { cursor: pointer; padding: 12px 0; color: var(--primary); }

@@ -186,6 +186,7 @@ function ObligationCard({ obligation, design, selectable = false, selected = fal
         <span className="ti-obligation-id" title={obligation.obligationId}>{obligation.obligationId}</span>
       </div>
 
+      <details className="ti-target-detail"><summary>查看测试详情、数据要求与证据</summary>
       <div className="ti-context-grid">
         <div><span>业务对象</span><strong>{obligation.objectRefs.join('、') || '后端暂未提供'}</strong></div>
         <div><span>业务操作</span><strong>{obligation.operationRef || '后端暂未提供'}</strong></div>
@@ -232,6 +233,7 @@ function ObligationCard({ obligation, design, selectable = false, selected = fal
       <details className="ti-evidence-disclosure">
         <summary>查看来源证据 <span>{obligation.evidence.length} 条 · {obligation.sourceIds.length} 个来源</span></summary>
         <EvidenceList evidence={obligation.evidence} />
+      </details>
       </details>
     </article>
   );
