@@ -110,6 +110,8 @@ const ANALYSIS: RequirementIntelligenceAnalysis = {
 
 describe('Requirement Intelligence workspace', () => {
   beforeEach(() => {
+    HTMLDialogElement.prototype.showModal = function () { this.open = true; };
+    HTMLDialogElement.prototype.close = function () { this.open = false; };
     getRequirementIntelligenceMock.mockReset();
     getRequirementIntelligenceMock.mockResolvedValue(ANALYSIS);
   });
@@ -127,7 +129,15 @@ describe('Requirement Intelligence workspace', () => {
 
     expect(await screen.findByText('需求就绪状态 · 未就绪')).toBeTruthy();
     expect(screen.getByText('业务规则约束冲突')).toBeTruthy();
+    expect(screen.queryByText('已支付订单不得取消')).toBeNull();
+    const trigger = screen.getByRole('button', { name: '业务规则约束冲突' });
+    trigger.focus();
+    fireEvent.click(trigger);
+    expect(screen.getByRole('dialog', { name: '需求审查详情' })).toBeTruthy();
     expect(screen.getByText('已支付订单不得取消')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: '关闭详情' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(document.activeElement).toBe(trigger);
     const scope = screen.getByText('审查范围与状态说明').closest('details');
     expect(scope?.open).toBe(false);
     expect(screen.getByText(/不代表资料完整或已执行测试/)).toBeTruthy();

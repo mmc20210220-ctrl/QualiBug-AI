@@ -199,6 +199,19 @@
   gap: 12px;
 }
 
+.ri-finding-row { padding: 16px 20px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+.ri-finding-row h3 { margin: 10px 0 6px; }
+.ri-finding-row h3 button { border: 0; padding: 0; background: transparent; color: var(--ink); font: inherit; font-size: 17px; line-height: 1.5; text-align: left; cursor: pointer; overflow-wrap: anywhere; }
+.ri-finding-row h3 button:hover { color: var(--primary); text-decoration: underline; }
+.ri-finding-row button:focus-visible { outline: 2px solid var(--primary); outline-offset: 4px; }
+.ri-row-action { margin: 0 0 8px; color: #475467; font-size: 13px; line-height: 1.6; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.ri-row-meta { color: #667085; font-size: 12px; }
+.ri-detail-dialog { position: fixed; inset: 0 0 0 auto; width: min(720px, 100%); height: 100dvh; max-width: 100%; max-height: 100dvh; margin: 0; padding: 0; border: 0; background: var(--surface); color: var(--ink); box-sizing: border-box; overflow-y: auto; }
+.ri-detail-dialog::backdrop { background: rgb(16 24 40 / 42%); }
+.ri-detail-header { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 20px; border-bottom: 1px solid var(--line); background: var(--surface); }
+.ri-detail-dialog .ri-finding { border: 0; border-radius: 0; overflow-wrap: anywhere; }
+.ri-detail-dialog .ri-evidence-head code { white-space: normal; overflow-wrap: anywhere; }
+
 .ri-list-toolbar {
   display: flex;
   align-items: center;

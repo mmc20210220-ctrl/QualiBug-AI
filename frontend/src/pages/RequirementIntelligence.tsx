@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   getRequirementIntelligence,
@@ -113,6 +113,25 @@ function FindingCard({ finding }: { finding: RequirementFinding }) {
   );
 }
 
+function FindingDetail({ finding, onClose }: { finding: RequirementFinding; onClose: () => void }) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    const trigger = document.activeElement;
+    dialog?.showModal();
+    return () => {
+      dialog?.close();
+      if (trigger instanceof HTMLElement && trigger.isConnected) trigger.focus();
+    };
+  }, []);
+  return (
+    <dialog ref={dialogRef} className="ri-detail-dialog" aria-label="需求审查详情" onCancel={onClose}>
+      <header className="ri-detail-header"><strong>需求审查详情</strong><button type="button" className="btn btn-secondary" onClick={onClose}>关闭详情</button></header>
+      <FindingCard finding={finding} />
+    </dialog>
+  );
+}
+
 function WorkspaceEmpty({ onMaterials }: { onMaterials: () => void }) {
   return (
     <section className="ri-empty">
@@ -136,6 +155,7 @@ export function RequirementIntelligence() {
   const [pageIndex, setPageIndex] = useState(0);
   const [query, setQuery] = useState('');
   const [onlyBlocking, setOnlyBlocking] = useState(false);
+  const [selectedFinding, setSelectedFinding] = useState<RequirementFinding | null>(null);
 
   const load = useCallback(async () => {
     if (!project) {
@@ -321,7 +341,19 @@ export function RequirementIntelligence() {
               </div>
             )}
             <div className="ri-findings-list">
-              {visibleFindings.map((finding) => <FindingCard finding={finding} key={finding.findingId} />)}
+              {visibleFindings.map((finding) => (
+                <article className="ri-finding-row" key={finding.findingId}>
+                  <div className="ri-tags">
+                    <span className={`ri-tag type-${finding.findingType}`}>{TYPE_META[finding.findingType].label}</span>
+                    <span className={`ri-tag ${finding.blocking ? 'blocker' : 'review'}`}>{finding.blocking ? '影响需求理解' : '待确认'}</span>
+                    {finding.severity && <span className="ri-tag neutral">{finding.severity}</span>}
+                  </div>
+                  <h3><button type="button" onClick={() => setSelectedFinding(finding)} aria-haspopup="dialog">{finding.title}</button></h3>
+                  {finding.description && <p className="ri-row-action">{finding.description}</p>}
+                  {finding.operatorAction && <p className="ri-row-action">建议：{finding.operatorAction}</p>}
+                  <span className="ri-row-meta">{finding.evidence.length} 条证据 · {finding.sourceIds.length} 个来源</span>
+                </article>
+              ))}
             </div>
           </>
         ) : (
@@ -331,6 +363,7 @@ export function RequirementIntelligence() {
           </div>
         )}
       </section>
+      {selectedFinding && <FindingDetail finding={selectedFinding} onClose={() => setSelectedFinding(null)} />}
     </div>
   );
 }
