@@ -151,10 +151,10 @@ it('presents source data requirements separately from materialized test data', a
     }] as unknown as TestIntelligenceAnalysis['testDesigns'],
   });
   render(<MemoryRouter initialEntries={['/analyze?project=workspace&view=test-data']}><TestIntelligence /></MemoryRouter>);
-  await screen.findByRole('heading', { name: '把测试数据准备情况讲清楚' });
+  await screen.findByRole('heading', { name: '测试数据准备' });
   expect(screen.getByText('来源约束条目')).toBeTruthy();
   expect(screen.getByText(/数据准备尚未完成/)).toBeTruthy();
-  expect(screen.getByText('已物化数据')).toBeTruthy();
+  expect(screen.getByText('已准备数据的设计')).toBeTruthy();
   expect(screen.getAllByText('0').length).toBeGreaterThan(0);
   expect(screen.getByText('验证订单取消后的状态变化')).toBeTruthy();
   expect(screen.getByText('订单状态满足来源前置条件')).toBeTruthy();
@@ -162,7 +162,7 @@ it('presents source data requirements separately from materialized test data', a
   fireEvent.change(screen.getByRole('combobox', { name: '数据要求' }), { target: { value: 'undeclared' } });
   expect(screen.getByText('没有匹配的数据要求')).toBeTruthy();
   expect(screen.queryByText('验证订单取消后的状态变化')).toBeNull();
-  expect(screen.getByText('已物化数据')).toBeTruthy();
+  expect(screen.getByText('已准备数据的设计')).toBeTruthy();
   fireEvent.click(screen.getByRole('button', { name: '清除数据筛选' }));
   fireEvent.change(screen.getByRole('searchbox', { name: '搜索数据要求' }), { target: { value: 'prd.md' } });
   expect(screen.getByText('验证订单取消后的状态变化')).toBeTruthy();

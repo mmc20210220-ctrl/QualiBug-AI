@@ -267,23 +267,23 @@ function TestDataWorkspace({ analysis, project, taskId }: { analysis: TestIntell
     <section className="ti-data-workspace" aria-label="测试数据工作区">
       <header className="ti-data-hero">
         <div>
-          <span>Test Data Readiness</span>
-          <h2>把测试数据准备情况讲清楚</h2>
-          <p>这里汇总已有 Test Design 声明的数据约束、前置条件和物化状态。它不会生成账号、ID、金额或其他具体数据，也不会把数据要求冒充成可用数据。</p>
+          <span>测试准备</span>
+          <h2>测试数据准备</h2>
+          <p>查看每个测试场景需要的数据、前置条件和来源依据。具体数据是否可用，以实际准备和校验结果为准。</p>
         </div>
         <button type="button" className="btn btn-secondary" onClick={() => navigateToProjectPath('/analyze', project, targetSearch.toString())}>返回测试设计</button>
       </header>
 
       <div className="ti-data-metrics" aria-label="测试数据摘要">
-        <article><span>需要准备的场景</span><strong>{declaredEntries.length}</strong><p>已有 Test Design 明确声明数据要求</p></article>
-        <article><span>来源约束条目</span><strong>{requirementCount}</strong><p>从企业理解结果投影而来</p></article>
-        <article><span>已物化数据</span><strong>{materializedCount}</strong><p>后端上报为可直接使用的数据集</p></article>
-        <article><span>未物化设计</span><strong>{entries.length - materializedCount}</strong><p>执行前仍需准备或验证</p></article>
+        <article><span>已声明数据要求的场景</span><strong>{declaredEntries.length}</strong><p>测试设计中有明确数据约束</p></article>
+        <article><span>来源约束条目</span><strong>{requirementCount}</strong><p>来自已有项目资料</p></article>
+        <article><span>已准备数据的设计</span><strong>{materializedCount}</strong><p>按已上报的数据准备状态统计</p></article>
+        <article><span>尚未准备数据的设计</span><strong>{entries.length - materializedCount}</strong><p>尚未收到数据准备完成记录</p></article>
       </div>
 
       <div className="ti-data-boundary">
-        <strong>当前结论：数据准备尚未完成</strong>
-        <p>没有“已物化数据”不代表测试失败；它只表示当前页面还没有收到真实数据创建或校验回执。环境、权限和数据创建都必须通过受控执行路径完成。</p>
+        <strong>{entries.length ? '当前结论：数据准备尚未完成' : '当前尚无测试设计可供评估'}</strong>
+        <p>{entries.length ? '当前仅有数据要求，尚未收到实际数据准备完成的记录。可展开场景查看约束和来源；此状态不代表测试失败。' : '形成测试设计后，这里会展示对应的数据要求和准备状态。'}</p>
       </div>
 
       <div className="ti-list-toolbar">
@@ -303,8 +303,8 @@ function TestDataWorkspace({ analysis, project, taskId }: { analysis: TestIntell
         {visibleEntries.length > 0 ? visibleEntries.map(({ design, requirements, preconditions }) => (
           <details className="ti-data-card" key={design.designId} open={requirements.length > 0 && declaredEntries.length === 1}>
             <summary>
-              <span><strong>{design.title}</strong><small>{design.designId}</small></span>
-              <em>{requirements.length ? `${requirements.length} 条来源约束` : '未声明具体数据要求'} · {design.setup.testDataMaterializationStatus}</em>
+              <span><strong>{design.title}</strong></span>
+              <em>{requirements.length ? `${requirements.length} 条来源约束` : '未声明具体数据要求'} · 数据尚未准备</em>
             </summary>
             <div className="ti-data-card-body">
               <div><span>业务对象</span><strong>{design.setup.objectRefs.join('、') || '后端暂未提供'}</strong></div>
@@ -318,7 +318,13 @@ function TestDataWorkspace({ analysis, project, taskId }: { analysis: TestIntell
                 <span>前置条件</span>
                 {preconditions.length ? <ul>{preconditions.map((item, index) => <li key={`${item}:${index}`}>{item}</li>)}</ul> : <p>未声明额外前置条件</p>}
               </section>
+              <section>
+                <details className="ti-evidence-disclosure"><summary>查看来源依据 <span>{design.evidence.length} 条证据</span></summary>
+                  {design.evidence.length ? <EvidenceList evidence={design.evidence} /> : <p>当前设计未提供来源证据明细</p>}
+                </details>
+              </section>
               <footer><span>来源 {design.sourceIds.length} 个 · 证据 {design.evidence.length} 条</span><span>数据状态：{design.setup.testDataMaterializationStatus}</span></footer>
+              <footer>设计标识：{design.designId}</footer>
             </div>
           </details>
         )) : (
