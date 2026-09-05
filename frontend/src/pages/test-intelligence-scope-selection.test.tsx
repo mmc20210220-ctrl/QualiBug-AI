@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TestIntelligence } from './TestIntelligence';
@@ -77,6 +77,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  cleanup();
   vi.clearAllMocks();
 });
 
@@ -95,5 +96,13 @@ describe('Test Intelligence task scope selection', () => {
 
     await waitFor(() => expect(groundAgentTask).toHaveBeenCalledWith('workspace', 'task-a', { testTargetIds: ['target-a'] }));
     expect(navigateToProjectPath).toHaveBeenCalledWith('/verify', 'workspace', 'task=task-a');
+  });
+
+  it('keeps scope selection unavailable when the pinned Snapshot is stale', async () => {
+    vi.mocked(getAgentTask).mockResolvedValue({ ...task, sourceSnapshotStatus: 'PINNED_STALE' });
+    render(<MemoryRouter initialEntries={['/analyze?project=workspace&view=test-targets&task=task-a']}><TestIntelligence /></MemoryRouter>);
+
+    await screen.findByText('当前 Task 暂不能选择 Test Targets');
+    expect(screen.queryByRole('checkbox', { name: /选择 Test Target/ })).toBeNull();
   });
 });

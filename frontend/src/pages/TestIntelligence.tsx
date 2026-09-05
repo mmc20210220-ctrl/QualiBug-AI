@@ -461,7 +461,13 @@ export function TestIntelligence() {
                 {groundingError && <p className="ti-scope-error" role="alert">{groundingError}</p>}
               </>
             ) : (
-              <><strong>当前 Task 已有固定的 Test Targets</strong><p>{task?.selectedTestTargets.length || 0} 个目标已写入任务；如果资料发生变化，请回到 Live Workspace 重新评估 Grounding。</p><button type="button" className="btn btn-secondary" onClick={() => navigateToProjectPath('/verify', project, `task=${encodeURIComponent(taskId)}`)}>返回 Live Workspace</button></>
+              <>
+                <strong>{task?.selectedTestTargets.length ? '当前 Task 已有固定的 Test Targets' : '当前 Task 暂不能选择 Test Targets'}</strong>
+                <p>{task?.selectedTestTargets.length
+                  ? `${task.selectedTestTargets.length} 个目标已写入任务；如果资料发生变化，请回到 Live Workspace 重新评估 Grounding。`
+                  : '当前 Snapshot 或 Grounding 阻断条件不满足范围选择合同，请先回到 Live Workspace 查看真实阻断原因。'}</p>
+                <button type="button" className="btn btn-secondary" onClick={() => navigateToProjectPath('/verify', project, `task=${encodeURIComponent(taskId)}`)}>返回 Live Workspace</button>
+              </>
             )}
           </div>
         </section>
