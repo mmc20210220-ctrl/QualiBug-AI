@@ -170,11 +170,17 @@ def bind_product_installed_mainline_authority() -> dict[str, Any]:
     """
 
     # ``private_pilot_entrypoint.run_server`` invokes this before binding the
-    # service socket. Keep semantic-authority startup validation on that real
-    # production path rather than on package import or a test-only bootstrap.
+    # service socket. PRODUCT is strict; COMPATIBILITY must be explicitly
+    # selected. BENCHMARK/TEST modes are not allowed to launch the product
+    # entrypoint, keeping evaluator/test authorities isolated from customers.
     from .authority_manifest import validate_resolved_authorities_for_startup
 
-    validate_resolved_authorities_for_startup()
+    authority_report = validate_resolved_authorities_for_startup()
+    authority_mode = str(authority_report.get("authority_mode") or "").upper()
+    if authority_mode not in {"PRODUCT", "COMPATIBILITY"}:
+        raise RuntimeError(
+            f"non_product_authority_mode_for_product_entrypoint:{authority_mode}"
+        )
 
     from .policy_registry import get_policy_registry
 
@@ -194,6 +200,8 @@ def bind_product_installed_mainline_authority() -> dict[str, Any]:
             "mainline_authority": target,
             "policy_id": active.policy_id,
             "source": "env" if requested else "active_policy",
+            "authority_mode": authority_mode,
+            "authority_manifest": authority_report,
         }
 
     active.strategy.execution.mainline_authority = target
@@ -213,6 +221,8 @@ def bind_product_installed_mainline_authority() -> dict[str, Any]:
         "previous_mainline_authority": previous,
         "policy_id": active.policy_id,
         "source": "env" if requested else "product_installed_runner",
+        "authority_mode": authority_mode,
+        "authority_manifest": authority_report,
     }
 
 
