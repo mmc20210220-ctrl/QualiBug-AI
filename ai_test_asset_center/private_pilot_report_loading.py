@@ -27,12 +27,123 @@ _EVIDENCE_BUNDLE_VIEW_CACHE: dict[tuple[str, str, int], dict[str, Any]] = {}
 _EVIDENCE_BUNDLE_VIEW_CACHE_MAX = 32
 _EVIDENCE_BUNDLE_VIEW_CACHE_LOCK = threading.Lock()
 
+# Compact intelligence reports keep heavy, authoritative payloads in the
+# content-addressed artifact store.  The report itself is immutable until its
+# mtime/ref changes, so a small process-local cache prevents every command-
+# center poll from decompressing the same ledger again.
+_REPORT_ARTIFACT_VIEW_CACHE: dict[
+    tuple[str, int, tuple[tuple[str, str], ...]], dict[str, Any]
+] = {}
+_REPORT_ARTIFACT_VIEW_CACHE_MAX = 8
+_REPORT_ARTIFACT_VIEW_CACHE_LOCK = threading.Lock()
+
+_REPORT_ARTIFACTIZED_KEYS = (
+    "obligation_attempt_ledger",
+    "behavior_slice_ledger",
+    "delivery_occurrences",
+    "discovery_funnel",
+    "formal_count_projection",
+    "canonical_defect_registry",
+    "test_data_bootstrap",
+)
+
 class ReportLoadingMixin:
     @staticmethod
     def _read_json_dict(path: Path) -> dict[str, Any]:
         from .private_pilot_build_scope import scoped_read_json
 
         return scoped_read_json(path, lambda: _read_json_object(path))
+
+    @staticmethod
+    def _report_workspace_root(path: Path) -> Path:
+        """Resolve the workspace owning a persisted report path."""
+
+        for ancestor in path.resolve().parents:
+            if ancestor.name in {
+                "platform_outputs",
+                "platform_workspace",
+                "benchmark_outputs",
+            }:
+                return ancestor.parent
+        return path.resolve().parent
+
+    @staticmethod
+    def _hydrate_intelligence_report_artifacts(
+        path: Path,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Restore compact report fields from their immutable artifact refs.
+
+        The compact writer intentionally removes heavy fields from
+        ``intelligence_report.json``.  Consumers which re-derive authority
+        (the command center and historical-authorization migration) still
+        need the original ledger/occurrence payload, though.  Hydration is an
+        in-memory read-model operation; the compact report and its refs are
+        never rewritten.
+        """
+
+        if path.name != "intelligence_report.json" or not isinstance(payload, dict):
+            return payload
+        artifactization = payload.get("report_artifactization")
+        declared = (
+            artifactization.get("artifactized_keys")
+            if isinstance(artifactization, dict)
+            else None
+        )
+        keys = [
+            key
+            for key in _REPORT_ARTIFACTIZED_KEYS
+            if key in (declared or []) or (
+                key not in payload and payload.get(f"{key}_ref")
+            )
+        ]
+        if not keys:
+            return payload
+
+        refs: list[tuple[str, str]] = []
+        for key in keys:
+            ref = str(payload.get(f"{key}_ref") or "").strip()
+            if not ref:
+                raise ValueError(f"report_artifact_ref_missing:{key}")
+            refs.append((key, ref))
+        try:
+            mtime_ns = path.stat().st_mtime_ns
+        except OSError as exc:
+            raise ValueError(f"report_artifact_source_missing:{path}") from exc
+        cache_key = (str(path.resolve()), mtime_ns, tuple(refs))
+        with _REPORT_ARTIFACT_VIEW_CACHE_LOCK:
+            cached = _REPORT_ARTIFACT_VIEW_CACHE.get(cache_key)
+        if cached is not None:
+            hydrated = dict(payload)
+            hydrated.update(cached)
+            return hydrated
+
+        from .artifact_store import ArtifactStoreError, default_artifact_store
+
+        store = default_artifact_store(ReportLoadingMixin._report_workspace_root(path))
+        hydrated_fields: dict[str, Any] = {}
+        for key, ref in refs:
+            try:
+                value = store.get_json(ref)
+            except ArtifactStoreError as exc:
+                raise ValueError(
+                    f"report_artifact_hydration_failed:{key}:{ref}"
+                ) from exc
+            if key in {"delivery_occurrences"}:
+                valid = isinstance(value, list)
+            else:
+                valid = isinstance(value, (dict, list))
+            if not valid:
+                raise ValueError(f"report_artifact_shape_invalid:{key}")
+            hydrated_fields[key] = value
+
+        with _REPORT_ARTIFACT_VIEW_CACHE_LOCK:
+            if len(_REPORT_ARTIFACT_VIEW_CACHE) >= _REPORT_ARTIFACT_VIEW_CACHE_MAX:
+                _REPORT_ARTIFACT_VIEW_CACHE.clear()
+            _REPORT_ARTIFACT_VIEW_CACHE[cache_key] = hydrated_fields
+        hydrated = dict(payload)
+        hydrated.update(hydrated_fields)
+        return hydrated
 
     @staticmethod
     def _read_scan_report_payload(path: Path) -> dict[str, Any]:
@@ -56,7 +167,14 @@ class ReportLoadingMixin:
         from .private_pilot_build_scope import scoped_read_json, scoped_scan_report
 
         if path.name != "scan_result.json":
-            return scoped_read_json(path, lambda: _read_json_object(path))
+            def _read_report() -> dict[str, Any]:
+                payload = _read_json_object(path)
+                return ReportLoadingMixin._hydrate_intelligence_report_artifacts(
+                    path,
+                    payload,
+                )
+
+            return scoped_read_json(path, _read_report)
 
         def _hydrate() -> dict[str, Any]:
             from .scan_result_store import (

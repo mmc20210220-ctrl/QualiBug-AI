@@ -699,8 +699,6 @@ class CommandCenterBuilderMixin:
                     _scan_for_quality["candidate_findings"] = list(current_scan_report.get("candidate_findings") or [])
             if not _current_findings_declared and not _scan_for_quality.get("findings"):
                 _scan_for_quality["findings"] = list(delivery_defects or [])
-            if not _scan_for_quality.get("candidate_findings"):
-                _scan_for_quality["candidate_findings"] = list(internal_clues or [])
             if isinstance(discovery_funnel, dict):
                 _scan_for_quality["discovery_funnel"] = discovery_funnel
             # Prefer v12 nested obligation/experiment fields when present on report.
