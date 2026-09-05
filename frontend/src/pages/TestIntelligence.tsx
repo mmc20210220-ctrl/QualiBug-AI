@@ -317,6 +317,10 @@ export function TestIntelligence() {
 
   const canSelectTaskScope = Boolean(
     task
+      && !taskLoading
+      && task.projectId === project
+      && task.taskId === taskId
+      && task.executionClaimStatus === 'NOT_CLAIMED'
       && task.intent === 'verify_changes'
       && task.sourceSnapshotStatus === 'PINNED'
       && task.selectedTestTargets.length === 0
@@ -449,11 +453,11 @@ export function TestIntelligence() {
               <><strong>这是分析型任务，不需要固定执行范围</strong><p>分析任务只消费企业理解快照，不会把 Test Targets 伪装成执行目标。</p></>
             ) : canSelectTaskScope ? (
               <>
-                <strong>为这次任务选择真实变更影响范围</strong>
-                <p>请只选择有来源证据、确实属于本次变更影响范围的 Test Targets。系统不会默认全选，也不会根据目标文本猜测范围。</p>
+                <strong>选择这次任务关注的验证目标</strong>
+                <p>这些目标来自已有企业知识。选择会保存为任务关注范围；是否受本次变更影响、是否已被验证，仍需要变更资料与运行证据。</p>
                 <label className="ti-scope-confirm">
                   <input type="checkbox" checked={scopeConfirmed} onChange={(event) => setScopeConfirmed(event.target.checked)} disabled={grounding} />
-                  <span>我确认下面选择的目标来自本次真实变更范围</span>
+                  <span>将所选目标保存为本次任务关注范围</span>
                 </label>
                 <button type="button" className="btn btn-primary" onClick={() => void groundSelectedTargets()} disabled={grounding || !scopeConfirmed || selectedTargetIds.length === 0}>
                   {grounding ? '正在固定并重新评估…' : `固定 ${selectedTargetIds.length} 个目标并重新评估`}

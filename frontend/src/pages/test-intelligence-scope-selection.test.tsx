@@ -22,6 +22,7 @@ const task = {
   goal: 'Check changed behavior',
   intent: 'verify_changes',
   status: 'BLOCKED',
+  executionClaimStatus: 'NOT_CLAIMED',
   sourceSnapshotStatus: 'PINNED',
   selectedTestTargets: [],
   groundingBlockers: [{ code: 'CHANGE_SCOPE_NOT_GROUNDED', message: 'scope required', source: 'agent_task' }],
@@ -85,13 +86,13 @@ describe('Test Intelligence task scope selection', () => {
   it('requires explicit target confirmation before grounding a verify task', async () => {
     render(<MemoryRouter initialEntries={['/analyze?project=workspace&view=test-targets&task=task-a']}><TestIntelligence /></MemoryRouter>);
 
-    await screen.findByText('为这次任务选择真实变更影响范围');
+    await screen.findByText('选择这次任务关注的验证目标');
     const submit = screen.getByRole('button', { name: '固定 0 个目标并重新评估' });
     expect((submit as HTMLButtonElement).disabled).toBe(true);
 
     fireEvent.click(screen.getByRole('checkbox', { name: '选择 Test Target：Check changed behavior' }));
     expect((screen.getByRole('button', { name: '固定 1 个目标并重新评估' }) as HTMLButtonElement).disabled).toBe(true);
-    fireEvent.click(screen.getByRole('checkbox', { name: '我确认下面选择的目标来自本次真实变更范围' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: '将所选目标保存为本次任务关注范围' }));
     fireEvent.click(screen.getByRole('button', { name: '固定 1 个目标并重新评估' }));
 
     await waitFor(() => expect(groundAgentTask).toHaveBeenCalledWith('workspace', 'task-a', { testTargetIds: ['target-a'] }));
@@ -105,4 +106,13 @@ describe('Test Intelligence task scope selection', () => {
     await screen.findByText('当前 Task 暂不能选择 Test Targets');
     expect(screen.queryByRole('checkbox', { name: /选择 Test Target/ })).toBeNull();
   });
+});
+
+
+it('does not allow target selection after execution has been claimed', async () => {
+  vi.mocked(getAgentTask).mockResolvedValue({ ...task, status: 'RUNNING', executionClaimStatus: 'CLAIMED' });
+  render(<MemoryRouter initialEntries={['/analyze?project=workspace&view=test-targets&task=task-a']}><TestIntelligence /></MemoryRouter>);
+  await screen.findByText('当前 Task 暂不能选择 Test Targets');
+  expect(screen.queryByRole('checkbox', { name: /选择 Test Target/ })).toBeNull();
+  expect(groundAgentTask).not.toHaveBeenCalled();
 });

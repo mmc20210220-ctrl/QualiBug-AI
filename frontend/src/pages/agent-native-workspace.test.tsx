@@ -3,7 +3,7 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { AgentHome } from './AgentHome';
 import { Verify } from './Verify';
-import { executeAgentTask, createAgentTask, getAgentTaskBundle, listAgentTasks, type AgentTask } from '../api/agent-tasks';
+import { groundAgentTask, executeAgentTask, createAgentTask, getAgentTaskBundle, listAgentTasks, type AgentTask } from '../api/agent-tasks';
 
 vi.mock('../api/agent-tasks', () => ({ executeAgentTask: vi.fn(), createAgentTask: vi.fn(), listAgentTasks: vi.fn(), getAgentTaskBundle: vi.fn(), groundAgentTask: vi.fn(), cancelAgentTask: vi.fn() }));
 vi.mock('../api/data', () => ({ usePipelineData: () => ({ data: null, error: 'Project delivery unavailable', loading: false, refetch: vi.fn() }), isCustomerReadyFinding: () => false }));
@@ -75,4 +75,14 @@ it('analysis tasks have no scan execution action', async () => {
   render(<MemoryRouter initialEntries={['/verify?project=workspace&task=task-a']}><Verify /></MemoryRouter>);
   await screen.findByRole('heading', {name: task.goal});
   expect(screen.queryByRole('button', {name: '按项目范围执行'})).toBeNull();
+});
+
+
+it('preserves persisted target selection when rechecking task conditions', async () => {
+  const selectedTask = { ...task, selectedTestTargets: ['target-a', 'target-b'] };
+  vi.mocked(getAgentTaskBundle).mockResolvedValue({ task: selectedTask, events: [] });
+  vi.mocked(groundAgentTask).mockResolvedValue(selectedTask);
+  render(<MemoryRouter initialEntries={['/verify?project=workspace&task=task-a']}><Verify /></MemoryRouter>);
+  fireEvent.click(await screen.findByRole('button', { name: '重新检查条件' }));
+  await waitFor(() => expect(groundAgentTask).toHaveBeenCalledWith('workspace', 'task-a', { testTargetIds: ['target-a', 'target-b'] }));
 });
