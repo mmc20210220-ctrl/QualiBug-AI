@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 
-import { fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RequirementIntelligenceAnalysis } from '../../api/requirement-intelligence';
 
 const { getRequirementIntelligenceMock } = vi.hoisted(() => ({
@@ -114,6 +114,10 @@ describe('Requirement Intelligence workspace', () => {
     getRequirementIntelligenceMock.mockResolvedValue(ANALYSIS);
   });
 
+  afterEach(() => {
+    cleanup();
+  });
+
   it('renders readiness, evidence and bounded quality wording', async () => {
     render(
       <MemoryRouter initialEntries={['/requirements?project=project-a']}>
@@ -151,5 +155,41 @@ describe('Requirement Intelligence workspace', () => {
 
     expect(screen.getByText('先选择项目，再开始需求审查')).toBeTruthy();
     expect(getRequirementIntelligenceMock).not.toHaveBeenCalled();
+  });
+
+  it('bounds large finding responses to a page while keeping every item reachable', async () => {
+    const findings = Array.from({ length: 45 }, (_, index) => ({
+      ...ANALYSIS.findings[0],
+      findingId: `requirement:c${index}`,
+      title: `冲突 ${index}`,
+    }));
+    getRequirementIntelligenceMock.mockResolvedValue({
+      ...ANALYSIS,
+      findings,
+      readiness: {
+        ...ANALYSIS.readiness,
+        findingCount: findings.length,
+        blockingFindingCount: findings.length,
+        reviewRequiredFindingCount: 0,
+        blockingFindingIds: findings.map((finding) => finding.findingId),
+        reviewRequiredFindingIds: [],
+        countsByType: { requirement_conflict: findings.length, requirement_missing: 0, requirement_ambiguity: 0 },
+      },
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/requirements?project=project-a']}>
+        <RequirementIntelligence />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('第 1 / 3 页')).toBeTruthy();
+    expect(screen.getByText('当前显示 1–20 / 45 条')).toBeTruthy();
+    expect(screen.getByText('冲突 0')).toBeTruthy();
+    expect(screen.queryByText('冲突 20')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: '下一页' }));
+    expect(screen.getByText('第 2 / 3 页')).toBeTruthy();
+    expect(screen.getByText('冲突 20')).toBeTruthy();
   });
 });

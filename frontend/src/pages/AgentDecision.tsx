@@ -43,7 +43,20 @@ export function AgentDecision() {
   }
 
   if (error && !data) {
-    return <StatePanel eyebrow="Decision · 连接状态" title="无法读取发布依据" description={error} action={<button type="button" className="btn btn-primary" onClick={refetch}>重新连接</button>} />;
+    return (
+      <StatePanel
+        eyebrow="Decision · 连接状态"
+        title="无法读取发布依据"
+        description={`${error}。页面不会在缺少项目级回执时给出放行结论。`}
+        action={(
+          <>
+            <button type="button" className="btn btn-primary" onClick={refetch}>重新连接</button>
+            <Link className="btn btn-secondary" to={buildProjectPath('/verify', project)}>返回工作台</Link>
+            <Link className="btn btn-secondary" to={buildProjectPath('/analyze', project)}>查看 Knowledge</Link>
+          </>
+        )}
+      />
+    );
   }
 
   const record = asRecord(data);

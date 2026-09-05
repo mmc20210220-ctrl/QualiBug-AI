@@ -91,6 +91,19 @@ export function Dashboard() {
     </div>
   );
   if (error && !data) return <StatePanel eyebrow="连接状态" title="后端暂时不可用" description={error} action={<button className="btn btn-primary" onClick={refetch}>重新连接</button>} />;
+  const loadDiagnostics = asRecord(asRecord(data).report_load_diagnostics);
+  if (asText(loadDiagnostics.status)) {
+    // 后端可读但本轮报告数据源不可读（如分片存储撕裂）：诚实命名状态，
+    // 绝不伪装成健康的空视图。
+    return (
+      <StatePanel
+        eyebrow="数据状态"
+        title={asText(loadDiagnostics.status)}
+        description={asText(loadDiagnostics.message) || '当前项目的扫描结果数据源不可读，显示的不是真实结论。'}
+        action={<button className="btn btn-primary" onClick={refetch}>重新连接</button>}
+      />
+    );
+  }
   if (!project) {
     return (
       <div>
@@ -300,6 +313,11 @@ export function Dashboard() {
 
   return (
     <div className="customer-results-page">
+      {asText(asRecord(record.cache_status).state) === 'revalidating' && (
+        <div className="muted" style={{ marginBottom: 8 }} data-testid="cc-revalidating">
+          正在后台更新最新扫描结果，当前显示的是上一轮结论（{asNum(asRecord(record.cache_status).age_seconds, 0)} 秒前生成）。
+        </div>
+      )}
       <RegressionGateBanner record={record} />
 
       <ValueHero

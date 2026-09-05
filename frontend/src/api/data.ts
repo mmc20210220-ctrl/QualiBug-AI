@@ -59,6 +59,16 @@ type PipelineEntry = PipelineSnapshot & {
 const MIN_PIPELINE_INTERVAL_MS = 5_000;
 const pipelineEntries = new Map<string, PipelineEntry>();
 
+// 回到前台立即刷新一次：隐藏期间的轮询被跳过，靠这里补齐可见后的第一帧。
+if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) return;
+    pipelineEntries.forEach((entry, project) => {
+      if (entry.requests.size) void fetchPipeline(project, entry);
+    });
+  });
+}
+
 function effectiveIntervalMs(entry: PipelineEntry): number {
   let min = Number.POSITIVE_INFINITY;
   entry.requests.forEach((ms) => { if (ms < min) min = ms; });
@@ -79,7 +89,9 @@ function schedulePipelineLoop(project: string, entry: PipelineEntry): void {
 }
 
 async function fetchPipeline(project: string, entry: PipelineEntry): Promise<void> {
-  if (entry.fetching || !project) return;
+  // 页面不可见时跳过本轮：后台标签页不消耗带宽与后端构建，回到前台由
+  // visibilitychange 监听立即补一次拉取。
+  if (entry.fetching || !project || (typeof document !== 'undefined' && document.hidden)) return;
   entry.fetching = true;
   try {
     const raw = await getFindings(project);

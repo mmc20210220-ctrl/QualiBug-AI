@@ -18,6 +18,11 @@ const TYPE_META: Record<RequirementFindingType, { label: string; short: string }
   requirement_ambiguity: { label: '业务歧义', short: '歧义' },
 };
 
+// Requirement findings can be large for a real enterprise corpus. Keep the
+// evidence intact while rendering a bounded page so one response cannot turn
+// the Knowledge workspace into a multi-thousand-node DOM tree.
+const FINDINGS_PAGE_SIZE = 20;
+
 const READINESS_META: Record<RequirementReadinessStatus, {
   eyebrow: string;
   title: string;
@@ -128,6 +133,7 @@ export function RequirementIntelligence() {
   const [loading, setLoading] = useState(Boolean(project));
   const [error, setError] = useState('');
   const [activeType, setActiveType] = useState<RequirementFindingType | 'all'>('all');
+  const [pageIndex, setPageIndex] = useState(0);
 
   const load = useCallback(async () => {
     if (!project) {
@@ -159,6 +165,16 @@ export function RequirementIntelligence() {
     if (activeType === 'all') return analysis.findings;
     return analysis.findings.filter((finding) => finding.findingType === activeType);
   }, [activeType, analysis]);
+
+  const pageCount = Math.max(1, Math.ceil(findings.length / FINDINGS_PAGE_SIZE));
+  const safePageIndex = Math.min(pageIndex, pageCount - 1);
+  const pageStart = safePageIndex * FINDINGS_PAGE_SIZE;
+  const visibleFindings = findings.slice(pageStart, pageStart + FINDINGS_PAGE_SIZE);
+
+  const selectType = (type: RequirementFindingType | 'all') => {
+    setActiveType(type);
+    setPageIndex(0);
+  };
 
   if (!project) {
     return <WorkspaceEmpty onMaterials={() => navigateToProjectPath('/materials', '')} />;
@@ -256,11 +272,11 @@ export function RequirementIntelligence() {
             <h2>待处理需求审查项</h2>
           </div>
           <div className="ri-filter" role="group" aria-label="按问题类型筛选">
-            <button type="button" className={activeType === 'all' ? 'active' : ''} onClick={() => setActiveType('all')}>
+            <button type="button" className={activeType === 'all' ? 'active' : ''} onClick={() => selectType('all')}>
               全部 {analysis.findings.length}
             </button>
             {(Object.keys(TYPE_META) as RequirementFindingType[]).map((type) => (
-              <button key={type} type="button" className={activeType === type ? 'active' : ''} onClick={() => setActiveType(type)}>
+              <button key={type} type="button" className={activeType === type ? 'active' : ''} onClick={() => selectType(type)}>
                 {TYPE_META[type].short} {counts[type]}
               </button>
             ))}
@@ -268,9 +284,37 @@ export function RequirementIntelligence() {
         </div>
 
         {findings.length > 0 ? (
-          <div className="ri-findings-list">
-            {findings.map((finding) => <FindingCard finding={finding} key={finding.findingId} />)}
-          </div>
+          <>
+            {findings.length > FINDINGS_PAGE_SIZE && (
+              <div className="ri-list-toolbar" aria-label="需求审查项分页">
+                <span role="status" aria-live="polite">
+                  当前显示 {pageStart + 1}–{Math.min(pageStart + FINDINGS_PAGE_SIZE, findings.length)} / {findings.length} 条
+                </span>
+                <div className="ri-pagination">
+                  <button
+                    type="button"
+                    className="ri-page-button"
+                    disabled={safePageIndex === 0}
+                    onClick={() => setPageIndex((value) => Math.max(0, Math.min(value, pageCount - 1) - 1))}
+                  >
+                    上一页
+                  </button>
+                  <span>第 {safePageIndex + 1} / {pageCount} 页</span>
+                  <button
+                    type="button"
+                    className="ri-page-button"
+                    disabled={safePageIndex >= pageCount - 1}
+                    onClick={() => setPageIndex((value) => Math.min(pageCount - 1, Math.max(0, value) + 1))}
+                  >
+                    下一页
+                  </button>
+                </div>
+              </div>
+            )}
+            <div className="ri-findings-list">
+              {visibleFindings.map((finding) => <FindingCard finding={finding} key={finding.findingId} />)}
+            </div>
+          </>
         ) : (
           <div className="ri-no-findings">
             <strong>{activeType === 'all' ? '当前没有活动需求审查项' : `当前没有${TYPE_META[activeType as RequirementFindingType].label}`}</strong>

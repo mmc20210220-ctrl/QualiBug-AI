@@ -4,10 +4,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const getFindingsMock = vi.fn();
 
 vi.mock('../client', () => ({
-  // data.ts 仅从 client 引入 getFindings / getKnowledgeAsset / getProjects；
+  // data.ts 仅从 client 引入 getFindings / getKnowledgeSummary / getProjects；
   // 共享存储只消费 getFindings。
   getFindings: (...args: unknown[]) => getFindingsMock(...args),
-  getKnowledgeAsset: vi.fn(),
+  getKnowledgeSummary: vi.fn(),
   getProjects: vi.fn(),
 }));
 

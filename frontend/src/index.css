@@ -1718,6 +1718,8 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
 .state-panel-actions {
   display: flex;
   justify-content: center;
+  flex-wrap: wrap;
+  gap: 8px;
   margin-top: 22px;
 }
 
@@ -5196,6 +5198,23 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
   font-size: 12px;
   line-height: 1.7;
 }
+.settings-read-alert {
+  display: grid;
+  gap: 6px;
+  margin: -4px 0 20px;
+  padding: 12px 14px;
+  border: 1px solid rgba(180, 35, 24, .22);
+  border-radius: 12px;
+  background: #fff8f7;
+  color: #7a271a;
+}
+.settings-read-alert p {
+  margin: 0;
+  color: #912018;
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
 .settings-card-sub {
   margin-top: 4px;
 }
@@ -5207,6 +5226,26 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
   margin-bottom: 14px;
+}
+.settings-topology-error {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 14px;
+  padding: 14px 16px;
+  border: 1px solid rgba(180, 35, 24, .24);
+  border-radius: 14px;
+  background: #fff8f7;
+  color: #7a271a;
+}
+.settings-topology-error p {
+  margin: 0;
+  color: #912018;
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.settings-topology-error .btn {
+  justify-self: start;
 }
 .settings-flex-grow {
   flex: 1 1 260px;

@@ -34,6 +34,94 @@ export type SavedServiceConfig = {
   auth_type?: 'password_login' | 'bearer_token' | 'api_key';
 };
 
+/**
+ * Build the environment topology from the same service configuration that the
+ * run center consumes. The pilot connector registry remains a compatibility
+ * projection, so it may be absent even when a project has usable services.
+ */
+export function serviceConfigAsConnector(
+  config: SavedServiceConfig,
+  legacy?: ConnectorRecord,
+): ConnectorRecord {
+  const name = asString(config.name).trim();
+  const endpoint = asString(config.base_url).trim();
+  const identity = normalizeKey(name || endpoint) || 'unnamed';
+  return {
+    connector_id: legacy?.connector_id || `service_config:${identity}`,
+    kind: legacy?.kind || 'http_api',
+    display_name: name || legacy?.display_name || endpoint || '未命名服务',
+    enabled: config.enabled !== false,
+    system_name: legacy?.system_name || name || undefined,
+    module_name: legacy?.module_name || undefined,
+    endpoint_ref: endpoint || legacy?.endpoint_ref || undefined,
+    credential_ref: legacy?.credential_ref || undefined,
+    external_ref: legacy?.external_ref,
+    created_at_utc: legacy?.created_at_utc,
+    last_sync_at_utc: legacy?.last_sync_at_utc,
+    last_sync_status: legacy?.last_sync_status,
+  };
+}
+
+function connectorMatchesServiceConfig(connector: ConnectorRecord, config: SavedServiceConfig): boolean {
+  const name = normalizeKey(asString(config.name));
+  const endpoint = normalizeKey(asString(config.base_url));
+  const connectorNames = [connector.display_name, connector.system_name]
+    .map((value) => normalizeKey(value || ''))
+    .filter(Boolean);
+  return Boolean(
+    (name && connectorNames.includes(name))
+    || (endpoint && normalizeKey(connector.endpoint_ref || '') === endpoint),
+  );
+}
+
+/**
+ * Merge legacy connector metadata into canonical service rows without
+ * duplicating the same target in the settings tree. Registry-only rows remain
+ * visible for backward compatibility, but service configs own the identity and
+ * enabled state whenever both projections exist.
+ */
+export function buildSettingsTopologyConnectors(
+  services: SavedServiceConfig[],
+  legacyConnectors: ConnectorRecord[],
+): ConnectorRecord[] {
+  const remaining = [...legacyConnectors];
+  const canonical = services.map((service) => {
+    const index = remaining.findIndex((connector) => connectorMatchesServiceConfig(connector, service));
+    const legacy = index >= 0 ? remaining.splice(index, 1)[0] : undefined;
+    return serviceConfigAsConnector(service, legacy);
+  });
+  return canonical.concat(remaining);
+}
+
+/**
+ * Re-submit a masked service row while changing only its enabled state. The
+ * backend preserves masked credentials, so toggling a service cannot erase
+ * the customer's existing auth or database material.
+ */
+export function serviceConfigUpdatePayload(
+  config: SavedServiceConfig,
+  patch: { enabled?: boolean } = {},
+): Record<string, unknown> {
+  const db = extractDbConfig(config);
+  const roleAccounts = extractRoleAccounts(config)
+    .filter((account) => account.role && (account.username || account.password));
+  return {
+    name: asString(config.name).trim(),
+    base_url: asString(config.base_url).trim(),
+    enabled: patch.enabled ?? config.enabled !== false,
+    login_api: extractLoginApi(config),
+    auth_type: extractAuthType(config),
+    role_accounts: roleAccounts,
+    bearer_token: extractBearerToken(config),
+    api_key: extractApiKey(config),
+    db_host: db.host,
+    db_port: db.port || getDbDefaultPort(db.type),
+    db_name: db.name,
+    db_user: db.user,
+    db_pass: db.password,
+  };
+}
+
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 export const DB_OPTIONS: DbOption[] = [

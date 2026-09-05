@@ -9,6 +9,8 @@ type SettingsTopologySectionProps = {
   onOpenCreateConnector: (systemName?: string) => void;
   onOpenEditConnector: (connector: ConnectorRecord) => void;
   onToggleConnectorStatus: (connector: ConnectorRecord, enabled: boolean) => void;
+  loadError?: string;
+  onRetry?: () => void;
   children?: ReactNode;
 };
 
@@ -19,6 +21,8 @@ export function SettingsTopologySection({
   onOpenCreateConnector,
   onOpenEditConnector,
   onToggleConnectorStatus,
+  loadError = '',
+  onRetry,
   children,
 }: SettingsTopologySectionProps) {
   const {
@@ -43,13 +47,21 @@ export function SettingsTopologySection({
         {project && systemsCount > 0 && <button onClick={() => onOpenCreateConnector()} className="btn btn-primary settings-btn-compact">接入系统</button>}
       </div>
 
-      <div className="settings-mini-stats">
-        <div className="settings-mini-stat"><span>已接入系统</span><strong>{systemsCount}</strong></div>
-        <div className="settings-mini-stat"><span>可用服务</span><strong>{enabledConnectors}</strong></div>
-        <div className="settings-mini-stat"><span>后台识别模块</span><strong>{modulesCount}</strong></div>
-      </div>
+      {loadError ? (
+        <section className="settings-topology-error" role="alert">
+          <strong>系统接入状态暂不可用</strong>
+          <p>{loadError}</p>
+          {onRetry && <button type="button" className="btn btn-secondary settings-btn-mini" onClick={onRetry}>重新读取</button>}
+        </section>
+      ) : (
+        <div className="settings-mini-stats">
+          <div className="settings-mini-stat"><span>已接入系统</span><strong>{systemsCount}</strong></div>
+          <div className="settings-mini-stat"><span>可用服务</span><strong>{enabledConnectors}</strong></div>
+          <div className="settings-mini-stat"><span>后台识别模块</span><strong>{modulesCount}</strong></div>
+        </div>
+      )}
 
-      {!project ? (
+      {loadError ? null : !project ? (
         <section className="findings-empty-state compact">
           <span className="findings-empty-kicker">等待客户</span>
           <h3>请先选择客户项目</h3>

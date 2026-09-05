@@ -418,7 +418,20 @@ function VerifyWorkspace() {
   }
 
   if (!taskId && error && !data) {
-    return <StatePanel eyebrow="Live Workspace · 连接状态" title="无法读取当前项目运行结果" description={error} action={<button className="btn btn-primary" onClick={refetch}>重新连接</button>} />;
+    return (
+      <StatePanel
+        eyebrow="Live Workspace · 连接状态"
+        title="无法读取当前项目运行结果"
+        description={`${error}。项目结果不可用时，任务记录和企业 Knowledge 仍可单独查看。`}
+        action={(
+          <>
+            <button className="btn btn-primary" onClick={refetch}>重新连接</button>
+            <Link className="btn btn-secondary" to={buildProjectPath('/dashboard', project)}>查看任务记录</Link>
+            <Link className="btn btn-secondary" to={buildProjectPath('/analyze', project)}>查看 Knowledge</Link>
+          </>
+        )}
+      />
+    );
   }
 
   return (

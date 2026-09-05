@@ -104,7 +104,20 @@ export function AgentFindings() {
   }
 
   if (error && confirmed.length === 0) {
-    return <StatePanel eyebrow="Findings · 连接状态" title="无法读取当前 Finding" description={error} action={<button type="button" className="btn btn-primary" onClick={refetch}>重新连接</button>} />;
+    return (
+      <StatePanel
+        eyebrow="Findings · 连接状态"
+        title="无法读取当前 Finding"
+        description={`${error}。页面不会把读取失败解释为 0 个问题。`}
+        action={(
+          <>
+            <button type="button" className="btn btn-primary" onClick={refetch}>重新连接</button>
+            <Link className="btn btn-secondary" to={buildProjectPath('/verify', project)}>返回工作台</Link>
+            <Link className="btn btn-secondary" to={buildProjectPath('/analyze', project)}>查看 Knowledge</Link>
+          </>
+        )}
+      />
+    );
   }
 
   return (

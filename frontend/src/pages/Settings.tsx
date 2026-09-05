@@ -15,7 +15,8 @@ import {
   DB_OPTIONS, getDbDefaultPort, getErrorMessage, buildTenantId,
   asRecord, asString, normalizeRoleAccounts,
   extractRoleAccounts, extractAuthType, extractLoginApi, extractBearerToken, extractApiKey,
-  extractDbConfig, findMatchingServiceConfig,
+  extractDbConfig, findMatchingServiceConfig, buildSettingsTopologyConnectors,
+  serviceConfigUpdatePayload,
   type TenantCreateResponse, type SavedServiceConfig,
 } from '../lib/settings-utils';
 
@@ -37,8 +38,11 @@ export function Settings() {
   const [importId, setImportId] = useState('');
   const [llmUrl, setLlmUrl] = useState(''); const [llmModel, setLlmModel] = useState(''); const [llmKey, setLlmKey] = useState(''); const [llmStatus, setLlmStatus] = useState(''); const [llmError, setLlmError] = useState('');
   const [health, setHealth] = useState<Record<string, unknown> | null>(null);
+  const [healthLoadError, setHealthLoadError] = useState('');
   const [connectors, setConnectors] = useState<ConnectorRecord[]>([]);
+  const [connectorLoadError, setConnectorLoadError] = useState('');
   const [serviceConfigs, setServiceConfigs] = useState<SavedServiceConfig[]>([]);
+  const [serviceConfigLoadError, setServiceConfigLoadError] = useState('');
   const [cStatus, setCStatus] = useState('');
   const [formOpen, setFormOpen] = useState(false); const [editId, setEditId] = useState('');
   const [cSys, setCSys] = useState(''); const [cMod, setCMod] = useState(''); const [cName, setCName] = useState('');
@@ -60,7 +64,21 @@ export function Settings() {
   const [dbTestMsg, setDbTestMsg] = useState(''); const [dbTestOk, setDbTestOk] = useState(false); const [dbTestLoad, setDbTestLoad] = useState(false);
   const [expSys, setExpSys] = useState<Set<string>>(new Set());
 
-  useEffect(() => { let c=false; getHealth().then(d=>{ if(!c) setHealth(d&&typeof d==='object'?d as Record<string,unknown>:null); }).catch(()=>{ if(!c) setHealth(null); }); return ()=>{c=true}; }, []);
+  useEffect(() => {
+    let c = false;
+    getHealth()
+      .then((d) => {
+        if (c) return;
+        setHealth(d && typeof d === 'object' ? d as Record<string, unknown> : null);
+        setHealthLoadError('');
+      })
+      .catch((error: unknown) => {
+        if (c) return;
+        setHealth(null);
+        setHealthLoadError(getErrorMessage(error, '服务健康状态读取失败'));
+      });
+    return () => { c = true; };
+  }, []);
   useEffect(() => {
     setWsStatus('');
     if (project || workspaceOptions.length !== 1) return;
@@ -68,14 +86,37 @@ export function Settings() {
   }, [project, switchProject, workspaceOptions]);
   useEffect(() => { if(!cStatus.startsWith('✓')) return; const t=window.setTimeout(()=>setCStatus(''),3000); return ()=>window.clearTimeout(t); }, [cStatus]);
   useEffect(() => { if(!hlId) return; const t=window.setTimeout(()=>setHlId(''),4000); return ()=>window.clearTimeout(t); }, [hlId]);
-  useEffect(() => { let c=false; setCStatus(''); if(!project){ setConnectors([]); return ()=>{c=true}; }
-    listConnectors(project).then(r=>{ if(!c) setConnectors(r); }).catch(()=>{ if(!c) setConnectors([]); }); return ()=>{c=true}; }, [project]);
+  useEffect(() => {
+    let c = false;
+    setCStatus('');
+    setConnectorLoadError('');
+    if (!project) {
+      setConnectors([]);
+      return () => { c = true; };
+    }
+    listConnectors(project)
+      .then((r) => {
+        if (c) return;
+        setConnectors(r);
+        setConnectorLoadError('');
+      })
+      .catch((error: unknown) => {
+        if (c) return;
+        // A failed read is not an empty topology. Clear stale rows, but keep
+        // the reason visible so the UI cannot suggest a fresh setup is needed.
+        setConnectors([]);
+        setConnectorLoadError(getErrorMessage(error, '系统接入状态读取失败'));
+      });
+    return () => { c = true; };
+  }, [project]);
   useEffect(() => {
     let cancelled = false;
     if (!project) {
       setServiceConfigs([]);
+      setServiceConfigLoadError('');
       return () => { cancelled = true; };
     }
+    setServiceConfigLoadError('');
     getServiceCredentials(project)
       .then((payload) => {
         if (cancelled) return;
@@ -83,16 +124,38 @@ export function Settings() {
         const services = Array.isArray(data.services) ? data.services : [];
         setServiceConfigs(services.map((item) => asRecord(item) as SavedServiceConfig));
       })
-      .catch(() => {
-        if (!cancelled) setServiceConfigs([]);
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        setServiceConfigs([]);
+        setServiceConfigLoadError(getErrorMessage(error, '凭据状态读取失败'));
       });
     return () => { cancelled = true; };
   }, [project]);
 
-  const reC = async () => { if(!project){ setConnectors([]); return []; } try{ setCStatus('加载中...'); const r=await listConnectors(project); setConnectors(r); setCStatus(''); return r; } catch(e:unknown){ setCStatus(`✗ ${e instanceof Error?e.message:'加载失败'}`); return []; } };
+  const reC = async () => {
+    if (!project) {
+      setConnectors([]);
+      setConnectorLoadError('');
+      return [];
+    }
+    try {
+      setCStatus('加载中...');
+      const r = await listConnectors(project);
+      setConnectors(r);
+      setConnectorLoadError('');
+      setCStatus('');
+      return r;
+    } catch (error: unknown) {
+      setConnectors([]);
+      setConnectorLoadError(getErrorMessage(error, '系统接入状态读取失败'));
+      setCStatus(`✗ ${getErrorMessage(error, '加载失败')}`);
+      return [];
+    }
+  };
   const refreshServiceConfigs = async () => {
     if (!project) {
       setServiceConfigs([]);
+      setServiceConfigLoadError('');
       return [];
     }
     try {
@@ -101,9 +164,11 @@ export function Settings() {
       const services = Array.isArray(data.services) ? data.services : [];
       const next = services.map((item) => asRecord(item) as SavedServiceConfig);
       setServiceConfigs(next);
+      setServiceConfigLoadError('');
       return next;
-    } catch {
+    } catch (error: unknown) {
       setServiceConfigs([]);
+      setServiceConfigLoadError(getErrorMessage(error, '凭据状态读取失败'));
       return [];
     }
   };
@@ -224,18 +289,33 @@ export function Settings() {
   const handleConnectorStatusChange = async (connector: ConnectorRecord, enabled: boolean) => {
     setCStatus('处理中...');
     try {
-      await registerConnector({
-        project_id: project,
-        connector_id: connector.connector_id,
-        display_name: connector.display_name,
-        kind: connector.kind || 'http_api',
-        enabled,
-        system_name: connector.system_name || connector.display_name || undefined,
-        module_name: connector.module_name || undefined,
-        endpoint_ref: connector.endpoint_ref || undefined,
-        credential_ref: connector.credential_ref || undefined,
-      });
+      const matchedService = findMatchingServiceConfig(connector, serviceConfigs);
+      if (matchedService && asString(matchedService.name).trim()) {
+        // Service credentials are the run center's canonical target catalog.
+        // Re-submit the masked row so the backend can preserve existing secrets
+        // while persisting the enabled state used by future runs.
+        await saveServiceCredentials({
+          project,
+          previous_name: asString(matchedService.name).trim(),
+          service: serviceConfigUpdatePayload(matchedService, { enabled }),
+        });
+      } else {
+        // Registry-only rows remain supported for older projects that have not
+        // migrated their target into the canonical service catalog yet.
+        await registerConnector({
+          project_id: project,
+          connector_id: connector.connector_id,
+          display_name: connector.display_name,
+          kind: connector.kind || 'http_api',
+          enabled,
+          system_name: connector.system_name || connector.display_name || undefined,
+          module_name: connector.module_name || undefined,
+          endpoint_ref: connector.endpoint_ref || undefined,
+          credential_ref: connector.credential_ref || undefined,
+        });
+      }
       await reC();
+      await refreshServiceConfigs();
       setCStatus(`✓ 已${enabled ? '启用' : '停用'}`);
     } catch (error: unknown) {
       setCStatus(`✗ ${getErrorMessage(error, '失败')}`);
@@ -383,9 +463,13 @@ export function Settings() {
     }
   };
 
+  const topologyConnectors = useMemo(
+    () => buildSettingsTopologyConnectors(serviceConfigs, connectors),
+    [serviceConfigs, connectors],
+  );
   const topology = useMemo(
-    () => buildSettingsTopologyViewModel(connectors, expSys, hlId, credentialLabel),
-    [connectors, expSys, hlId],
+    () => buildSettingsTopologyViewModel(topologyConnectors, expSys, hlId, credentialLabel),
+    [topologyConnectors, expSys, hlId],
   );
   const llmL = useMemo(()=>{ const s=health&&typeof health==='object'?(health as Record<string,unknown>).llm_status:null; return String((s&&typeof s==='object'?(s as Record<string,unknown>).label||(s as Record<string,unknown>).status:'')||'未验证'); },[health]);
   const pv=useMemo(()=>String((health&&typeof health==='object'?(health as Record<string,unknown>).version:'')||'').trim()||'未知',[health]);
@@ -407,6 +491,15 @@ export function Settings() {
   const dbTestHintText = !dbHost.trim()
     ? '请填写主机地址和端口'
     : (dbUser.trim() && dbPass ? '将验证 TCP 连通性和数据库认证' : '仅验证 TCP 端口连通性');
+  const settingsReadErrors = [
+    serviceConfigLoadError ? `凭据状态：${serviceConfigLoadError}` : '',
+    healthLoadError ? `服务健康状态：${healthLoadError}` : '',
+  ].filter(Boolean);
+  // If the canonical service catalog is available, a missing legacy registry
+  // is harmless. When both sources are empty and the registry read failed,
+  // keep the topology fail-visible instead of presenting a false empty setup.
+  const topologyLoadError = serviceConfigLoadError
+    || (!serviceConfigs.length && connectorLoadError ? connectorLoadError : '');
 
   const serviceForm = (
     <SettingsServiceForm
@@ -471,6 +564,13 @@ export function Settings() {
         </div>
       </div>
 
+      {settingsReadErrors.length > 0 && (
+        <div className="settings-read-alert" role="alert">
+          <strong>部分系统配置暂不可用</strong>
+          <p>{settingsReadErrors.join('；')}。页面不会把读取失败显示成“未配置”。</p>
+        </div>
+      )}
+
       <div className="settings-layout">
         <SettingsCustomerSection
           workspaceLabel={workspaceLabel}
@@ -489,6 +589,8 @@ export function Settings() {
         <SettingsTopologySection
           project={project}
           topology={topology}
+          loadError={topologyLoadError}
+          onRetry={() => { void Promise.all([reC(), refreshServiceConfigs()]); }}
           onToggleSystem={toSys}
           onOpenCreateConnector={(systemName) => openCreateConnectorForm(systemName || '')}
           onOpenEditConnector={openEditConnectorForm}
