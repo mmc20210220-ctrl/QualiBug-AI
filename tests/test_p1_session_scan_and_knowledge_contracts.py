@@ -257,6 +257,35 @@ def test_scan_preflight_accepts_markdown_api_as_executable_contract(
     assert "NO_API_SPEC" not in result["blocking_codes"]
 
 
+def test_scan_preflight_accepts_structured_api_receipt_when_legacy_type_is_broad(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    project = "structured-api-preflight"
+    service_dir = tmp_path / "platform_workspace" / project
+    service_dir.mkdir(parents=True)
+    (service_dir / "multi_service_config.json").write_text(
+        json.dumps({"services": [{"name": "gateway"}]}), encoding="utf-8"
+    )
+    monkeypatch.setattr(
+        "ai_test_asset_center.enterprise_source_registry.list_source_assets",
+        lambda project, root: [{
+            "source_type": "business_rules",
+            "parse": {"api_artifact_semantic_receipt": {"artifact_kind": "openapi"}},
+        }],
+    )
+    monkeypatch.setattr(
+        "ai_test_asset_center.private_pilot_scan_handlers.build_target_policy_decision",
+        lambda **kwargs: {"blocking_codes": [], "write_allowed": True, "read_allowed": True},
+    )
+    result = _PreflightHarness()._handle_scan_preflight(
+        project, tmp_path,
+        {"base_url": "http://sandbox.example", "approved_base_url": "http://sandbox.example", "environment_type": "test", "environment_ref": "sandbox-1"},
+    )
+    assert result["ready"] is True
+    assert "NO_API_SPEC" not in result["blocking_codes"]
+
+
 def test_report_must_be_bound_to_current_scan(tmp_path: Path) -> None:
     project_dir = tmp_path / "platform_outputs" / "project-a"
     project_dir.mkdir(parents=True)

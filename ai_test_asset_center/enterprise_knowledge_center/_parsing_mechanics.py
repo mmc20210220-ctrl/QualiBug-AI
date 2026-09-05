@@ -94,6 +94,18 @@ def _classify_source_multi(name: str, text: str, explicit: str | None = None) ->
         (suffix == ".har" or (suffix == ".json" and isinstance(data, dict) and "log" in data), "har"),
         (suffix == ".log" or (suffix == ".txt" and _has("log", "日志", "access", "error")), "application_log"),
         (suffix == ".svg" or "<svg" in str(text or "").lower(), "uiux_svg"),
+        # Structured API identity outranks lexical business-rule markers in
+        # descriptions. An OpenAPI document may describe business rules, but
+        # its primary transport contract must remain executable API evidence.
+        (
+            (isinstance(data, dict) and isinstance(data.get("paths"), dict) and (data.get("openapi") or data.get("swagger")))
+            or (
+                suffix in {".yaml", ".yml"}
+                and re.search(r"(?m)^\s*(?:openapi|swagger)\s*:\s*[^#\r\n]+", text or "")
+                and re.search(r"(?m)^\s*paths\s*:\s*", text or "")
+            ),
+            "openapi",
+        ),
         (
             _has("business_rule", "business-rule", "domain_rule", "domain-rule", "业务规则", "业务约束")
             or (
@@ -111,7 +123,6 @@ def _classify_source_multi(name: str, text: str, explicit: str | None = None) ->
         (_has("postman",), "postman"),
         (_has("confluence",), "confluence_document"),
         (_has("feishu", "lark", "飞书"), "feishu_document"),
-        (isinstance(data, dict) and isinstance(data.get("paths"), dict) and (data.get("openapi") or data.get("swagger")), "openapi"),
         (isinstance(data, dict) and isinstance(data.get("item"), list) and (data.get("info") or {}).get("schema", "").lower().find("postman") >= 0, "postman"),
         (name.lower().endswith(".sql") or "create table" in low or "alter table" in low, "database_schema"),
         (_looks_like_field_dictionary(name, text, data), "db_field_dictionary"),
@@ -3004,5 +3015,3 @@ def _parse_source(blob: bytes, filename: str, source_type: str, source_id: str) 
         "document_structure": _doc_struct.to_dict(),
         "source_types": _source_types,
     }
-
-

@@ -260,7 +260,43 @@ class ScanHandlersMixin:
             source_types = {
                 _text(asset.get("source_type")).lower() for asset in assets
             }
-            if not source_types.intersection(
+            structured_api_evidence = any(
+                _text(
+                    ((asset.get("parse") or {}).get("api_artifact_semantic_receipt") or {}).get(
+                        "artifact_kind"
+                    )
+                ).lower()
+                in {"openapi", "swagger", "postman"}
+                for asset in assets
+                if isinstance(asset.get("parse"), dict)
+            )
+            if not structured_api_evidence and not source_types.intersection(
+                {"openapi", "openapi3", "swagger", "postman", "api_spec", "markdown_api"}
+            ):
+                # Older registry projections may have persisted a broad
+                # lexical type (for example business_rules) even though the
+                # immutable version is an OpenAPI YAML document. Reclassify
+                # that existing source from its own bytes; do not trust the
+                # filename or invent a contract.
+                from .enterprise_knowledge_center import classify_enterprise_knowledge_source
+                from .enterprise_source_registry import list_source_asset_versions, load_source_content
+                for asset in assets:
+                    versions = list_source_asset_versions(
+                        project, root=root, asset_id=_text(asset.get("source_id"))
+                    )
+                    latest_id = _text(asset.get("latest_version_id"))
+                    latest = next((row for row in versions if _text(row.get("version_id")) == latest_id), None)
+                    if not latest:
+                        continue
+                    filename = _text(latest.get("filename"))
+                    if Path(filename).suffix.lower() not in {".yaml", ".yml", ".json"}:
+                        continue
+                    content = load_source_content(project, _text(latest.get("source_hash")), root=root)
+                    detected = classify_enterprise_knowledge_source(filename, content, None)
+                    if detected in {"openapi", "openapi3", "swagger", "postman", "api_spec", "markdown_api"}:
+                        structured_api_evidence = True
+                        break
+            if not structured_api_evidence and not source_types.intersection(
                 {
                     "openapi",
                     "openapi3",
