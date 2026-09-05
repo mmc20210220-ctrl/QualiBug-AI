@@ -116,3 +116,18 @@ it('does not allow target selection after execution has been claimed', async () 
   expect(screen.queryByRole('checkbox', { name: /选择 Test Target/ })).toBeNull();
   expect(groundAgentTask).not.toHaveBeenCalled();
 });
+
+it('retains selected targets across pagination and search without executing grounding', async () => {
+  vi.mocked(getTestIntelligence).mockResolvedValue({ ...analysis, obligations: Array.from({ length: 25 }, (_, i) => ({ ...analysis.obligations[0], obligationId: `target-${i}`, title: `Scenario ${i}` })) });
+  vi.mocked(getAgentTask).mockResolvedValue(task);
+  render(<MemoryRouter initialEntries={['/analyze?project=workspace&task=task-a']}><TestIntelligence /></MemoryRouter>);
+  const selected = await screen.findByRole('checkbox', { name: '选择 Test Target：Scenario 0' });
+  fireEvent.click(selected);
+  fireEvent.click(screen.getByRole('button', { name: '下一页' }));
+  expect(screen.queryByRole('heading', { name: 'Scenario 0' })).toBeNull();
+  expect(screen.getByRole('heading', { name: 'Scenario 24' })).toBeTruthy();
+  fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'Scenario 0' } });
+  expect((screen.getByRole('checkbox', { name: '选择 Test Target：Scenario 0' }) as HTMLInputElement).checked).toBe(true);
+  expect(groundAgentTask).not.toHaveBeenCalled();
+  cleanup();
+});

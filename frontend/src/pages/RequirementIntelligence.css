@@ -496,3 +496,10 @@
     justify-content: space-between;
   }
 }
+
+.ri-list-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 14px 0; }
+.ri-list-toolbar label { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--ink); font-size: 13px; }
+.ri-list-toolbar input[type="search"] { width: min(300px, 100%); min-width: 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; color: var(--ink); background: var(--surface); font: inherit; }
+.ri-list-toolbar input:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.ri-list-toolbar > span { color: var(--subtle); font-size: 13px; }
+.ri-list-toolbar > div { display: flex; align-items: center; gap: 10px; }

@@ -30,8 +30,8 @@ const READINESS_META: Record<RequirementReadinessStatus, {
 }> = {
   NOT_READY: {
     eyebrow: '需求就绪状态 · 未就绪',
-    title: '当前需求存在阻塞项，建议先澄清再进入实现',
-    description: '至少一项企业资料冲突或关键业务定义缺失正在阻塞正式理解。以下结论只来自可追溯资料证据。',
+    title: '当前资料存在需要澄清的需求问题',
+    description: '以下审查项来自已有资料证据。需求不确定性不等于执行安全失败，可观察且风险受控的实验仍可继续。',
   },
   REVIEW_REQUIRED: {
     eyebrow: '需求就绪状态 · 待确认',
@@ -78,7 +78,7 @@ function FindingCard({ finding }: { finding: RequirementFinding }) {
         <div>
           <div className="ri-tags">
             <span className={`ri-tag type-${finding.findingType}`}>{meta.label}</span>
-            {finding.blocking ? <span className="ri-tag blocker">阻塞</span> : <span className="ri-tag review">待确认</span>}
+            {finding.blocking ? <span className="ri-tag blocker">影响需求理解</span> : <span className="ri-tag review">待确认</span>}
             {finding.severity && <span className="ri-tag neutral">{finding.severity}</span>}
           </div>
           <h3>{finding.title}</h3>
@@ -102,7 +102,7 @@ function FindingCard({ finding }: { finding: RequirementFinding }) {
         </div>
       )}
 
-      <details className="ri-evidence-disclosure" open={finding.blocking}>
+      <details className="ri-evidence-disclosure">
         <summary>
           查看证据
           <span>{finding.evidence.length} 条 · {finding.sourceIds.length} 个来源</span>
@@ -134,6 +134,8 @@ export function RequirementIntelligence() {
   const [error, setError] = useState('');
   const [activeType, setActiveType] = useState<RequirementFindingType | 'all'>('all');
   const [pageIndex, setPageIndex] = useState(0);
+  const [query, setQuery] = useState('');
+  const [onlyBlocking, setOnlyBlocking] = useState(false);
 
   const load = useCallback(async () => {
     if (!project) {
@@ -162,9 +164,13 @@ export function RequirementIntelligence() {
 
   const findings = useMemo(() => {
     if (!analysis) return [];
-    if (activeType === 'all') return analysis.findings;
-    return analysis.findings.filter((finding) => finding.findingType === activeType);
-  }, [activeType, analysis]);
+    const needle = query.trim().toLocaleLowerCase();
+    return analysis.findings.filter((finding) =>
+      (activeType === 'all' || finding.findingType === activeType)
+      && (!onlyBlocking || finding.blocking)
+      && (!needle || [finding.title, finding.description, finding.operatorAction, ...finding.sourceIds, ...finding.relatedObjectRefs, ...finding.relatedOperationRefs].join(' ').toLocaleLowerCase().includes(needle)),
+    );
+  }, [activeType, analysis, query, onlyBlocking]);
 
   const pageCount = Math.max(1, Math.ceil(findings.length / FINDINGS_PAGE_SIZE));
   const safePageIndex = Math.min(pageIndex, pageCount - 1);
@@ -227,7 +233,7 @@ export function RequirementIntelligence() {
           <span>Requirement Readiness</span>
           <strong>{readiness.status}</strong>
           <p>{readiness.blockingFindingCount > 0
-            ? `${readiness.blockingFindingCount} 个阻塞项必须先处理`
+            ? `${readiness.blockingFindingCount} 个事项影响需求理解，需澄清`
             : readiness.reviewRequiredFindingCount > 0
               ? `${readiness.reviewRequiredFindingCount} 个事项需要人工确认`
               : '当前没有活动审查项'}</p>
@@ -283,6 +289,12 @@ export function RequirementIntelligence() {
           </div>
         </div>
 
+        <div className="ri-list-toolbar">
+          <label>搜索审查项<input type="search" value={query} placeholder="问题、业务对象或来源" onChange={(event) => { setQuery(event.target.value); setPageIndex(0); }} /></label>
+          <label><input type="checkbox" checked={onlyBlocking} onChange={(event) => { setOnlyBlocking(event.target.checked); setPageIndex(0); }} /> 仅看影响需求理解的事项</label>
+          <span role="status">匹配 {findings.length} / {analysis.findings.length} 条</span>
+          {(query || onlyBlocking || activeType !== 'all') && <button type="button" className="btn btn-secondary" onClick={() => { setQuery(''); setOnlyBlocking(false); selectType('all'); }}>清除筛选</button>}
+        </div>
         {findings.length > 0 ? (
           <>
             {findings.length > FINDINGS_PAGE_SIZE && (
@@ -317,7 +329,7 @@ export function RequirementIntelligence() {
           </>
         ) : (
           <div className="ri-no-findings">
-            <strong>{activeType === 'all' ? '当前没有活动需求审查项' : `当前没有${TYPE_META[activeType as RequirementFindingType].label}`}</strong>
+            <strong>{query || onlyBlocking ? '没有匹配当前筛选的审查项' : activeType === 'all' ? '当前没有活动需求审查项' : `当前没有${TYPE_META[activeType as RequirementFindingType].label}`}</strong>
             <p>系统不会为了填满报告而生成无证据结论。新增或更新企业资料后可重新运行审查。</p>
           </div>
         )}

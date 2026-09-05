@@ -193,3 +193,19 @@ describe('Requirement Intelligence workspace', () => {
     expect(screen.getByText('冲突 20')).toBeTruthy();
   });
 });
+
+it('combines search and understanding filters without changing source readiness', async () => {
+  getRequirementIntelligenceMock.mockResolvedValue(ANALYSIS);
+  const { container } = render(<MemoryRouter initialEntries={['/requirements?project=project-a']}><RequirementIntelligence /></MemoryRouter>);
+  await screen.findByText('业务规则约束冲突');
+  expect(container.querySelectorAll('details[open]').length).toBe(0);
+  fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'state' } });
+  expect(screen.queryByText('业务规则约束冲突')).toBeNull();
+  expect(screen.getByText('生命周期起始状态定义缺失')).toBeTruthy();
+  fireEvent.click(screen.getByRole('checkbox'));
+  expect(screen.getByText('没有匹配当前筛选的审查项')).toBeTruthy();
+  expect(screen.getByText('NOT_READY')).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: '清除筛选' }));
+  expect(screen.getByText('业务规则约束冲突')).toBeTruthy();
+  cleanup();
+});

@@ -260,6 +260,10 @@ export function TestIntelligence() {
   const [loading, setLoading] = useState(Boolean(project));
   const [error, setError] = useState('');
   const [activeKind, setActiveKind] = useState<TestObligationKind | 'all'>('all');
+  const [query, setQuery] = useState('');
+  const [pageIndex, setPageIndex] = useState(0);
+  const pageSize = 20;
+  const selectKind = (kind: TestObligationKind | 'all') => { setActiveKind(kind); setPageIndex(0); };
   const [task, setTask] = useState<AgentTask | null>(null);
   const [taskLoading, setTaskLoading] = useState(Boolean(taskId));
   const [taskError, setTaskError] = useState('');
@@ -358,9 +362,15 @@ export function TestIntelligence() {
 
   const obligations = useMemo(() => {
     if (!analysis) return [];
-    if (activeKind === 'all') return analysis.obligations;
-    return analysis.obligations.filter((item) => item.obligationKind === activeKind);
-  }, [activeKind, analysis]);
+    const needle = query.trim().toLocaleLowerCase();
+    return analysis.obligations.filter((item) =>
+      (activeKind === 'all' || item.obligationKind === activeKind)
+      && (!needle || [item.title, item.objective, item.operationRef, ...item.objectRefs, ...item.actorRefs, ...item.sourceIds].join(' ').toLocaleLowerCase().includes(needle)),
+    );
+  }, [activeKind, analysis, query]);
+  const pageCount = Math.max(1, Math.ceil(obligations.length / pageSize));
+  const safePage = Math.min(pageIndex, pageCount - 1);
+  const visibleObligations = obligations.slice(safePage * pageSize, (safePage + 1) * pageSize);
 
   const designsByObligation = useMemo<Map<string, TestDesign>>(() => {
     if (!analysis) return new Map<string, TestDesign>();
@@ -405,7 +415,7 @@ export function TestIntelligence() {
           <div className="ti-hero-actions">
             <button type="button" className="btn btn-primary" onClick={() => navigateToProjectPath('/materials', project)}>管理企业资料</button>
             <button type="button" className="btn btn-secondary" onClick={() => void load()}>刷新测试智能</button>
-            <button type="button" className="btn btn-secondary" onClick={() => navigateToProjectPath('/requirements', project)}>查看需求审查</button>
+            <button type="button" className="btn btn-secondary" onClick={() => { const next = new URLSearchParams(params); next.set('view', 'requirements'); navigateToProjectPath('/analyze', project, next.toString()); }}>查看需求审查</button>
           </div>
         </div>
         <div className="ti-coverage-card" aria-label="支持语义覆盖">
@@ -483,15 +493,25 @@ export function TestIntelligence() {
         <div className="ti-section-heading">
           <div><span>Test Obligations + Test Design</span><h2>从“必须验证什么”到“如何验证”</h2></div>
           <div className="ti-filter" role="group" aria-label="按测试义务类型筛选">
-            <button type="button" className={activeKind === 'all' ? 'active' : ''} onClick={() => setActiveKind('all')}>全部 {analysis.obligations.length}</button>
+            <button type="button" className={activeKind === 'all' ? 'active' : ''} onClick={() => selectKind('all')}>全部 {analysis.obligations.length}</button>
             {(Object.keys(KIND_META) as TestObligationKind[]).map((kind) => (
-              <button key={kind} type="button" className={activeKind === kind ? 'active' : ''} onClick={() => setActiveKind(kind)} title={KIND_META[kind].description}>{KIND_META[kind].short} {counts[kind]}</button>
+              <button key={kind} type="button" className={activeKind === kind ? 'active' : ''} onClick={() => selectKind(kind)} title={KIND_META[kind].description}>{KIND_META[kind].short} {counts[kind]}</button>
             ))}
           </div>
         </div>
 
+        <div className="ti-list-toolbar">
+          <label>搜索测试设计<input type="search" value={query} placeholder="场景、业务对象、角色或来源" onChange={(event) => { setQuery(event.target.value); setPageIndex(0); }} /></label>
+          <span role="status">匹配 {obligations.length} / {analysis.obligations.length} 个目标</span>
+          {(query || activeKind !== 'all') && <button type="button" className="btn btn-secondary" onClick={() => { setQuery(''); selectKind('all'); }}>清除筛选</button>}
+          {pageCount > 1 && <div aria-label="测试设计分页">
+            <button type="button" className="btn btn-secondary" disabled={safePage === 0} onClick={() => setPageIndex(safePage - 1)}>上一页</button>
+            <span>第 {safePage + 1} / {pageCount} 页</span>
+            <button type="button" className="btn btn-secondary" disabled={safePage === pageCount - 1} onClick={() => setPageIndex(safePage + 1)}>下一页</button>
+          </div>}
+        </div>
         {obligations.length > 0 ? (
-          <div className="ti-obligations-list">{obligations.map((item) => (
+          <div className="ti-obligations-list">{visibleObligations.map((item) => (
             <ObligationCard
               obligation={item}
               design={designsByObligation.get(item.obligationId)}
@@ -503,7 +523,7 @@ export function TestIntelligence() {
           ))}</div>
         ) : (
           <div className="ti-no-obligations">
-            <strong>{activeKind === 'all' ? '当前没有可交付 Test Obligation' : `当前没有${KIND_META[activeKind as TestObligationKind].label}义务`}</strong>
+            <strong>{query ? '没有匹配当前搜索的测试设计' : activeKind === 'all' ? '当前没有可交付 Test Obligation' : `当前没有${KIND_META[activeKind as TestObligationKind].label}义务`}</strong>
             <p>{coverage.status === 'NOT_MEASURED'
               ? '当前没有进入 v1 支持语义 denominator 的正式业务语义。系统不会把空集合显示成 100% 覆盖。'
               : '系统不会为了填满报告而生成无证据测试义务。'}</p>

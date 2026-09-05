@@ -102,3 +102,10 @@
 
 .ti-target-detail > summary { cursor: pointer; padding: 14px 0; color: var(--primary); font-size: 13px; }
 .ti-target-detail[open] > summary { margin-bottom: 12px; }
+
+.ti-list-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 14px 0; }
+.ti-list-toolbar label { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--ink); font-size: 13px; }
+.ti-list-toolbar input[type="search"] { width: min(300px, 100%); min-width: 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; color: var(--ink); background: var(--surface); font: inherit; }
+.ti-list-toolbar input:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.ti-list-toolbar > span { color: var(--subtle); font-size: 13px; }
+.ti-list-toolbar > div { display: flex; align-items: center; gap: 10px; }
