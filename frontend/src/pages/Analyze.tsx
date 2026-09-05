@@ -8,7 +8,7 @@ import { usePageTitle } from '../lib/page-title';
 import { useProjectNavigation } from '../lib/project-navigation';
 import './Analyze.css';
 
-type AnalyzeView = 'requirements' | 'test-targets';
+type AnalyzeView = 'requirements' | 'test-targets' | 'test-data';
 
 const PRD_ACCEPT = '.pdf,.doc,.docx,.md,.txt,.ppt,.pptx';
 
@@ -20,7 +20,8 @@ export function Analyze() {
   const project = params.get('project')?.trim() || '';
   const taskId = params.get('task')?.trim() || '';
   const goal = params.get('goal')?.trim() || '';
-  const activeView: AnalyzeView = params.get('view') === 'test-targets' ? 'test-targets' : 'requirements';
+  const requestedView = params.get('view');
+  const activeView: AnalyzeView = requestedView === 'test-targets' || requestedView === 'test-data' ? requestedView : 'requirements';
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
   const [uploading, setUploading] = useState(false);
   const [analysisVersion, setAnalysisVersion] = useState(0);
@@ -118,12 +119,16 @@ export function Analyze() {
           <strong>测试设计与数据要求</strong>
           <span>Agent 需要验证什么，以及当前验证设计</span>
         </button>
+        <button type="button" className={activeView === 'test-data' ? 'active' : ''} onClick={() => selectView('test-data')}>
+          <strong>测试数据</strong>
+          <span>数据约束、准备状态与执行前缺口</span>
+        </button>
       </nav>
 
       <section className="analyze-surface">
         {activeView === 'requirements'
           ? <RequirementIntelligence key={`requirements:${project}:${analysisVersion}`} />
-          : <TestIntelligence key={`targets:${project}:${analysisVersion}`} />}
+          : <TestIntelligence key={`${activeView}:${project}:${analysisVersion}`} />}
       </section>
     </div>
   );

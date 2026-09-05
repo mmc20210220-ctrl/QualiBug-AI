@@ -564,6 +564,7 @@ function VerifyWorkspace() {
             <div className="verify-artifact-grid">
               <Link to={buildProjectPath('/analyze', project, artifactSearch('requirements'))}><strong>需求审查</strong><p>查看已有资料中的冲突、缺失与待澄清问题。</p><span>打开审查结果 →</span></Link>
               <Link to={buildProjectPath('/analyze', project, artifactSearch('test-targets'))}><strong>测试设计与数据要求</strong><p>查看来源支持的场景、预期结果和数据约束；结构化设计不代表可执行计划或已准备的数据。</p><span>打开测试设计 →</span></Link>
+              <Link to={buildProjectPath('/analyze', project, artifactSearch('test-data'))}><strong>测试数据准备</strong><p>查看需要准备的场景、来源约束和真实物化状态；未上报数据不会显示为可用。</p><span>打开数据工作区 →</span></Link>
               <button type="button" onClick={() => selectSection('activity')}><strong>本任务执行记录</strong><p>{agentTask?.executionRunId ? '已关联运行，查看后端记录与诊断。' : '尚未关联真实运行，暂无本任务执行结果。'}</p><span>查看工作记录 →</span></button>
               <Link to={buildProjectPath('/findings', project)}><strong>项目缺陷与证据</strong><p>查看项目已确认的问题和复现证据，具体归属以运行记录为准。</p><span>查看项目缺陷 →</span></Link>
             </div>

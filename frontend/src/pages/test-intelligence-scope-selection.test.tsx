@@ -131,3 +131,34 @@ it('retains selected targets across pagination and search without executing grou
   expect(groundAgentTask).not.toHaveBeenCalled();
   cleanup();
 });
+
+it('presents source data requirements separately from materialized test data', async () => {
+  vi.mocked(getTestIntelligence).mockResolvedValue({
+    ...analysis,
+    testDesigns: [{
+      designId: 'design-data-a',
+      title: '验证订单取消后的状态变化',
+      setup: {
+        objectRefs: ['订单'],
+        actorRefs: ['普通用户'],
+        preconditions: ['订单已进入可取消状态'],
+        testDataRequirements: ['订单状态满足来源前置条件'],
+        testDataMaterializationStatus: 'NOT_MATERIALIZED',
+        environmentStatus: 'NOT_SELECTED',
+      },
+      sourceIds: ['prd.md'],
+      evidence: [{ sourceId: 'prd.md' }],
+    }] as unknown as TestIntelligenceAnalysis['testDesigns'],
+  });
+  render(<MemoryRouter initialEntries={['/analyze?project=workspace&view=test-data']}><TestIntelligence /></MemoryRouter>);
+  await screen.findByRole('heading', { name: '把测试数据准备情况讲清楚' });
+  expect(screen.getByText('来源约束条目')).toBeTruthy();
+  expect(screen.getByText(/数据准备尚未完成/)).toBeTruthy();
+  expect(screen.getByText('已物化数据')).toBeTruthy();
+  expect(screen.getAllByText('0').length).toBeGreaterThan(0);
+  expect(screen.getByText('验证订单取消后的状态变化')).toBeTruthy();
+  expect(screen.getByText('订单状态满足来源前置条件')).toBeTruthy();
+  expect(screen.queryByText('测试账号')).toBeNull();
+  expect(groundAgentTask).not.toHaveBeenCalled();
+  cleanup();
+});

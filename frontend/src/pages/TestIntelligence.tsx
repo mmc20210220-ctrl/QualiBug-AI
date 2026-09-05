@@ -239,6 +239,72 @@ function ObligationCard({ obligation, design, selectable = false, selected = fal
   );
 }
 
+function TestDataWorkspace({ analysis, project, taskId }: { analysis: TestIntelligenceAnalysis; project: string; taskId: string }) {
+  const { navigateToProjectPath } = useProjectNavigation();
+  const entries = analysis.testDesigns.map((design) => ({
+    design,
+    requirements: design.setup.testDataRequirements.map(displayValue).filter(Boolean),
+    preconditions: design.setup.preconditions.map(displayValue).filter(Boolean),
+  }));
+  const declaredEntries = entries.filter((entry) => entry.requirements.length > 0);
+  const requirementCount = declaredEntries.reduce((total, entry) => total + entry.requirements.length, 0);
+  const materializedCount = entries.filter((entry) => entry.design.setup.testDataMaterializationStatus !== 'NOT_MATERIALIZED').length;
+  const targetSearch = new URLSearchParams({ view: 'test-targets' });
+  if (taskId) targetSearch.set('task', taskId);
+
+  return (
+    <section className="ti-data-workspace" aria-label="测试数据工作区">
+      <header className="ti-data-hero">
+        <div>
+          <span>Test Data Readiness</span>
+          <h2>把测试数据准备情况讲清楚</h2>
+          <p>这里汇总已有 Test Design 声明的数据约束、前置条件和物化状态。它不会生成账号、ID、金额或其他具体数据，也不会把数据要求冒充成可用数据。</p>
+        </div>
+        <button type="button" className="btn btn-secondary" onClick={() => navigateToProjectPath('/analyze', project, targetSearch.toString())}>返回测试设计</button>
+      </header>
+
+      <div className="ti-data-metrics" aria-label="测试数据摘要">
+        <article><span>需要准备的场景</span><strong>{declaredEntries.length}</strong><p>已有 Test Design 明确声明数据要求</p></article>
+        <article><span>来源约束条目</span><strong>{requirementCount}</strong><p>从企业理解结果投影而来</p></article>
+        <article><span>已物化数据</span><strong>{materializedCount}</strong><p>后端上报为可直接使用的数据集</p></article>
+        <article><span>未物化设计</span><strong>{entries.length - materializedCount}</strong><p>执行前仍需准备或验证</p></article>
+      </div>
+
+      <div className="ti-data-boundary">
+        <strong>当前结论：数据准备尚未完成</strong>
+        <p>没有“已物化数据”不代表测试失败；它只表示当前页面还没有收到真实数据创建或校验回执。环境、权限和数据创建都必须通过受控执行路径完成。</p>
+      </div>
+
+      <div className="ti-data-list">
+        {entries.length > 0 ? entries.map(({ design, requirements, preconditions }) => (
+          <details className="ti-data-card" key={design.designId} open={requirements.length > 0 && declaredEntries.length === 1}>
+            <summary>
+              <span><strong>{design.title}</strong><small>{design.designId}</small></span>
+              <em>{requirements.length ? `${requirements.length} 条来源约束` : '未声明具体数据要求'} · {design.setup.testDataMaterializationStatus}</em>
+            </summary>
+            <div className="ti-data-card-body">
+              <div><span>业务对象</span><strong>{design.setup.objectRefs.join('、') || '后端暂未提供'}</strong></div>
+              <div><span>适用角色</span><strong>{design.setup.actorRefs.join('、') || '未限定 / 后端暂未提供'}</strong></div>
+              <div><span>环境</span><strong>{design.setup.environmentStatus}</strong></div>
+              <section>
+                <span>来源数据约束</span>
+                {requirements.length ? <ul>{requirements.map((item, index) => <li key={`${item}:${index}`}>{item}</li>)}</ul> : <p>企业资料没有声明具体数据要求；执行前仍需确认测试数据和环境是否可用。</p>}
+              </section>
+              <section>
+                <span>前置条件</span>
+                {preconditions.length ? <ul>{preconditions.map((item, index) => <li key={`${item}:${index}`}>{item}</li>)}</ul> : <p>未声明额外前置条件</p>}
+              </section>
+              <footer><span>来源 {design.sourceIds.length} 个 · 证据 {design.evidence.length} 条</span><span>数据状态：{design.setup.testDataMaterializationStatus}</span></footer>
+            </div>
+          </details>
+        )) : (
+          <div className="ti-no-obligations"><strong>当前没有可展示的 Test Design</strong><p>先让 Knowledge 从企业资料形成结构化测试设计，才能判断数据准备要求。</p></div>
+        )}
+      </div>
+    </section>
+  );
+}
+
 function WorkspaceEmpty({ onMaterials }: { onMaterials: () => void }) {
   return (
     <section className="ti-empty">
@@ -255,6 +321,7 @@ export function TestIntelligence() {
   const [params] = useSearchParams();
   const project = params.get('project')?.trim() || '';
   const taskId = params.get('task')?.trim() || '';
+  const activeView = params.get('view') || 'test-targets';
   const { navigateToProjectPath } = useProjectNavigation();
   const [analysis, setAnalysis] = useState<TestIntelligenceAnalysis | null>(null);
   const [loading, setLoading] = useState(Boolean(project));
@@ -445,7 +512,9 @@ export function TestIntelligence() {
         <p>{summary.testDesignCount} 个 Test Design 保持 STRUCTURED_DESIGN_ONLY / NOT_GROUNDED / NOT_EXECUTED。当前有 {summary.requirementFindingLinkedDesignCount} 个设计继承已证明的 Requirement Finding 关联；不会生成 API 路径、UI 点击步骤、测试账号或具体数据值。</p>
       </section>
 
-      {(summary.suppressedWithoutEvidenceCount > 0 || summary.unsupportedFormalBehaviorCount > 0 || summary.undesignedObligationCount > 0) && (
+      {activeView === 'test-data' && <TestDataWorkspace analysis={analysis} project={project} taskId={taskId} />}
+
+      {activeView !== 'test-data' && (summary.suppressedWithoutEvidenceCount > 0 || summary.unsupportedFormalBehaviorCount > 0 || summary.undesignedObligationCount > 0) && (
         <section className="ti-diagnostics" aria-label="投影诊断">
           <div><span>因证据不足未提升</span><strong>{summary.suppressedWithoutEvidenceCount}</strong></div>
           <div><span>尚未形成 Test Design</span><strong>{summary.undesignedObligationCount}</strong></div>
@@ -453,7 +522,7 @@ export function TestIntelligence() {
         </section>
       )}
 
-      {taskId && (
+      {activeView !== 'test-data' && taskId && (
         <section className="ti-task-scope" aria-label="当前任务验证范围">
           <div className="ti-task-scope-copy">
             <span>Task scope</span>
@@ -489,7 +558,7 @@ export function TestIntelligence() {
         </section>
       )}
 
-      <section className="ti-obligations-section">
+      {activeView !== 'test-data' && <section className="ti-obligations-section">
         <div className="ti-section-heading">
           <div><span>Test Obligations + Test Design</span><h2>从“必须验证什么”到“如何验证”</h2></div>
           <div className="ti-filter" role="group" aria-label="按测试义务类型筛选">
@@ -529,16 +598,16 @@ export function TestIntelligence() {
               : '系统不会为了填满报告而生成无证据测试义务。'}</p>
           </div>
         )}
-      </section>
+      </section>}
 
-      {testDesignProjection.undesignedObligationIds.length > 0 && (
+      {activeView !== 'test-data' && testDesignProjection.undesignedObligationIds.length > 0 && (
         <details className="ti-uncovered">
           <summary>查看尚未形成 Test Design 的义务 <span>{testDesignProjection.undesignedObligationIds.length} 个</span></summary>
           <div>{testDesignProjection.undesignedObligationIds.map((id) => <code key={id}>{id}</code>)}</div>
         </details>
       )}
 
-      {coverage.uncoveredSupportedSemanticUnitIds.length > 0 && (
+      {activeView !== 'test-data' && coverage.uncoveredSupportedSemanticUnitIds.length > 0 && (
         <details className="ti-uncovered">
           <summary>查看未覆盖支持语义 <span>{coverage.uncoveredSupportedSemanticUnitIds.length} 个</span></summary>
           <div>{coverage.uncoveredSupportedSemanticUnitIds.map((id) => <code key={id}>{id}</code>)}</div>
