@@ -94,6 +94,11 @@ def test_product_mode_is_default_and_requires_all_ten_authorities(monkeypatch: p
     assert report["required_count"] == 10
     assert report["resolved_count"] == 10
     assert report["unresolved"] == []
+    assert tuple(report["slots"]) == EXPECTED_AUTHORITY_SLOTS
+    assert all(
+        report["slots"][slot]["status"] == "RESOLVED"
+        for slot in EXPECTED_AUTHORITY_SLOTS
+    )
 
 
 def test_product_mode_fails_closed_but_explicit_compatibility_exposes_unresolved() -> None:
