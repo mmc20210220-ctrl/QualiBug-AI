@@ -111,6 +111,10 @@
 .ti-list-toolbar > div { display: flex; align-items: center; gap: 10px; }
 
 .ti-data-workspace { display: grid; gap: 16px; margin-top: 18px; }
+.ti-workspace.mode-test-data > .ti-hero,
+.ti-workspace.mode-test-data > .ti-metrics,
+.ti-workspace.mode-test-data > .ti-truth-note { display: none; }
+.ti-workspace.mode-test-data > .ti-data-workspace { margin-top: 0; }
 .ti-data-hero { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; padding: 18px; border: 1px solid #b2ccff; border-radius: 14px; background: #f5f8ff; }
 .ti-data-hero > div { min-width: 0; }
 .ti-data-hero span, .ti-data-card-body > div > span, .ti-data-card-body section > span { color: #667085; font-size: 11px; font-weight: 800; letter-spacing: .03em; }

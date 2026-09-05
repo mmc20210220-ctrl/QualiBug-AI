@@ -473,7 +473,7 @@ export function TestIntelligence() {
   const counts = coverage.countsByObligationKind;
 
   return (
-    <div className="ti-workspace">
+    <div className={`ti-workspace${activeView === 'test-data' ? ' mode-test-data' : ''}`}>
       <header className={`ti-hero status-${coverage.status.toLowerCase()}`}>
         <div className="ti-hero-copy">
           <span className="ti-eyebrow">{statusMeta.eyebrow}</span>
