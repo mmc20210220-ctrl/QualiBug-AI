@@ -169,6 +169,13 @@ def bind_product_installed_mainline_authority() -> dict[str, Any]:
     gate-verifiable legacy runner is intentionally under test.
     """
 
+    # ``private_pilot_entrypoint.run_server`` invokes this before binding the
+    # service socket. Keep semantic-authority startup validation on that real
+    # production path rather than on package import or a test-only bootstrap.
+    from .authority_manifest import validate_resolved_authorities_for_startup
+
+    validate_resolved_authorities_for_startup()
+
     from .policy_registry import get_policy_registry
 
     requested = str(os.environ.get("QUALIBUG_MAINLINE_AUTHORITY") or "").strip()
