@@ -159,6 +159,13 @@ it('presents source data requirements separately from materialized test data', a
   expect(screen.getByText('验证订单取消后的状态变化')).toBeTruthy();
   expect(screen.getByText('订单状态满足来源前置条件')).toBeTruthy();
   expect(screen.queryByText('测试账号')).toBeNull();
+  fireEvent.change(screen.getByRole('combobox', { name: '数据要求' }), { target: { value: 'undeclared' } });
+  expect(screen.getByText('没有匹配的数据要求')).toBeTruthy();
+  expect(screen.queryByText('验证订单取消后的状态变化')).toBeNull();
+  expect(screen.getByText('已物化数据')).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: '清除数据筛选' }));
+  fireEvent.change(screen.getByRole('searchbox', { name: '搜索数据要求' }), { target: { value: 'prd.md' } });
+  expect(screen.getByText('验证订单取消后的状态变化')).toBeTruthy();
   expect(groundAgentTask).not.toHaveBeenCalled();
   cleanup();
 });

@@ -240,6 +240,9 @@ function ObligationCard({ obligation, design, selectable = false, selected = fal
 
 function TestDataWorkspace({ analysis, project, taskId }: { analysis: TestIntelligenceAnalysis; project: string; taskId: string }) {
   const { navigateToProjectPath } = useProjectNavigation();
+  const [query, setQuery] = useState('');
+  const [requirementFilter, setRequirementFilter] = useState('all');
+  const [page, setPage] = useState(0);
   const entries = analysis.testDesigns.map((design) => ({
     design,
     requirements: design.setup.testDataRequirements.map(displayValue).filter(Boolean),
@@ -248,6 +251,15 @@ function TestDataWorkspace({ analysis, project, taskId }: { analysis: TestIntell
   const declaredEntries = entries.filter((entry) => entry.requirements.length > 0);
   const requirementCount = declaredEntries.reduce((total, entry) => total + entry.requirements.length, 0);
   const materializedCount = entries.filter((entry) => entry.design.setup.testDataMaterializationStatus !== 'NOT_MATERIALIZED').length;
+  const needle = query.trim().toLocaleLowerCase();
+  const filtered = entries.filter(({ design, requirements, preconditions }) =>
+    (requirementFilter === 'all' || (requirementFilter === 'declared' ? requirements.length > 0 : requirements.length === 0))
+    && (!needle || [design.title, ...requirements, ...preconditions, ...design.setup.objectRefs, ...design.setup.actorRefs, ...design.sourceIds].join(' ').toLocaleLowerCase().includes(needle)),
+  );
+  const pageSize = 20;
+  const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const currentPage = Math.min(page, pageCount - 1);
+  const visibleEntries = filtered.slice(currentPage * pageSize, (currentPage + 1) * pageSize);
   const targetSearch = new URLSearchParams({ view: 'test-targets' });
   if (taskId) targetSearch.set('task', taskId);
 
@@ -274,8 +286,21 @@ function TestDataWorkspace({ analysis, project, taskId }: { analysis: TestIntell
         <p>没有“已物化数据”不代表测试失败；它只表示当前页面还没有收到真实数据创建或校验回执。环境、权限和数据创建都必须通过受控执行路径完成。</p>
       </div>
 
+      <div className="ti-list-toolbar">
+        <label>搜索数据要求<input type="search" value={query} placeholder="场景、数据约束、角色或来源" onChange={(event) => { setQuery(event.target.value); setPage(0); }} /></label>
+        <label>数据要求<select value={requirementFilter} onChange={(event) => { setRequirementFilter(event.target.value); setPage(0); }}>
+          <option value="all">全部</option><option value="declared">已有数据要求</option><option value="undeclared">未声明数据要求</option>
+        </select></label>
+        <span role="status">匹配 {filtered.length} / {entries.length} 个设计</span>
+        {(query || requirementFilter !== 'all') && <button type="button" className="btn btn-secondary" onClick={() => { setQuery(''); setRequirementFilter('all'); setPage(0); }}>清除数据筛选</button>}
+      </div>
+      {pageCount > 1 && <nav className="ti-list-toolbar" aria-label="测试数据分页">
+        <button type="button" className="btn btn-secondary" disabled={currentPage === 0} onClick={() => setPage(currentPage - 1)}>上一页</button>
+        <span>第 {currentPage + 1} / {pageCount} 页</span>
+        <button type="button" className="btn btn-secondary" disabled={currentPage === pageCount - 1} onClick={() => setPage(currentPage + 1)}>下一页</button>
+      </nav>}
       <div className="ti-data-list">
-        {entries.length > 0 ? entries.map(({ design, requirements, preconditions }) => (
+        {visibleEntries.length > 0 ? visibleEntries.map(({ design, requirements, preconditions }) => (
           <details className="ti-data-card" key={design.designId} open={requirements.length > 0 && declaredEntries.length === 1}>
             <summary>
               <span><strong>{design.title}</strong><small>{design.designId}</small></span>
@@ -297,7 +322,7 @@ function TestDataWorkspace({ analysis, project, taskId }: { analysis: TestIntell
             </div>
           </details>
         )) : (
-          <div className="ti-no-obligations"><strong>当前没有可展示的 Test Design</strong><p>先让 Knowledge 从企业资料形成结构化测试设计，才能判断数据准备要求。</p></div>
+          <div className="ti-no-obligations"><strong>{entries.length ? '没有匹配的数据要求' : '当前没有可展示的 Test Design'}</strong><p>{entries.length ? '调整搜索词或清除筛选，查看其他测试设计。' : '先让 Knowledge 从企业资料形成结构化测试设计，才能判断数据准备要求。'}</p></div>
         )}
       </div>
     </section>

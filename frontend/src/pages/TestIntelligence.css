@@ -109,6 +109,8 @@
 .ti-list-toolbar label { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--ink); font-size: 13px; }
 .ti-list-toolbar input[type="search"] { width: min(300px, 100%); min-width: 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; color: var(--ink); background: var(--surface); font: inherit; }
 .ti-list-toolbar input:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.ti-list-toolbar select { min-height: 40px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--ink); font: inherit; }
+.ti-list-toolbar select:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 .ti-list-toolbar > span { color: var(--subtle); font-size: 13px; }
 .ti-list-toolbar > div { display: flex; align-items: center; gap: 10px; }
 
