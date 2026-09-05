@@ -142,3 +142,4 @@ tests/test_product_quality_semantic_funnel.py
 tests/test_test_intelligence_read_cache.py
 tests/test_knowledge_summary_lightweight_read.py
 tests/test_authority_manifest_contract.py
+tests/test_behavior_ir_stable_identity.py
