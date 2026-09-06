@@ -149,6 +149,7 @@ def test_product_manifest_does_not_bind_mock_benchmark_or_compatibility_gate() -
     for target in targets.values():
         lowered = target.lower()
         assert "benchmark_evaluator" not in lowered
+        assert "benchmark_runtime" not in lowered
         assert "._private_eval" not in lowered
         assert "core.engine:" not in lowered
         assert "backend.main:" not in lowered
