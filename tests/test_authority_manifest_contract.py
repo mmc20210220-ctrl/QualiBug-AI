@@ -190,3 +190,20 @@ def test_private_pilot_startup_validates_and_audits_authority_before_server_bind
     assert '"authority_mode": authority_mode' in policy_source
     assert '"authority_manifest": authority_report' in policy_source
     assert "non_product_authority_mode_for_product_entrypoint" in policy_source
+
+
+def test_product_mode_rejects_legacy_runner_before_registry_resolution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_test_asset_center.policy_wiring import (
+        bind_product_installed_mainline_authority,
+    )
+
+    monkeypatch.setenv(AUTHORITY_MODE_ENV, "PRODUCT")
+    monkeypatch.setenv("QUALIBUG_MAINLINE_AUTHORITY", "legacy_champion")
+
+    with pytest.raises(
+        RuntimeError,
+        match="legacy_mainline_forbidden_in_product_mode:legacy_champion",
+    ):
+        bind_product_installed_mainline_authority()
