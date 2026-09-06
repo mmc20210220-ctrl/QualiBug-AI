@@ -132,10 +132,27 @@ def derive_revision_identity(model: dict[str, Any]) -> dict[str, Any]:
                 "matchable": bool(node.get("logical_key_matchable")),
                 "fingerprint": _text(node.get("revision_fingerprint")),
             })
+    rows.sort(
+        key=lambda row: (
+            row["collection"],
+            row["logical_key"],
+            row["fingerprint"],
+            str(row["matchable"]),
+        )
+    )
     source_rows = []
     for source in model.get("sources") or []:
         if isinstance(source, dict):
             source_rows.append({k: source.get(k) for k in ("source_id", "kind", "version", "content_hash", "snapshot_hash") if source.get(k) not in (None, "")})
+    source_rows.sort(
+        key=lambda row: json.dumps(
+            row,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
+    )
     basis = {
         "schema_version": REVISION_SCHEMA_VERSION,
         "project_id": _text(model.get("project_id")),
