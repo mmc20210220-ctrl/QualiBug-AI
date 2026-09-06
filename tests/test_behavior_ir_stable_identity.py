@@ -171,6 +171,34 @@ def test_revision_identity_detects_mutation() -> None:
         validate_revision_identity(model)
 
 
+def test_revision_identity_is_invariant_to_collection_order() -> None:
+    left = _model(source_hash="a" * 64)
+    left["entities"].append({"id": "entity_customer", "name": "Customer", "service": "orders"})
+    right = deepcopy(left)
+    right["entities"] = list(reversed(right["entities"]))
+
+    left_identity = attach_stable_behavioral_identity(left)
+    right_identity = attach_stable_behavioral_identity(right)
+
+    assert left_identity["revision_id"] == right_identity["revision_id"]
+    assert (
+        left_identity["behavioral_identity"]["revision"]["fingerprint"]
+        == right_identity["behavioral_identity"]["revision"]["fingerprint"]
+    )
+
+
+def test_repeated_attach_recomputes_identity_from_current_final_ir() -> None:
+    model = attach_stable_behavioral_identity(_model(source_hash="a" * 64))
+    original_key = model["operations"][0]["logical_key"]
+    original_revision = model["revision_id"]
+
+    model["operations"][0]["method"] = "POST"
+    attach_stable_behavioral_identity(model)
+
+    assert model["operations"][0]["logical_key"] != original_key
+    assert model["revision_id"] != original_revision
+
+
 def test_public_production_behavior_ir_authority_emits_stable_identity() -> None:
     model = build_behavior_ir_from_knowledge_asset(
         {},
