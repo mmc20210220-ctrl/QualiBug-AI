@@ -235,3 +235,43 @@ def test_authority_callers_are_reachable_from_private_pilot_scan_mainline() -> N
     assert "experiment_runner=run_experiment_candidate" in v12_source
     assert "plan = build_plan(inputs, campaign)" in coordinator_source
     assert "result = runner(inputs, campaign, plan)" in coordinator_source
+
+
+def test_downstream_authorities_remain_on_executable_and_delivery_mainlines() -> None:
+    package_root = Path(__file__).resolve().parents[1] / "ai_test_asset_center"
+    runtime_execution = (package_root / "discovery_runtime_execution.py").read_text(
+        encoding="utf-8"
+    )
+    executor_source = (package_root / "experiment_executor.py").read_text(
+        encoding="utf-8"
+    )
+    executor_core = (package_root / "experiment_executor_core.py").read_text(
+        encoding="utf-8"
+    )
+    finalizer_source = (package_root / "experiment_outcome_finalizer.py").read_text(
+        encoding="utf-8"
+    )
+    batch_source = (package_root / "experiment_batch_executor_base.py").read_text(
+        encoding="utf-8"
+    )
+    primary_batch_source = (
+        package_root / "_experiment_batch_executor_single_finding_mechanics_base.py"
+    ).read_text(encoding="utf-8")
+    scan_source = (package_root / "__main__.py").read_text(encoding="utf-8")
+    outcome_source = (package_root / "scan_execution_outcome.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "from .experiment_executor import execute_selected_experiments" in runtime_execution
+    assert "batch = execute_selected_experiments(" in runtime_execution
+    assert "result = _core.execute_selected_experiments(" in executor_source
+    assert "from .experiment_outcome_finalizer import finalize_experiment_execution" in executor_core
+    assert "_final_result = finalize_experiment_execution(" in executor_core
+    assert "evaluate_contract_oracle = _outcome_oracles.evaluate_contract_oracle" in finalizer_source
+    assert "governed = _fanout_finding_outcomes(_dict(result))" in finalizer_source
+    assert "from .customer_delivery_gate_v2 import (" in batch_source
+    assert "gate = build_customer_delivery_gate_receipt_v2(" in batch_source
+    assert "from .customer_delivery_gate_v2 import (" in primary_batch_source
+    assert "evidence_bundle = _persist_execution_evidence(" in scan_source
+    assert "from .release_gate import evaluate_release_gate" in outcome_source
+    assert "gate = evaluate_release_gate(" in outcome_source
