@@ -1,8 +1,8 @@
-"""Behavior IR public facade with account-role identity preservation.
+"""Behavior IR public facade with account-role and stable revision identity.
 
-The immutable IR builder remains in :mod:`behavior_ir_core`. This facade only gives
-multiple explicit role assignments on one login distinct actor coordinates while keeping
-one credential identity. Single-role accounts retain their historical actor IDs.
+The immutable IR builder remains in :mod:`behavior_ir_core`. This facade preserves
+runtime actor identity and annotates that same IR with deterministic cross-revision
+identity. It never creates a parallel Behavior IR.
 """
 from __future__ import annotations
 
@@ -10,6 +10,16 @@ from typing import Any
 
 from . import behavior_ir_core as _core
 from .runtime_actor_role_identity import resolve_runtime_actor_roles
+from .stable_behavioral_identity import (
+    StableBehaviorIdentityError,
+    attach_stable_behavior_identity,
+    attach_stable_behavioral_identity,
+    build_ir_delta,
+    build_minimum_ir_delta,
+    derive_revision_identity,
+    match_behavior_ir_revisions,
+    validate_revision_identity,
+)
 
 for _name, _value in vars(_core).items():
     if _name.startswith("__") or _name == "build_behavior_ir_from_knowledge_asset":
@@ -132,6 +142,7 @@ def build_behavior_ir_from_knowledge_asset(
                 actor["account_id"] = _identity
     if role_identity_receipt.get("actor_count"):
         model["runtime_actor_role_identity_receipt"] = role_identity_receipt
+    attach_stable_behavioral_identity(model)
     model["model_id"] = _core._content_addressed_id(model)
     return model
 

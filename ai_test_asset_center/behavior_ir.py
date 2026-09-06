@@ -423,6 +423,10 @@ def build_behavior_ir_from_knowledge_asset(
         asset=asset,
         api_operations=api_operations,
     )
+    # Refresh stable identity only after every production Behavior IR projection
+    # has run. This keeps revision_id and node logical_keys aligned with the exact
+    # model that downstream obligation compilation receives.
+    _base.attach_stable_behavior_identity(model)
     model["model_id"] = _base._core._content_addressed_id(model)
     # Surface the target's own OpenAPI-declared servers on the IR so the
     # compatibility family can auto-build cross-surface comparison obligations
