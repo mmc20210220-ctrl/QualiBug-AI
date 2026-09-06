@@ -2971,7 +2971,9 @@ def test_accepted_fixture_without_identity_is_visible_cleanup_failure(
         actor_tokens={},
     )
 
-    assert result["status"] == "HARNESS_FAILURE"
+    # Missing fixture identity is a stable pre-probe block, not a crashed
+    # harness. Cleanup residue remains visible independently of execution.
+    assert result["status"] == "BLOCKED"
     assert result["reason_code"] == "FIXTURE_SETUP_IDENTITY_UNRESOLVED"
     assert result["cleanup_failures"] == 1
     assert result["finding"] is None

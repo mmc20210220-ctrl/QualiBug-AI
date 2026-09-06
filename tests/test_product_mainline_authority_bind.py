@@ -35,7 +35,7 @@ def test_bind_rewrites_persisted_legacy_default_to_installed_candidate(
     assert restored.mainline_authority == "experiment_candidate"
 
 
-def test_bind_respects_explicit_legacy_env_for_fail_closed_tests(
+def test_bind_respects_explicit_legacy_only_in_compatibility_mode(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     registry, path = _fresh_registry(tmp_path, monkeypatch)
@@ -43,6 +43,7 @@ def test_bind_respects_explicit_legacy_env_for_fail_closed_tests(
         "experiment_candidate"
     )
     monkeypatch.setenv("QUALIBUG_MAINLINE_AUTHORITY", "legacy_champion")
+    monkeypatch.setenv("QUALIBUG_AUTHORITY_MODE", "COMPATIBILITY")
 
     result = bind_product_installed_mainline_authority()
 

@@ -124,7 +124,7 @@ def test_source_finding_and_ui_verification_helpers_are_reexported() -> None:
     )
 
 
-def test_scan_outcome_and_cleanup_helpers_are_reexported() -> None:
+def test_scan_outcome_and_cleanup_helpers_are_reexported(monkeypatch) -> None:
     from ai_test_asset_center import __main__ as scan_module
     from ai_test_asset_center import experiment_cleanup as cleanup
     from ai_test_asset_center import experiment_executor as executor
@@ -172,9 +172,18 @@ def test_scan_outcome_and_cleanup_helpers_are_reexported() -> None:
     assert executor.finalize_experiment_execution is (
         finalizer.finalize_experiment_execution
     )
-    assert executor.execute_selected_experiments is (
-        batch.execute_selected_experiments
-    )
+    # The public executor captures initial receipts after the governed batch.
+    # Assert the call path instead of requiring removal of that wrapper.
+    calls = []
+    expected = {"results": [], "execution_results": {}}
+
+    def run_batch(*args, **kwargs):
+        calls.append((args, kwargs))
+        return expected
+
+    monkeypatch.setattr(executor._core, "execute_selected_experiments", run_batch)
+    assert executor.execute_selected_experiments([]) == expected
+    assert calls == [(([],), {})]
     from ai_test_asset_center import scan_impl_prepare as prepare
 
     assert scan_module.prepare_scan_before_pipeline is (

@@ -160,7 +160,7 @@ def test_resolved_unloadable_target_fails_contract_and_startup() -> None:
     manifest = deepcopy(load_authority_manifest())
     manifest["slots"]["release_decision"] = {
         **manifest["slots"]["release_decision"],
-        "target": "does.not.exist:authority",
+        "target": "ai_test_asset_center.release_gate:missing_authority",
     }
 
     with pytest.raises(
@@ -171,6 +171,13 @@ def test_resolved_unloadable_target_fails_contract_and_startup() -> None:
 
     with pytest.raises(AuthorityManifestError):
         validate_resolved_authorities_for_startup(manifest, mode="PRODUCT")
+
+
+def test_release_authority_rejects_foreign_target_before_loading() -> None:
+    manifest = deepcopy(load_authority_manifest())
+    manifest["slots"]["release_decision"]["target"] = "does.not.exist:authority"
+    with pytest.raises(AuthorityManifestError, match="product_release_decision_must_use_release_gate"):
+        validate_manifest_contract(manifest, verify_production_usage=False)
 
 
 def test_private_pilot_startup_validates_and_audits_authority_before_server_bind() -> None:

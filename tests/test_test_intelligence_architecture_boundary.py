@@ -274,7 +274,10 @@ class _ProductHarness(ProductCatalogHttpMixin, _FallbackGet):
 
     def _require_tenant(self, root: Path) -> str | None:
         assert root == REPO_ROOT
-        return "tenant-test" if self.authenticated else None
+        return "test_test_intelligence_architecture_boundary" if self.authenticated else None
+
+    def _request_tenant(self) -> str:
+        return "test_test_intelligence_architecture_boundary"
 
     def _require_project_scope(self, project: str) -> bool:
         return project == "project-a"

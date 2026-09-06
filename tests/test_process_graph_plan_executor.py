@@ -256,13 +256,15 @@ def test_secondary_target_without_its_token_never_reuses_primary_token(monkeypat
 
 
 def test_non_graph_plan_delegates_to_original_kernel(monkeypatch):
+    from ai_test_asset_center import experiment_plan_lifecycle_adapter
+
     sentinel = {"steps": [{"step_id": "legacy"}]}
 
     def fake_sequential(**_kwargs):
         return sentinel
 
     monkeypatch.setattr(plan_executor, "_delegate_sequential", fake_sequential)
-    result = plan_executor.execute_non_barrier_plans(
+    result = experiment_plan_lifecycle_adapter.execute_non_barrier_plans(
         control_plan=[],
         treatment_plan=[{"step_id": "legacy", "operation_ref": "op_legacy"}],
         consumed_barrier_steps=set(),
@@ -282,4 +284,6 @@ def test_non_graph_plan_delegates_to_original_kernel(monkeypatch):
         base_url="https://example.test",
         runtime_contract={},
     )
-    assert result is sentinel
+    assert result["steps"] == sentinel["steps"]
+    assert result["pre_transport_block_reasons"] == []
+    assert result["request_build_first_loss_receipt"]["status"] == "NOT_APPLICABLE"

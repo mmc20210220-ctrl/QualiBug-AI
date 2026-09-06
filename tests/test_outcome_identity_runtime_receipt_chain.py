@@ -182,8 +182,8 @@ def test_batch_fans_out_all_occurrences_into_authoritative_collections(monkeypat
             "primary_violation_outcome_ref": "outcome:b",
         },
     ]
-    monkeypatch.setattr(
-        experiment_batch_executor,
+    monkeypatch.setitem(
+        experiment_batch_executor._apply_fanout.__globals__,
         "_occurrence_oracles",
         lambda _outcome: oracles,
     )
@@ -215,8 +215,8 @@ def test_batch_fans_out_all_occurrences_into_authoritative_collections(monkeypat
             },
         }
 
-    monkeypatch.setattr(
-        experiment_batch_executor,
+    monkeypatch.setitem(
+        experiment_batch_executor._apply_fanout.__globals__,
         "_build_occurrence",
         build_occurrence,
     )

@@ -625,7 +625,11 @@ commercial rules stay in the root Discovery Harness Evolution Contract):
   property fingerprint), so two obligations targeting different operations
   never share an id — a shared id previously made `dedupe_obligations`
   silently drop one operation's coverage. `compile_obligations_from_behavior_ir`
-  then runs `test_obligation.consolidate_unbound_invariant_obligations`:
+  reports `obligation_count` and `by_family` from its final consolidated rows;
+  pre-consolidation cardinality belongs only to the consolidation receipt.
+  Source-invariant coverage is checked through `consolidated_invariant_refs`,
+  never by pretending merged obligations are still separate experiments. The
+  compiler uses `test_obligation.consolidate_unbound_invariant_obligations`:
   `invariant_*`-template obligations with NO concrete decidable anchor (no
   field/target_field/field_ids/expected_path/json_path binding) collapse onto
   ONE evidence-preserving representative per

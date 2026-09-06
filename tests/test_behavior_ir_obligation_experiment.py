@@ -378,11 +378,13 @@ def test_obligation_compiler_accounts_for_every_source_invariant() -> None:
 
     compiled = compile_obligations_from_behavior_ir(ir)
 
-    assert compiled["obligation_count"] == 35
-    assert {
-        row["property"]["invariant_ref"]
-        for row in compiled["obligations"]
-    } == {f"invariant-{index}" for index in range(35)}
+    assert compiled["obligation_count"] == len(compiled["obligations"]) == 1
+    assert sum(compiled["by_family"].values()) == 1
+    assert set(compiled["obligations"][0]["property"]["consolidated_invariant_refs"]) == {
+        f"invariant-{index}" for index in range(35)
+    }
+    assert compiled["obligation_consolidation_receipt"]["input_count"] == 35
+    assert compiled["obligation_consolidation_receipt"]["output_count"] == 1
 
 
 def test_behavior_ir_builder_emits_permission_and_compensation_relations() -> None:

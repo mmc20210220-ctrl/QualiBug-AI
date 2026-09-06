@@ -276,7 +276,10 @@ class _ProductHarness(ProductCatalogHttpMixin, _FallbackGet):
 
     def _require_tenant(self, root: Path) -> str:
         assert root == REPO_ROOT
-        return "tenant-test"
+        return "test_product_intelligence_linkage"
+
+    def _request_tenant(self) -> str:
+        return "test_product_intelligence_linkage"
 
     def _require_project_scope(self, project: str) -> bool:
         return project == "project-a"

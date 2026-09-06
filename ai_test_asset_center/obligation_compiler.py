@@ -31,6 +31,12 @@ def compile_obligations_from_behavior_ir(
     )
     result = dict(seeded)
     result["obligations"] = rows
+    result["obligation_count"] = len(rows)
+    families = set(seeded.get("by_family") or {}) | {str(row["risk_family"]) for row in rows}
+    result["by_family"] = {
+        family: sum(row["risk_family"] == family for row in rows)
+        for family in sorted(families)
+    }
     result["obligation_consolidation_receipt"] = consolidation_receipt
     # Breadth-loss visibility (原则14) is attached downstream in
     # build_discovery_plan, where the fully-enriched obligations list is the
