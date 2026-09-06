@@ -37,6 +37,10 @@ _REF_FIELDS = (
     "state_ref", "source_state_ref", "target_state_ref", "event_ref",
     "job_ref", "permission_ref", "parent_ref",
 )
+_IDENTITY_NODE_FIELDS = (
+    "logical_key", "logical_key_matchable", "logical_key_strategy",
+    "revision_fingerprint",
+)
 
 
 class StableBehaviorIdentityError(ValueError):
@@ -154,6 +158,14 @@ def attach_stable_behavioral_identity(model: dict[str, Any]) -> dict[str, Any]:
         raise TypeError("behavior_ir_model_must_be_object")
     collections = _collections(model)
     ref_keys: dict[str, str] = {}
+
+    # A production builder can invoke this more than once as later authority
+    # projections enrich the same IR. Always recompute from the current final
+    # model; never trust identity metadata produced before those projections.
+    for rows in collections.values():
+        for node in rows:
+            for field in _IDENTITY_NODE_FIELDS:
+                node.pop(field, None)
 
     # Pass 1 gives named/declared nodes stable coordinates so relation identities
     # can refer to semantic keys rather than revision-sensitive node IDs.
