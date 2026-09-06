@@ -38,6 +38,7 @@ _ALLOWED_USAGE = {"CALL", "CALLABLE_BINDING"}
 _DEFAULT_MANIFEST_PATH = Path(__file__).with_name("authority_manifest.v1.json")
 _PRODUCT_FORBIDDEN_TARGET_MARKERS = (
     "benchmark_evaluator",
+    "benchmark_runtime",
     "._private_eval",
     "core.engine:",
     "backend.main:",
