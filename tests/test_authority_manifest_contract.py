@@ -207,3 +207,30 @@ def test_product_mode_rejects_legacy_runner_before_registry_resolution(
         match="legacy_mainline_forbidden_in_product_mode:legacy_champion",
     ):
         bind_product_installed_mainline_authority()
+
+
+def test_authority_callers_are_reachable_from_private_pilot_scan_mainline() -> None:
+    package_root = Path(__file__).resolve().parents[1] / "ai_test_asset_center"
+    handler_source = (package_root / "private_pilot_scan_handlers.py").read_text(
+        encoding="utf-8"
+    )
+    scan_source = (package_root / "__main__.py").read_text(encoding="utf-8")
+    v12_source = (package_root / "v12_pipeline.py").read_text(encoding="utf-8")
+    coordinator_source = (package_root / "discovery_mainline.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "from .__main__ import scan" in handler_source
+    assert "result = scan(" in handler_source
+    assert "result = _scan_impl(" in scan_source
+    assert "from .v12_pipeline import run_v12_pipeline" in scan_source
+    assert "v12 = run_v12_pipeline(" in scan_source
+    assert (
+        "from .discovery_runtime import build_discovery_plan, run_experiment_candidate"
+        in v12_source
+    )
+    assert "result = run_discovery_mainline(" in v12_source
+    assert "build_plan=build_discovery_plan" in v12_source
+    assert "experiment_runner=run_experiment_candidate" in v12_source
+    assert "plan = build_plan(inputs, campaign)" in coordinator_source
+    assert "result = runner(inputs, campaign, plan)" in coordinator_source
