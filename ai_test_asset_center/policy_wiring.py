@@ -165,8 +165,10 @@ def bind_product_installed_mainline_authority() -> dict[str, Any]:
     would otherwise fail closed before campaign creation. This bind runs at
     process start, never mid-campaign.
 
-    Opt out with ``QUALIBUG_MAINLINE_AUTHORITY=legacy_champion`` when a
-    gate-verifiable legacy runner is intentionally under test.
+    ``legacy_champion`` is compatibility-only. PRODUCT mode must execute the
+    exact runner whose capability authorities are declared by the product
+    manifest; allowing a legacy runner here would make the report and runtime
+    disagree about who owns the product mainline.
     """
 
     # ``private_pilot_entrypoint.run_server`` invokes this before binding the
@@ -188,6 +190,10 @@ def bind_product_installed_mainline_authority() -> dict[str, Any]:
     target = requested or "experiment_candidate"
     if target not in {"legacy_champion", "experiment_candidate"}:
         raise ValueError(f"invalid QUALIBUG_MAINLINE_AUTHORITY: {requested}")
+    if authority_mode == "PRODUCT" and target != "experiment_candidate":
+        raise RuntimeError(
+            f"legacy_mainline_forbidden_in_product_mode:{target}"
+        )
 
     registry = get_policy_registry()
     active = registry.get_active()
